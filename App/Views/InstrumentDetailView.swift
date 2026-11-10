@@ -27,7 +27,7 @@ struct InstrumentDetailView: View {
                 macdPanel
                 quotePanel
                 Text("本地生成的演示行情，不代表真实市场行情").font(.caption2).foregroundStyle(.gray).padding(.bottom,8)
-            }.padding(.horizontal,10).padding(.top,2)
+            }.padding(.horizontal,10).padding(.top,-14)
         }
         .background(Color.black)
         .toolbar(.hidden, for:.navigationBar)
@@ -60,8 +60,8 @@ struct InstrumentDetailView: View {
                     RuleMark(x:.value("序号",i),yStart:.value("低",c.low),yEnd:.value("高",c.high)).foregroundStyle(c.close >= c.open ? .red : .green).lineStyle(StrokeStyle(lineWidth:1))
                     RectangleMark(x:.value("序号",i),yStart:.value("开",min(c.open,c.close)),yEnd:.value("收",max(c.open,c.close)),width:4).foregroundStyle(c.close >= c.open ? .red : .green)
                     if showIndicators {
-                        LineMark(x:.value("序号",i),y:.value("EMA20",c.ema20)).foregroundStyle(.orange).lineStyle(StrokeStyle(lineWidth:1.4))
-                        LineMark(x:.value("序号",i),y:.value("EMA50",c.ema50)).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.4))
+                        LineMark(x:.value("序号",i),y:.value("EMA20",c.ema20),series:.value("均线","EMA20")).foregroundStyle(.orange).lineStyle(StrokeStyle(lineWidth:1.4))
+                        LineMark(x:.value("序号",i),y:.value("EMA50",c.ema50),series:.value("均线","EMA50")).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.4))
                     }
                 }
             }
@@ -88,8 +88,8 @@ struct InstrumentDetailView: View {
             Chart {
                 ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
                     BarMark(x:.value("序号",i),y:.value("MACD",c.hist),width:.fixed(4)).foregroundStyle(c.hist >= 0 ? .red : .green)
-                    LineMark(x:.value("序号",i),y:.value("DIF",c.dif)).foregroundStyle(.orange).lineStyle(StrokeStyle(lineWidth:1.2))
-                    LineMark(x:.value("序号",i),y:.value("DEA",c.dea)).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.2))
+                    LineMark(x:.value("序号",i),y:.value("DIF",c.dif),series:.value("MACD线","DIF")).foregroundStyle(.orange).lineStyle(StrokeStyle(lineWidth:1.2))
+                    LineMark(x:.value("序号",i),y:.value("DEA",c.dea),series:.value("MACD线","DEA")).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.2))
                 }
                 RuleMark(y:.value("零轴",0)).foregroundStyle(.white.opacity(0.3))
             }.chartYScale(domain: macdDomain).chartXScale(domain: 0...99).chartXAxis(.hidden).chartYAxis(.hidden).frame(height:150)
