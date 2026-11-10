@@ -3,6 +3,7 @@ import Charts
 
 struct InstrumentDetailView: View {
     let instrument: FuturesInstrument
+    @Environment(\.dismiss) private var dismiss
     @State private var period = "15分"
     @State private var showIndicators = true
     private let periods = ["1分","5分","15分","30分","60分","日线"]
@@ -15,15 +16,19 @@ struct InstrumentDetailView: View {
                 macdPanel
                 quotePanel
                 Text("本地生成的演示行情，不代表真实市场行情").font(.caption2).foregroundStyle(.gray).padding(.bottom,8)
-            }.padding(.horizontal,10).padding(.top,8)
+            }.padding(.horizontal,10).padding(.top,2)
         }
         .background(Color.black)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarColorScheme(.dark,for:.navigationBar)
+        .toolbar(.hidden, for:.navigationBar)
         .preferredColorScheme(.dark)
     }
     private var topBar: some View {
-        HStack(spacing:8) {
+        VStack(spacing:8) {
+            HStack {
+                Button { dismiss() } label: { Image(systemName:"chevron.left").font(.system(size:19,weight:.medium)).foregroundStyle(.white).frame(width:42,height:42).background(.ultraThinMaterial,in:Circle()).overlay(Circle().stroke(.white.opacity(0.18),lineWidth:1)) }
+                Spacer(minLength:0)
+            }
+            HStack(spacing:8) {
             Text(instrument.name).font(.system(size:15,weight:.semibold))
             Text(instrument.id).font(.caption).foregroundStyle(.gray)
             Rectangle().fill(.white.opacity(0.3)).frame(width:1,height:20)
@@ -33,7 +38,8 @@ struct InstrumentDetailView: View {
                 Text(period+"⌄").font(.caption.weight(.semibold)).padding(.horizontal,12).padding(.vertical,8).background(.white.opacity(0.12),in:Capsule())
             }
             Button { showIndicators.toggle() } label: { Image(systemName:"eye").padding(8).background(.white.opacity(0.12),in:Circle()) }
-        }.padding(9).background(.ultraThinMaterial,in:Capsule()).overlay(Capsule().stroke(.white.opacity(0.35),lineWidth:1))
+            }.padding(9).background(.ultraThinMaterial,in:Capsule()).overlay(Capsule().stroke(.white.opacity(0.35),lineWidth:1))
+        }
     }
     private var candleChart: some View {
         VStack(alignment:.leading,spacing:6) {
