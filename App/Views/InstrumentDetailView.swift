@@ -72,7 +72,7 @@ struct InstrumentDetailView: View {
             Chart {
                 ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
                     RuleMark(x:.value("序号",i),yStart:.value("低",c.low),yEnd:.value("高",c.high)).foregroundStyle(c.close >= c.open ? .red : .green).lineStyle(StrokeStyle(lineWidth:1))
-                    RectangleMark(x:.value("序号",i),yStart:.value("开",min(c.open,c.close)),yEnd:.value("收",max(c.open,c.close)),width:4).foregroundStyle(c.close >= c.open ? .red : .green)
+                    RectangleMark(x:.value("序号",i),yStart:.value("开",min(c.open,c.close)),yEnd:.value("收",max(c.open,c.close)),width:4).foregroundStyle(c.close >= c.open ? .red : Color(red:0.0,green:0.88,blue:0.92))
                     if selectedCandleIndex == i {
                         RuleMark(x:.value("选中K线",i))
                             .foregroundStyle(.white.opacity(0.8))
@@ -89,7 +89,7 @@ struct InstrumentDetailView: View {
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: 5)) { _ in
                     AxisValueLabel().foregroundStyle(.white.opacity(0.65))
-                    AxisGridLine().foregroundStyle(.white.opacity(0.12))
+                    AxisGridLine().foregroundStyle(.red.opacity(0.16))
                 }
             }
             .chartYAxis {
