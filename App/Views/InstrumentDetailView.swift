@@ -48,8 +48,18 @@ struct InstrumentDetailView: View {
                     }
                 }
             }
-            .chartXAxis { AxisMarks(values:.automatic(desiredCount:5)){_ in AxisValueLabel().foregroundStyle(.white.opacity(0.65));AxisGridLine().foregroundStyle(.white.opacity(0.12))} }
-            .chartYAxis { AxisMarks(position:.trailing){_ in AxisValueLabel().foregroundStyle(.white.opacity(0.7));AxisGridLine().foregroundStyle(.white.opacity(0.12)} }
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 5)) { _ in
+                    AxisValueLabel().foregroundStyle(.white.opacity(0.65))
+                    AxisGridLine().foregroundStyle(.white.opacity(0.12))
+                }
+            }
+            .chartYAxis {
+                AxisMarks(position: .trailing) { _ in
+                    AxisValueLabel().foregroundStyle(.white.opacity(0.7))
+                    AxisGridLine().foregroundStyle(.white.opacity(0.12))
+                }
+            }
             .frame(height:300)
         }.padding(10).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).stroke(.white.opacity(0.22),lineWidth:1))
     }
