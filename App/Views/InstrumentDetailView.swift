@@ -99,21 +99,7 @@ struct InstrumentDetailView: View {
                 }
             }
             .frame(height:300)
-            .chartOverlay { proxy in
-                GeometryReader { geometry in
-                    Rectangle().fill(.clear).contentShape(Rectangle())
-                        .gesture(DragGesture(minimumDistance:0)
-                            .onChanged { value in
-                                guard let plotFrame = proxy.plotFrame else { return }
-                                let frame = geometry[plotFrame]
-                                let x = value.location.x - frame.minX
-                                if let index:Int = proxy.value(atX:x,as:Int.self) {
-                                    selectedCandleIndex = min(max(index,0),candles.count-1)
-                                }
-                            }
-                        )
-                }
-            }
+            .chartXSelection(value:$selectedCandleIndex)
         }.padding(10).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).stroke(.white.opacity(0.22),lineWidth:1))
     }
 
