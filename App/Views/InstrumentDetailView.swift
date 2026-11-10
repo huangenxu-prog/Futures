@@ -8,6 +8,17 @@ struct InstrumentDetailView: View {
     @State private var showIndicators = true
     private let periods = ["1分","5分","15分","30分","60分","日线"]
     private var candles: [DemoCandle] { DemoCandle.make(base:instrument.lastPrice,count:100) }
+    private var priceDomain: ClosedRange<Double> {
+        let low = candles.map(\.low).min() ?? instrument.lastPrice * 0.97
+        let high = candles.map(\.high).max() ?? instrument.lastPrice * 1.03
+        let padding = max((high - low) * 0.10, instrument.lastPrice * 0.002)
+        return (low - padding)...(high + padding)
+    }
+    private var macdDomain: ClosedRange<Double> {
+        let peak = candles.map { max(abs($0.hist), abs($0.dif), abs($0.dea)) }.max() ?? 1
+        let limit = max(peak * 1.25, instrument.lastPrice * 0.0005)
+        return -limit...limit
+    }
     var body: some View {
         ScrollView {
             VStack(spacing:10) {
@@ -54,6 +65,8 @@ struct InstrumentDetailView: View {
                     }
                 }
             }
+            .chartYScale(domain: priceDomain)
+            .chartXScale(domain: 0...99)
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: 5)) { _ in
                     AxisValueLabel().foregroundStyle(.white.opacity(0.65))
@@ -79,7 +92,7 @@ struct InstrumentDetailView: View {
                     LineMark(x:.value("序号",i),y:.value("DEA",c.dea)).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.2))
                 }
                 RuleMark(y:.value("零轴",0)).foregroundStyle(.white.opacity(0.3))
-            }.chartXAxis(.hidden).chartYAxis(.hidden).frame(height:112)
+            }.chartYScale(domain: macdDomain).chartXScale(domain: 0...99).chartXAxis(.hidden).chartYAxis(.hidden).frame(height:150)
         }.padding(10).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).stroke(.white.opacity(0.2),lineWidth:1))
     }
     private var quotePanel: some View {
@@ -102,13 +115,33 @@ struct InstrumentDetailView: View {
 private struct DemoCandle {
     let open,high,low,close,ema20,ema50,dif,dea,hist: Double
     static func make(base:Double,count:Int)->[DemoCandle] {
-        var closes:[Double]=[]
-        for i in 0..<count { closes.append(base + sin(Double(i)*0.31)*base*0.006 + cos(Double(i)*0.12)*base*0.003 + Double(i-count/2)*base*0.00004) }
-        func ema(_ values:[Double],_ period:Int)->[Double] { let k=2.0/(Double(period)+1); var out=[values[0]]; for v in values.dropFirst(){out.append(v*k+out.last!*(1-k))}; return out }
-        let e12=ema(closes,12), e26=ema(closes,26), dif=zip(e12,e26).map { $0 - $1 }, dea=ema(dif,9)
+        guard count > 1 else { return [] }
+        var closes:[Double] = []
+        var price = base * 0.972
+        for i in 0..<count {
+            let x = Double(i)
+            let cycle = sin(x * 0.105) * 0.010 + sin(x * 0.31) * 0.004
+            let wave = cos(x * 0.047) * 0.006
+            let shock = (sin(x * 12.9898) * 0.5 + sin(x * 4.1414) * 0.5) * 0.0028
+            let drift = i < 34 ? 0.00055 : (i < 66 ? -0.00042 : 0.00048)
+            price *= 1 + drift + (cycle - (i > 34 && i < 66 ? 0.004 : 0)) * 0.12 + wave * 0.06 + shock
+            closes.append(price)
+        }
+        func ema(_ values:[Double],_ period:Int)->[Double] {
+            let k = 2.0 / (Double(period) + 1)
+            var result = [values[0]]
+            for value in values.dropFirst() { result.append(value * k + result[result.count - 1] * (1 - k)) }
+            return result
+        }
+        let e12 = ema(closes,12), e26 = ema(closes,26)
+        let difValues = zip(e12,e26).map { $0 - $1 }
+        let deaValues = ema(difValues,9), e20 = ema(closes,20), e50 = ema(closes,50)
         return (0..<count).map { i in
-            let o=i == 0 ? closes[i] : closes[i-1], c=closes[i], spread=base*0.001*(1+Double(i%4)*0.15)
-            return DemoCandle(open:o,high:max(o,c)+spread,low:min(o,c)-spread,close:c,ema20:ema(closes,20)[i],ema50:ema(closes,50)[i],dif:dif[i],dea:dea[i],hist:2*(dif[i]-dea[i]))
+            let previous = i == 0 ? closes[i] * 0.998 : closes[i-1]
+            let open = previous + sin(Double(i) * 5.31) * base * 0.0018
+            let close = closes[i]
+            let wick = base * (0.0018 + abs(sin(Double(i) * 2.17)) * 0.0022)
+            return DemoCandle(open:open,high:max(open,close) + wick,low:min(open,close) - wick,close:close,ema20:e20[i],ema50:e50[i],dif:difValues[i],dea:deaValues[i],hist:2 * (difValues[i] - deaValues[i]))
         }
     }
 }
