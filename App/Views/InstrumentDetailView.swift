@@ -7,6 +7,10 @@ struct InstrumentDetailView: View {
     @State private var period = "15分"
     @State private var showIndicators = true
     @State private var selectedCandleIndex: Int? = nil
+    @State private var visibleStart = 0.0
+    @State private var visibleCount = 100.0
+    @State private var zoomBaseCount: Double? = nil
+    @State private var dragBaseStart: Double? = nil
     private let periods = ["1分","5分","15分","30分","60分","日线"]
     private var candles: [DemoCandle] { DemoCandle.make(base:instrument.lastPrice,count:100) }
     private var priceDomain: ClosedRange<Double> {
@@ -15,6 +19,7 @@ struct InstrumentDetailView: View {
         let padding = max((high - low) * 0.10, instrument.lastPrice * 0.002)
         return (low - padding)...(high + padding)
     }
+    private var visibleDomain: ClosedRange<Double> { visibleStart...(visibleStart + visibleCount - 1) }
     private var macdDomain: ClosedRange<Double> {
         let peak = candles.map { max(abs($0.hist), abs($0.dif), abs($0.dea)) }.max() ?? 1
         let limit = max(peak * 1.25, instrument.lastPrice * 0.0005)
@@ -85,7 +90,7 @@ struct InstrumentDetailView: View {
                 }
             }
             .chartYScale(domain: priceDomain)
-            .chartXScale(domain: 0...99)
+            .chartXScale(domain: visibleDomain)
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: 5)) { _ in
                     AxisValueLabel().foregroundStyle(.white.opacity(0.65))
@@ -100,6 +105,27 @@ struct InstrumentDetailView: View {
             }
             .frame(height:300)
             .chartXSelection(value:$selectedCandleIndex)
+            .simultaneousGesture(MagnificationGesture().onChanged { scale in
+                if zoomBaseCount == nil { zoomBaseCount = visibleCount }
+                guard let base = zoomBaseCount else { return }
+                let nextCount = min(100, max(20, base / Double(scale)))
+                let center = visibleStart + (visibleCount - 1) / 2
+                visibleCount = nextCount
+                visibleStart = min(max(0, center - (nextCount - 1) / 2), 100 - nextCount)
+            }.onEnded { _ in zoomBaseCount = nil })
+            .simultaneousGesture(DragGesture(minimumDistance: 18).onChanged { value in
+                if dragBaseStart == nil { dragBaseStart = visibleStart }
+                guard let base = dragBaseStart else { return }
+                let shift = Double(value.translation.width / 320) * visibleCount
+                visibleStart = min(max(0, base - shift), 100 - visibleCount)
+            }.onEnded { _ in dragBaseStart = nil })
+            .onTapGesture(count:2) {
+                withAnimation(.easeOut(duration:0.2)) {
+                    visibleStart = 0
+                    visibleCount = 100
+                    selectedCandleIndex = nil
+                }
+            }
         }.padding(10).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).stroke(.white.opacity(0.22),lineWidth:1))
     }
 
@@ -150,7 +176,7 @@ struct InstrumentDetailView: View {
                     LineMark(x:.value("序号",i),y:.value("DEA",c.dea),series:.value("MACD线","DEA")).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.2))
                 }
                 RuleMark(y:.value("零轴",0)).foregroundStyle(.white.opacity(0.3))
-            }.chartYScale(domain: macdDomain).chartXScale(domain: 0...99).chartXAxis(.hidden).chartYAxis(.hidden).frame(height:150)
+            }.chartYScale(domain: macdDomain).chartXScale(domain: visibleDomain).chartXAxis(.hidden).chartYAxis(.hidden).frame(height:150)
         }.padding(10).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).stroke(.white.opacity(0.2),lineWidth:1))
     }
     private var quotePanel: some View {
