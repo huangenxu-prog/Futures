@@ -2,6 +2,11 @@ name: iOS Device IPA
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/ios-device-ipa.yml'
+      - 'App/**'
+      - 'project.yml'
 
 jobs:
   build-unsigned-ipa:
