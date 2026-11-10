@@ -2,82 +2,52 @@ import SwiftUI
 
 struct MarketHomeView: View {
     @State private var instruments = FuturesInstrument.samples
-
+    private let yellow = Color(red:1,green:0.82,blue:0.02)
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    marketHeader
-                    marketSummary
-                    instrumentSection
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    Text("名称").frame(maxWidth:.infinity,alignment:.leading)
+                    Image(systemName:"square.grid.2x2.fill").frame(width:34)
+                    header("最新")
+                    header("涨幅%")
+                    header("日增仓")
                 }
-                .padding()
-            }
-            .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle("期汇")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {} label: {
-                        Image(systemName: "magnifyingglass")
+                .font(.system(size:14,weight:.semibold)).foregroundStyle(.white)
+                .padding(.horizontal,12).padding(.vertical,15)
+                .background(.ultraThinMaterial,in:Capsule())
+                .overlay(Capsule().stroke(LinearGradient(colors:[.white,.cyan.opacity(0.5),.white.opacity(0.25)],startPoint:.topLeading,endPoint:.bottomTrailing),lineWidth:1))
+                .shadow(color:.cyan.opacity(0.2),radius:8)
+                .padding(.horizontal,12).padding(.top,8).padding(.bottom,5)
+                ScrollView {
+                    LazyVStack(spacing:0) {
+                        ForEach(instruments) { item in
+                            NavigationLink { InstrumentDetailView(instrument:item) } label: {
+                                HStack(spacing:0) {
+                                    HStack(spacing:5) {
+                                        Text(item.name).font(.system(size:17,weight:.semibold)).foregroundStyle(yellow).lineLimit(1)
+                                        Text("M").font(.system(size:9,weight:.bold)).foregroundStyle(.black).padding(3).background(.pink,in:RoundedRectangle(cornerRadius:3))
+                                    }.frame(maxWidth:.infinity,alignment:.leading)
+                                    Text(item.lastPrice.formatted()).foregroundStyle(item.isRising ? .red : .green).frame(width:76,alignment:.trailing)
+                                    Text(String(format:"%.2f%%",item.changePercent)).foregroundStyle(item.isRising ? .red : .green).frame(width:78,alignment:.trailing)
+                                    Text("\(Int(item.change * 37))").foregroundStyle(.white.opacity(0.8)).frame(width:72,alignment:.trailing)
+                                }
+                                .font(.system(size:16,weight:.medium,design:.rounded)).monospacedDigit()
+                                .padding(.horizontal,12).frame(height:49)
+                                .overlay(alignment:.bottom){Rectangle().fill(.white.opacity(0.14)).frame(height:0.5)}
+                            }.buttonStyle(.plain)
+                        }
                     }
-                    .accessibilityLabel("搜索合约")
                 }
+                Spacer(minLength:0)
+                Text("演示行情 · 非实时数据").font(.caption2).foregroundStyle(.gray).padding(.bottom,8)
             }
-        }
-    }
-
-    private var marketHeader: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("国内期货")
-                .font(.title2.weight(.bold))
-            Text("行情数据为演示数据，非实时行情")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var marketSummary: some View {
-        HStack(spacing: 12) {
-            summaryCard(title: "上涨", value: "\(instruments.filter(\.isRising).count)", tint: .red)
-            summaryCard(title: "下跌", value: "\(instruments.filter { !$0.isRising }.count)", tint: .green)
-            summaryCard(title: "自选合约", value: "\(instruments.count)", tint: .primary)
-        }
-    }
-
-    private func summaryCard(title: String, value: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.title2.monospacedDigit().weight(.semibold))
-                .foregroundStyle(tint)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-    }
-
-    private var instrumentSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("重点合约")
-                    .font(.headline)
-                Spacer()
-                Text("模拟")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            .background(Color.black)
+            .toolbar {
+                ToolbarItem(placement:.principal) { Text("期汇").font(.headline.weight(.bold)).foregroundStyle(.white) }
+                ToolbarItem(placement:.topBarTrailing) { Image(systemName:"magnifyingglass").foregroundStyle(.white) }
             }
-
-            ForEach(instruments) { item in
-                NavigationLink {
-                    InstrumentDetailView(instrument: item)
-                } label: {
-                    InstrumentRow(instrument: item)
-                }
-                .buttonStyle(.plain)
-            }
-        }
+        }.preferredColorScheme(.dark)
     }
+    private func header(_ value:String)->some View { Text(value).frame(width:78,alignment:.trailing) }
 }
