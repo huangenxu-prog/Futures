@@ -48,7 +48,7 @@ struct InstrumentDetailView: View {
                 .font(.caption).foregroundStyle(.white.opacity(0.8))
                 .lineLimit(1).minimumScaleFactor(0.8)
             Spacer(minLength:2)
-            Menu { ForEach(periods,id:\\.self){ p in Button(p){period=p} } } label: {
+            Menu { ForEach(periods,id:\.self){ p in Button(p){period=p} } } label: {
                 Text(period+"⌄").font(.caption.weight(.semibold))
                     .padding(.horizontal,10).padding(.vertical,8)
                     .background(.white.opacity(0.12),in:Capsule())
