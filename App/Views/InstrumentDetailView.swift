@@ -48,7 +48,7 @@ struct InstrumentDetailView: View {
                     }
                 }
             }
-            .chartXAxis { AxisMarks(values:.automatic(desiredCount:5)){_ in AxisValueLabel().foregroundStyle(.white.opacity(0.65));AxisGridLine().foregroundStyle(.white.opacity(0.12)} }
+            .chartXAxis { AxisMarks(values:.automatic(desiredCount:5)){_ in AxisValueLabel().foregroundStyle(.white.opacity(0.65));AxisGridLine().foregroundStyle(.white.opacity(0.12))} }
             .chartYAxis { AxisMarks(position:.trailing){_ in AxisValueLabel().foregroundStyle(.white.opacity(0.7));AxisGridLine().foregroundStyle(.white.opacity(0.12)} }
             .frame(height:300)
         }.padding(10).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).stroke(.white.opacity(0.22),lineWidth:1))
@@ -89,7 +89,7 @@ private struct DemoCandle {
         var closes:[Double]=[]
         for i in 0..<count { closes.append(base + sin(Double(i)*0.31)*base*0.006 + cos(Double(i)*0.12)*base*0.003 + Double(i-count/2)*base*0.00004) }
         func ema(_ values:[Double],_ period:Int)->[Double] { let k=2.0/(Double(period)+1); var out=[values[0]]; for v in values.dropFirst(){out.append(v*k+out.last!*(1-k))}; return out }
-        let e12=ema(closes,12), e26=ema(closes,26), dif=zip(e12,e26).map(-), dea=ema(dif,9)
+        let e12=ema(closes,12), e26=ema(closes,26), dif=zip(e12,e26).map { $0 - $1 }, dea=ema(dif,9)
         return (0..<count).map { i in
             let o=i == 0 ? closes[i] : closes[i-1], c=closes[i], spread=base*0.001*(1+Double(i%4)*0.15)
             return DemoCandle(open:o,high:max(o,c)+spread,low:min(o,c)-spread,close:c,ema20:ema(closes,20)[i],ema50:ema(closes,50)[i],dif:dif[i],dea:dea[i],hist:2*(dif[i]-dea[i]))
