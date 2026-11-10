@@ -66,19 +66,30 @@ private struct SearchView: View {
                     .padding(.top,12)
                     .padding(.bottom,8)
 
-                ScrollView {
-                    LazyVStack(spacing:0) {
-                        ForEach(filtered) { item in
-                            NavigationLink {
-                                InstrumentDetailView(instrument:item)
-                            } label: {
-                                InstrumentRow(instrument:item)
-                                    .padding(.horizontal,16)
+                if query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing:0) {
+                            ForEach(filtered) { item in
+                                NavigationLink {
+                                    InstrumentDetailView(instrument:item)
+                                } label: {
+                                    InstrumentRow(instrument:item)
+                                        .padding(.horizontal,16)
+                                }
+                                .buttonStyle(.plain)
+                                .tint(.white)
+                                .overlay(alignment:.bottom) {
+                                    Rectangle().fill(.white.opacity(0.12)).frame(height:0.5)
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .tint(.white)
-                            .overlay(alignment:.bottom) {
-                                Rectangle().fill(.white.opacity(0.12)).frame(height:0.5)
+                            if filtered.isEmpty {
+                                Text("没有找到匹配的合约")
+                                    .font(.caption)
+                                    .foregroundStyle(.gray)
+                                    .frame(maxWidth:.infinity)
+                                    .padding(.top,28)
                             }
                         }
                     }
