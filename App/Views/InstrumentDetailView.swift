@@ -68,7 +68,7 @@ struct InstrumentDetailView: View {
             HStack { Text("MACD(12, 26, 9)").font(.caption.weight(.semibold)); Spacer(); Text("DIF"); Text("DEA") }.foregroundStyle(.white.opacity(0.75)).font(.caption2)
             Chart {
                 ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
-                    BarMark(x:.value("序号",i),y:.value("MACD",c.hist)).foregroundStyle(c.hist >= 0 ? .red : .green).width(4)
+                    BarMark(x:.value("序号",i),y:.value("MACD",c.hist),width:.fixed(4)).foregroundStyle(c.hist >= 0 ? .red : .green)
                     LineMark(x:.value("序号",i),y:.value("DIF",c.dif)).foregroundStyle(.orange).lineStyle(StrokeStyle(lineWidth:1.2))
                     LineMark(x:.value("序号",i),y:.value("DEA",c.dea)).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.2))
                 }
