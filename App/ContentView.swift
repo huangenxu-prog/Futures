@@ -27,11 +27,11 @@ private struct GlassTabBar: View {
             ForEach(items.indices, id: \.self) { index in
                 Button { selection = index } label: {
                     VStack(spacing: 5) {
-                        Image(systemName: items[index].1).font(.system(size: 23, weight: .medium))
+                        Image(systemName: items[index].1).font(.system(size: 22, weight: .medium))
                         Text(items[index].0).font(.system(size: 13, weight: .medium))
                     }
                     .foregroundStyle(selection == index ? Color.cyan : .white)
-                    .frame(maxWidth: .infinity).padding(.vertical, 12)
+                    .frame(maxWidth: .infinity).padding(.vertical, 9)
                     .background(selection == index ? Color.white.opacity(0.13) : .clear, in: Capsule())
                 }.buttonStyle(.plain)
             }
@@ -47,11 +47,13 @@ private struct GlassTabBar: View {
 private struct SearchView: View {
     @State private var query = ""
     private var filtered: [FuturesInstrument] {
-        FuturesInstrument.samples.filter {
-            query.isEmpty ||
-            $0.name.localizedCaseInsensitiveContains(query) ||
-            $0.id.localizedCaseInsensitiveContains(query) ||
-            $0.exchange.localizedCaseInsensitiveContains(query)
+        let all = FuturesInstrument.samples
+        let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if keyword.isEmpty { return Array(all.prefix(4)) }
+        return all.filter {
+            $0.name.localizedCaseInsensitiveContains(keyword) ||
+            $0.id.localizedCaseInsensitiveContains(keyword) ||
+            $0.exchange.localizedCaseInsensitiveContains(keyword)
         }
     }
     var body: some View {
@@ -97,11 +99,7 @@ private struct SearchView: View {
                 Spacer(minLength:0)
             }
             .background(Color.black.ignoresSafeArea())
-            .navigationTitle("搜索")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark,for:.navigationBar)
-            .toolbarBackground(Color.black,for:.navigationBar)
-            .toolbarBackground(.visible,for:.navigationBar)
+            .toolbar(.hidden, for: .navigationBar)
         }
         .tint(.white)
         .preferredColorScheme(.dark)
@@ -128,11 +126,7 @@ private struct ProfileView: View {
                 .padding(.bottom,24)
             }
             .background(Color(red:0.07,green:0.07,blue:0.07).ignoresSafeArea())
-            .navigationTitle("交易账户")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarColorScheme(.dark,for:.navigationBar)
-            .toolbarBackground(Color.black,for:.navigationBar)
-            .toolbarBackground(.visible,for:.navigationBar)
+            .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
     }

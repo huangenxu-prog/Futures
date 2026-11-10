@@ -10,6 +10,7 @@ struct InstrumentDetailView: View {
     @State private var visibleStart = 0.0
     @State private var visibleCount = 100.0
     @State private var zoomBaseCount: Double? = nil
+    @State private var zoomBaseStart: Double? = nil
     @State private var dragBaseStart: Double? = nil
     private let periods = ["1分","5分","15分","30分","60分","日线"]
     private var candles: [DemoCandle] { DemoCandle.make(base:instrument.lastPrice,count:100) }
@@ -33,7 +34,7 @@ struct InstrumentDetailView: View {
                 macdPanel
                 quotePanel
                 Text("本地生成的演示行情，不代表真实市场行情").font(.caption2).foregroundStyle(.gray).padding(.bottom,8)
-            }.padding(.horizontal,10).padding(.top,-24)
+            }.padding(.horizontal,10).padding(.top,2)
         }
         .background(Color.black)
         .toolbar(.hidden, for:.navigationBar)
@@ -106,17 +107,27 @@ struct InstrumentDetailView: View {
             .frame(height:300)
             .chartXSelection(value:$selectedCandleIndex)
             .simultaneousGesture(MagnificationGesture().onChanged { scale in
-                if zoomBaseCount == nil { zoomBaseCount = visibleCount }
-                guard let base = zoomBaseCount else { return }
-                let nextCount = min(100, max(20, base / Double(scale)))
-                let center = visibleStart + (visibleCount - 1) / 2
+                if zoomBaseCount == nil {
+                    zoomBaseCount = visibleCount
+                    zoomBaseStart = visibleStart
+                    dragBaseStart = nil
+                }
+                guard let baseCount = zoomBaseCount, let baseStart = zoomBaseStart else { return }
+                let nextCount = min(100, max(20, baseCount / Double(scale)))
+                let fixedCenter = baseStart + (baseCount - 1) / 2
+                let nextStart = fixedCenter - (nextCount - 1) / 2
                 visibleCount = nextCount
-                visibleStart = min(max(0, center - (nextCount - 1) / 2), 100 - nextCount)
-            }.onEnded { _ in zoomBaseCount = nil })
+                visibleStart = min(max(0, nextStart), 100 - nextCount)
+            }.onEnded { _ in
+                zoomBaseCount = nil
+                zoomBaseStart = nil
+            })
             .simultaneousGesture(DragGesture(minimumDistance: 18).onChanged { value in
+                guard zoomBaseCount == nil else { return }
                 if dragBaseStart == nil { dragBaseStart = visibleStart }
                 guard let base = dragBaseStart else { return }
-                let shift = Double(value.translation.width / 320) * visibleCount
+                let plotWidth = max(UIScreen.main.bounds.width - 48, 1)
+                let shift = Double(value.translation.width / plotWidth) * visibleCount
                 visibleStart = min(max(0, base - shift), 100 - visibleCount)
             }.onEnded { _ in dragBaseStart = nil })
             .onTapGesture(count:2) {
