@@ -46,15 +46,54 @@ private struct GlassTabBar: View {
 
 private struct SearchView: View {
     @State private var query = ""
-    var filtered: [FuturesInstrument] { FuturesInstrument.samples.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.id.localizedCaseInsensitiveContains(query) } }
+    private var filtered: [FuturesInstrument] {
+        FuturesInstrument.samples.filter {
+            query.isEmpty ||
+            $0.name.localizedCaseInsensitiveContains(query) ||
+            $0.id.localizedCaseInsensitiveContains(query) ||
+            $0.exchange.localizedCaseInsensitiveContains(query)
+        }
+    }
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                TextField("搜索合约名称或代码", text: $query).padding(13).background(.white.opacity(0.08),in:Capsule()).padding()
-                ForEach(filtered) { item in NavigationLink { InstrumentDetailView(instrument:item) } label: { InstrumentRow(instrument:item).padding(.horizontal,16) } }
-                Spacer()
-            }.background(Color.black).navigationTitle("搜索").toolbarColorScheme(.dark,for:.navigationBar)
-        }.preferredColorScheme(.dark)
+            VStack(spacing:0) {
+                TextField("搜索合约名称或代码", text:$query)
+                    .font(.system(size:16))
+                    .padding(.horizontal,16)
+                    .padding(.vertical,13)
+                    .background(Color.white.opacity(0.08),in:Capsule())
+                    .padding(.horizontal,16)
+                    .padding(.top,12)
+                    .padding(.bottom,8)
+
+                ScrollView {
+                    LazyVStack(spacing:0) {
+                        ForEach(filtered) { item in
+                            NavigationLink {
+                                InstrumentDetailView(instrument:item)
+                            } label: {
+                                InstrumentRow(instrument:item)
+                                    .padding(.horizontal,16)
+                            }
+                            .buttonStyle(.plain)
+                            .tint(.white)
+                            .overlay(alignment:.bottom) {
+                                Rectangle().fill(.white.opacity(0.12)).frame(height:0.5)
+                            }
+                        }
+                    }
+                }
+                Spacer(minLength:0)
+            }
+            .background(Color.black.ignoresSafeArea())
+            .navigationTitle("搜索")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarColorScheme(.dark,for:.navigationBar)
+            .toolbarBackground(Color.black,for:.navigationBar)
+            .toolbarBackground(.visible,for:.navigationBar)
+        }
+        .tint(.white)
+        .preferredColorScheme(.dark)
     }
 }
 
