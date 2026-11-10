@@ -199,7 +199,7 @@ private struct ProfileView: View {
         HStack(spacing:0) {
             tradeAction("下单","arrow.left.arrow.right",blue)
             tradeAction("撤单/改价","doc.text",Color(red:1,green:0.40,blue:0.32))
-            tradeAction("当日委托","rectangle.text.rectangle",Color.orange)
+            tradeAction("当日委托","list.bullet.rectangle.fill",Color.orange)
             tradeAction("当日成交","checkmark.shield.fill",Color.orange)
         }
         .padding(.top,17)
