@@ -173,7 +173,7 @@ private struct ProfileView: View {
                     VStack(alignment:.leading,spacing:7) {
                         HStack(spacing:5) {
                             Text("可用资金").font(.system(size:12)).foregroundStyle(.gray)
-                            Text("转账 ›").font(.system(size:10)).foregroundStyle(blue).padding(.horizontal:5).padding(.vertical:2).overlay(Rectangle().stroke(blue.opacity(0.8),lineWidth:0.8))
+                            Text("转账 ›").font(.system(size:10)).foregroundStyle(blue).padding(.horizontal,6).padding(.vertical,2).overlay(Rectangle().stroke(blue.opacity(0.8), lineWidth: 1))
                         }
                         Text("96,320.80").font(.system(size:23,weight:.medium,design:.rounded)).monospacedDigit().foregroundStyle(.white)
                     }.frame(maxWidth:.infinity,alignment:.leading)
