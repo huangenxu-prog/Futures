@@ -43,7 +43,7 @@ for (x,lo,op,cl,up) in bars {
 }
 
 // Blue and gold moving-average curves
-for (color, offset, width) in [(NSColor(calibratedRed:0.05,green:0.55,blue:1,alpha:1),0,10),(NSColor(calibratedRed:1,green:0.62,blue:0.08,alpha:1),-55,8)] {
+for (color, offset, width): (NSColor, CGFloat, CGFloat) in [(NSColor(calibratedRed:0.05,green:0.55,blue:1,alpha:1),0,10),(NSColor(calibratedRed:1,green:0.62,blue:0.08,alpha:1),-55,8)] {
     let p=NSBezierPath()
     p.move(to:NSPoint(x:90,y:380+offset))
     p.curve(to:NSPoint(x:930,y:690+offset),controlPoint1:NSPoint(x:350,y:180+offset),controlPoint2:NSPoint(x:620,y:780+offset))
