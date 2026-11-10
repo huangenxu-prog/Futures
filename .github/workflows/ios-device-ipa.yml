@@ -1,0 +1,53 @@
+name: iOS Device IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-unsigned-ipa:
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project Futures.xcodeproj -scheme Futures
+
+      - name: Build device archive without signing
+        run: |
+          xcodebuild \
+            -project Futures.xcodeproj \
+            -scheme Futures \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Futures.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            archive
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH="$RUNNER_TEMP/Futures.xcarchive/Products/Applications/Futures.app"
+          test -d "$APP_PATH"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/Futures.app"
+          cd "$RUNNER_TEMP/ipa"
+          /usr/bin/zip -r "$RUNNER_TEMP/Futures-unsigned.ipa" Payload
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Futures-unsigned-ipa
+          path: ${{ runner.temp }}/Futures-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
