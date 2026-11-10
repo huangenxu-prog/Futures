@@ -6,6 +6,7 @@ struct InstrumentDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var period = "15分"
     @State private var showIndicators = true
+    @State private var selectedCandleIndex: Int? = nil
     private let periods = ["1分","5分","15分","30分","60分","日线"]
     private var candles: [DemoCandle] { DemoCandle.make(base:instrument.lastPrice,count:100) }
     private var priceDomain: ClosedRange<Double> {
@@ -65,10 +66,18 @@ struct InstrumentDetailView: View {
     private var candleChart: some View {
         VStack(alignment:.leading,spacing:6) {
             HStack { Text("K线").font(.caption).foregroundStyle(.gray); Spacer(); if showIndicators { Text("EMA20").foregroundStyle(.orange); Text("EMA50").foregroundStyle(.cyan) } }.font(.caption2)
+            if let index = selectedCandleIndex, candles.indices.contains(index) {
+                selectedCandleInfo(candles[index], index:index)
+            }
             Chart {
                 ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
                     RuleMark(x:.value("序号",i),yStart:.value("低",c.low),yEnd:.value("高",c.high)).foregroundStyle(c.close >= c.open ? .red : .green).lineStyle(StrokeStyle(lineWidth:1))
                     RectangleMark(x:.value("序号",i),yStart:.value("开",min(c.open,c.close)),yEnd:.value("收",max(c.open,c.close)),width:4).foregroundStyle(c.close >= c.open ? .red : .green)
+                    if selectedCandleIndex == i {
+                        RuleMark(x:.value("选中K线",i))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .lineStyle(StrokeStyle(lineWidth:1,dash:[4,3]))
+                    }
                     if showIndicators {
                         LineMark(x:.value("序号",i),y:.value("EMA20",c.ema20),series:.value("均线","EMA20")).foregroundStyle(.orange).lineStyle(StrokeStyle(lineWidth:1.4))
                         LineMark(x:.value("序号",i),y:.value("EMA50",c.ema50),series:.value("均线","EMA50")).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.4))
@@ -90,8 +99,61 @@ struct InstrumentDetailView: View {
                 }
             }
             .frame(height:300)
+            .chartOverlay { proxy in
+                GeometryReader { geometry in
+                    Rectangle().fill(.clear).contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance:0)
+                            .onChanged { value in
+                                guard let plotFrame = proxy.plotFrame else { return }
+                                let frame = geometry[plotFrame]
+                                let x = value.location.x - frame.minX
+                                if let index:Int = proxy.value(atX:x,as:Int.self) {
+                                    selectedCandleIndex = min(max(index,0),candles.count-1)
+                                }
+                            }
+                        )
+                }
+            }
         }.padding(10).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).stroke(.white.opacity(0.22),lineWidth:1))
     }
+
+    private func selectedCandleInfo(_ candle:DemoCandle,index:Int)->some View {
+        let change = candle.close - candle.open
+        let percent = candle.open == 0 ? 0 : change / candle.open * 100
+        let date = Calendar.current.date(byAdding:.minute,value:(index - 99) * 15,to:Date()) ?? Date()
+        return VStack(alignment:.leading,spacing:4) {
+            HStack {
+                Text("选中 K线").foregroundStyle(.white)
+                Spacer()
+                Text(date.formatted(date:.numeric,time:.shortened)).foregroundStyle(.gray)
+            }
+            HStack(spacing:12) {
+                valueCell("开盘",candle.open)
+                valueCell("最高",candle.high)
+                valueCell("最低",candle.low)
+                valueCell("收盘",candle.close)
+                Spacer(minLength:0)
+                Text(String(format:"%+.2f%%",percent))
+                    .foregroundStyle(change >= 0 ? .red : .green)
+            }
+        }
+        .font(.system(size:10,design:.rounded))
+        .padding(7)
+        .frame(maxWidth:.infinity,alignment:.leading)
+        .background(Color.black.opacity(0.72),in:RoundedRectangle(cornerRadius:7))
+        .overlay(RoundedRectangle(cornerRadius:7).stroke(.white.opacity(0.18),lineWidth:0.7))
+    }
+
+    private func valueCell(_ title:String,_ value:Double)->some View {
+        VStack(alignment:.leading,spacing:2) {
+            Text(title).foregroundStyle(.gray)
+            Text(value.formatted(.number.precision(.fractionLength(0...2))))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+    }
+
     private var macdPanel: some View {
         VStack(alignment:.leading,spacing:5) {
             HStack { Text("MACD(12, 26, 9)").font(.caption.weight(.semibold)); Spacer(); Text("DIF"); Text("DEA") }.foregroundStyle(.white.opacity(0.75)).font(.caption2)
