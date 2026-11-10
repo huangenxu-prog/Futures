@@ -27,30 +27,40 @@ struct InstrumentDetailView: View {
                 macdPanel
                 quotePanel
                 Text("本地生成的演示行情，不代表真实市场行情").font(.caption2).foregroundStyle(.gray).padding(.bottom,8)
-            }.padding(.horizontal,10).padding(.top,-14)
+            }.padding(.horizontal,10).padding(.top,-24)
         }
         .background(Color.black)
         .toolbar(.hidden, for:.navigationBar)
         .preferredColorScheme(.dark)
     }
     private var topBar: some View {
-        VStack(spacing:8) {
-            HStack {
-                Button { dismiss() } label: { Image(systemName:"chevron.left").font(.system(size:19,weight:.medium)).foregroundStyle(.white).frame(width:42,height:42).background(.ultraThinMaterial,in:Circle()).overlay(Circle().stroke(.white.opacity(0.18),lineWidth:1)) }
-                Spacer(minLength:0)
+        HStack(spacing:8) {
+            Button { dismiss() } label: {
+                Image(systemName:"chevron.left")
+                    .font(.system(size:18,weight:.medium))
+                    .foregroundStyle(.white)
+                    .frame(width:36,height:36)
             }
-            HStack(spacing:8) {
             Text(instrument.name).font(.system(size:15,weight:.semibold))
             Text(instrument.id).font(.caption).foregroundStyle(.gray)
             Rectangle().fill(.white.opacity(0.3)).frame(width:1,height:20)
-            Text(Date.now.formatted(date:.numeric,time:.shortened)).font(.caption).foregroundStyle(.white.opacity(0.8))
-            Spacer()
-            Menu { ForEach(periods,id:\.self){ p in Button(p){period=p} } } label: {
-                Text(period+"⌄").font(.caption.weight(.semibold)).padding(.horizontal,12).padding(.vertical,8).background(.white.opacity(0.12),in:Capsule())
+            Text(Date.now.formatted(date:.numeric,time:.shortened))
+                .font(.caption).foregroundStyle(.white.opacity(0.8))
+                .lineLimit(1).minimumScaleFactor(0.8)
+            Spacer(minLength:2)
+            Menu { ForEach(periods,id:\\.self){ p in Button(p){period=p} } } label: {
+                Text(period+"⌄").font(.caption.weight(.semibold))
+                    .padding(.horizontal,10).padding(.vertical,8)
+                    .background(.white.opacity(0.12),in:Capsule())
             }
-            Button { showIndicators.toggle() } label: { Image(systemName:"eye").padding(8).background(.white.opacity(0.12),in:Circle()) }
-            }.padding(9).background(.ultraThinMaterial,in:Capsule()).overlay(Capsule().stroke(.white.opacity(0.35),lineWidth:1))
+            Button { showIndicators.toggle() } label: {
+                Image(systemName:"eye").padding(8)
+                    .background(.white.opacity(0.12),in:Circle())
+            }
         }
+        .padding(.horizontal,7).padding(.vertical,6)
+        .background(.ultraThinMaterial,in:Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.35),lineWidth:1))
     }
     private var candleChart: some View {
         VStack(alignment:.leading,spacing:6) {
