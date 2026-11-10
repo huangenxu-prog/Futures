@@ -6,6 +6,7 @@ struct MarketHomeView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                homeHeader
                 HStack(spacing: 0) {
                     Text("名称").frame(maxWidth:.infinity,alignment:.leading)
                     Image(systemName:"square.grid.2x2.fill").frame(width:34)
@@ -18,7 +19,7 @@ struct MarketHomeView: View {
                 .background(.ultraThinMaterial,in:Capsule())
                 .overlay(Capsule().stroke(LinearGradient(colors:[.white,.cyan.opacity(0.5),.white.opacity(0.25)],startPoint:.topLeading,endPoint:.bottomTrailing),lineWidth:1))
                 .shadow(color:.cyan.opacity(0.2),radius:8)
-                .padding(.horizontal,12).padding(.top,8).padding(.bottom,5)
+                .padding(.horizontal,12).padding(.top,5).padding(.bottom,5)
                 ScrollView {
                     LazyVStack(spacing:0) {
                         ForEach(instruments) { item in
@@ -43,11 +44,25 @@ struct MarketHomeView: View {
                 Text("演示行情 · 非实时数据").font(.caption2).foregroundStyle(.gray).padding(.bottom,8)
             }
             .background(Color.black)
-            .toolbar {
-                ToolbarItem(placement:.principal) { Text("期汇").font(.headline.weight(.bold)).foregroundStyle(.white) }
-                ToolbarItem(placement:.topBarTrailing) { Image(systemName:"magnifyingglass").foregroundStyle(.white) }
-            }
+            .toolbar(.hidden, for:.navigationBar)
         }.preferredColorScheme(.dark)
+    }
+    private var homeHeader: some View {
+        ZStack {
+            Text("期汇").font(.system(size:20,weight:.bold)).foregroundStyle(.white)
+            HStack {
+                Spacer()
+                Image(systemName:"magnifyingglass")
+                    .font(.system(size:19,weight:.medium))
+                    .foregroundStyle(.white)
+                    .frame(width:42,height:42)
+                    .background(.ultraThinMaterial,in:Circle())
+                    .overlay(Circle().stroke(.white.opacity(0.18),lineWidth:1))
+            }
+        }
+        .frame(height:46)
+        .padding(.horizontal,16)
+        .padding(.top,1)
     }
     private func header(_ value:String)->some View { Text(value).frame(width:78,alignment:.trailing) }
 }
