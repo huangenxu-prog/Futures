@@ -63,8 +63,8 @@ private struct ProfileView: View {
         NavigationStack {
             List {
                 Section("期汇") {
-                    LabeledContent("版本","0.2.0")
-                    LabeledContent("行情模式","本地演示")
+                    LabeledContent("版本", value: "0.2.0")
+                    LabeledContent("行情模式", value: "本地演示")
                 }
                 Section { Text("当前版本不连接真实期货账户，不发送交易指令。").foregroundStyle(.secondary) }
             }.scrollContentBackground(.hidden).background(Color.black).navigationTitle("我的")
