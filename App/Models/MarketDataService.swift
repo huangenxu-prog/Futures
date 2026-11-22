@@ -1,6 +1,6 @@
 import Foundation
 
-struct MarketBar: Decodable {
+struct MarketBar: Codable {
     let time: Int64
     let open: Double
     let high: Double
@@ -28,6 +28,28 @@ enum MarketDataError: LocalizedError {
 }
 
 enum MarketDataService {
+    private static func cacheURL(symbol: String, period: Int) -> URL? {
+        guard let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+        let safeSymbol = symbol.unicodeScalars.map {
+            CharacterSet.alphanumerics.contains($0) ? String($0) : "_"
+        }.joined()
+        return directory.appendingPathComponent("qihui_klines_\(safeSymbol)_\(period).json")
+    }
+
+    static func cached(symbol: String, period: Int) -> [MarketBar]? {
+        guard let url = cacheURL(symbol: symbol, period: period),
+              let data = try? Data(contentsOf: url),
+              let bars = try? JSONDecoder().decode([MarketBar].self, from: data),
+              !bars.isEmpty else { return nil }
+        return bars.sorted { $0.time < $1.time }
+    }
+
+    private static func save(_ bars: [MarketBar], symbol: String, period: Int) {
+        guard let url = cacheURL(symbol: symbol, period: period),
+              let data = try? JSONEncoder().encode(bars) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
     // Configure via QIHUI_API_BASE_URL in Info.plist at build time.
     // Must be an authenticated HTTPS gateway reachable from the device.
     static func fetch(symbol: String, period: Int, count: Int = 100) async throws -> [MarketBar] {
@@ -59,6 +81,8 @@ enum MarketDataService {
         }
         let bars = try JSONDecoder().decode(KlineResponse.self, from: data).bars
         guard !bars.isEmpty else { throw MarketDataError.noData }
-        return bars.sorted { $0.time < $1.time }
+        let sorted = bars.sorted { $0.time < $1.time }
+        save(sorted, symbol: symbol, period: period)
+        return sorted
     }
 }
