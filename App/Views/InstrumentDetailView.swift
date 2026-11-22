@@ -9,7 +9,6 @@ struct InstrumentDetailView: View {
     @State private var loadError: String? = nil
     @State private var loading = false
     @State private var showingCachedData = false
-    @State private var showQuote = false
     @State private var showIndicators = true
     @State private var selectedCandleIndex: Int? = nil
     @State private var crosshairActive = false
@@ -21,6 +20,22 @@ struct InstrumentDetailView: View {
     @State private var dragBaseStart: Double? = nil
     private let periods = ["1分","5分","15分","30分","60分","日线"]
     private var latestPrice: Double { candles.last?.close ?? instrument.lastPrice }
+    // This is a change versus the preceding K-line close, NOT the exchange's
+    // daily settlement-based percentage. The API does not supply settlement yet.
+    private var barChangePercent: Double? {
+        guard candles.count >= 2 else { return nil }
+        let previous = candles[candles.count - 2].close
+        guard previous != 0 else { return nil }
+        return (candles[candles.count - 1].close / previous - 1) * 100
+    }
+    private var changeColor: Color {
+        guard let change = barChangePercent else { return .white }
+        return change > 0 ? .red : change < 0 ? .green : .white
+    }
+    private var changeText: String {
+        guard let change = barChangePercent else { return "--%" }
+        return String(format: "%+.2f%%", change)
+    }
     private var periodSeconds: Int { ["1分":60,"5分":300,"15分":900,"30分":1800,"60分":3600,"日线":86400][period] ?? 900 }
     private var priceDomain: ClosedRange<Double> {
         let low = candles.map(\.low).min() ?? latestPrice * 0.97
@@ -36,6 +51,11 @@ struct InstrumentDetailView: View {
     }
     var body: some View {
         GeometryReader { geometry in
+            // Reserve a single compact quote row and a ~20% MACD panel.
+            // Let the K-line chart take all remaining available height.
+            let quoteHeight: CGFloat = 36
+            let macdHeight = max(105, geometry.size.height * 0.205)
+            let candleHeight = max(210, geometry.size.height - 43 - quoteHeight - macdHeight - 12)
             VStack(spacing: 3) {
                 topBar
                 if loading && candles.isEmpty {
@@ -47,10 +67,9 @@ struct InstrumentDetailView: View {
                     Text(loadError).font(.caption).foregroundStyle(.orange)
                     Spacer()
                 } else if !candles.isEmpty {
-                    candleChart(height: max(240, geometry.size.height * 0.65))
-                    macdPanel(height: max(115, geometry.size.height * 0.24))
-                    quotePanel
-                    Spacer(minLength: 0)
+                    candleChart(height: candleHeight)
+                    macdPanel(height: macdHeight)
+                    quoteStrip
                 } else {
                     Spacer()
                 }
@@ -119,37 +138,49 @@ struct InstrumentDetailView: View {
         }
     }
     private var topBar: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 5) {
             Button { dismiss() } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .medium))
-                    .frame(width: 30, height: 36)
+                    .font(.system(size: 16, weight: .medium))
+                    .frame(width: 25, height: 36)
             }
-            Text(instrument.name).font(.system(size: 15, weight: .semibold))
-            Text(instrument.id).font(.system(size: 11)).foregroundStyle(.gray)
-                .lineLimit(1).minimumScaleFactor(0.8)
-            Spacer(minLength: 2)
-            if showingCachedData {
-                Text("缓存").font(.system(size: 9)).foregroundStyle(.orange.opacity(0.8))
-            }
+            Text(instrument.name)
+                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+            Text(instrument.id)
+                .font(.system(size: 10))
+                .foregroundStyle(.gray)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Spacer(minLength: 1)
             Text(latestPrice.formatted(.number.precision(.fractionLength(0...2))))
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
-                .foregroundStyle(.red)
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(changeColor)
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(changeText)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(changeColor)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
             Menu {
                 ForEach(periods, id: \.self) { p in Button(p) { period = p } }
             } label: {
-                Text(period + "⌄").font(.system(size: 12, weight: .semibold))
-                    .padding(.horizontal, 8).padding(.vertical, 7)
+                Text(period + "⌄")
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 7).padding(.vertical, 7)
                     .background(.white.opacity(0.10), in: Capsule())
             }
             Button { showIndicators.toggle() } label: {
                 Image(systemName: showIndicators ? "eye" : "eye.slash")
-                    .font(.system(size: 15)).frame(width: 30, height: 36)
+                    .font(.system(size: 15))
+                    .frame(width: 26, height: 36)
             }
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 4)
         .frame(height: 43)
     }
     private func timeLabel(_ index: Int) -> String {
@@ -165,16 +196,14 @@ struct InstrumentDetailView: View {
             HStack(spacing: 5) {
                 if let index = selectedCandleIndex, candles.indices.contains(index) {
                     selectedCandleInfo(candles[index], index: index)
-                } else {
-                    Text("K线").foregroundStyle(.gray)
-                    Spacer(minLength: 2)
-                    if showIndicators {
-                        Text("EMA20").foregroundStyle(.orange)
-                        Text("EMA50").foregroundStyle(.cyan)
-                    }
+                } else if showIndicators {
+                    Text("EMA20").foregroundStyle(.orange)
+                    Text("EMA50").foregroundStyle(.cyan)
+                    Spacer(minLength: 0)
                 }
             }
-            .frame(height: 18)
+            .font(.system(size: 10, weight: .medium))
+            .frame(height: 18, alignment: .leading)
             .clipped()
             Chart {
                 ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
@@ -307,8 +336,8 @@ struct InstrumentDetailView: View {
     }
 
     private func macdPanel(height: CGFloat) -> some View {
-        VStack(alignment:.leading,spacing:5) {
-            HStack { Text("MACD(12, 26, 9)").font(.caption.weight(.semibold)); Spacer(); Text("DIF"); Text("DEA") }.foregroundStyle(.white.opacity(0.75)).font(.caption2)
+        VStack(alignment:.leading,spacing:3) {
+            HStack { Text("MACD(12,26,9)").font(.system(size: 10, weight: .medium)); Spacer(); Text("DIF"); Text("DEA") }.foregroundStyle(.white.opacity(0.65)).font(.system(size: 10))
             Chart {
                 ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
                     BarMark(x:.value("序号",i),y:.value("MACD",c.hist),width:.fixed(4)).foregroundStyle(c.hist >= 0 ? .red : .green)
@@ -321,67 +350,49 @@ struct InstrumentDetailView: View {
                         .foregroundStyle(.white.opacity(0.55))
                         .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
                 }
-            }.chartYScale(domain: macdDomain).chartXScale(domain: visibleDomain).chartXAxis(.hidden).chartYAxis(.hidden).frame(height:height - 24)
-        }.padding(.horizontal, 4).padding(.top, 3)
+            }.chartYScale(domain: macdDomain).chartXScale(domain: visibleDomain).chartXAxis(.hidden).chartYAxis(.hidden).frame(height:height - 20)
+        }.padding(.horizontal, 4).padding(.top, 2)
     }
-    private var quotePanel: some View {
-        VStack(spacing: 0) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.18)) { showQuote.toggle() }
-            } label: {
-                HStack(spacing: 8) {
-                    Text("行情详情")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.gray)
-                    Spacer(minLength: 0)
-                    Text("K线收盘 " + latestPrice.formatted())
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.75))
-                    Image(systemName: showQuote ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.gray)
-                }
-                .frame(height: 30)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if showQuote {
-                Divider().overlay(.white.opacity(0.1))
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        detailValue("卖一", "--")
-                        detailValue("卖量", "--")
-                        detailValue("买一", "--")
-                        detailValue("买量", "--")
-                    }
-                    Spacer(minLength: 8)
-                    VStack(alignment: .leading, spacing: 7) {
-                        detailValue("最新价", "--")
-                        detailValue("涨跌幅", "--")
-                        detailValue("成交量", "--")
-                        detailValue("持仓量", "--")
-                        detailValue("增减仓", "--")
-                    }
-                }
-                .padding(.vertical, 10)
-                Text("实时盘口尚未接入 · 上方价格为最新K线收盘价")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.gray.opacity(0.8))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.bottom, 8)
-            }
+    // Compact bottom line: only genuine quote fields are shown. The current
+    // K-line-only API has no bid/ask, open interest or session volume data.
+    private var quoteStrip: some View {
+        HStack(spacing: 0) {
+            smallQuote("卖1", "--", .white)
+            quoteSeparator
+            smallQuote("买1", "--", .white)
+            quoteSeparator
+            smallQuote("持", "--", .white)
+            quoteSeparator
+            smallQuote("成", "--", .white)
+            quoteSeparator
+            smallQuote("增", "--", .white)
+            quoteSeparator
+            smallQuote("幅", changeText, changeColor)
         }
-        .padding(.horizontal, 9)
-        .background(Color.white.opacity(0.035))
+        .frame(height: 36)
+        .padding(.horizontal, 3)
+        .overlay(alignment: .top) {
+            Rectangle().fill(.white.opacity(0.16)).frame(height: 0.5)
+        }
+        .accessibilityLabel("卖一、买一、持仓、成交、增仓数据尚未接入。幅度为最近两根K线收盘价变化。")
     }
 
-    private func detailValue(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 10) {
-            Text(label).foregroundStyle(.gray).frame(width: 43, alignment: .leading)
-            Text(value).foregroundStyle(.white.opacity(0.8)).monospacedDigit()
+    private var quoteSeparator: some View {
+        Rectangle()
+            .fill(.white.opacity(0.20))
+            .frame(width: 0.5, height: 13)
+    }
+
+    private func smallQuote(_ label: String, _ value: String, _ tint: Color) -> some View {
+        HStack(spacing: 2) {
+            Text(label).foregroundStyle(.gray)
+            Text(value).foregroundStyle(tint)
         }
-        .font(.system(size: 12, design: .rounded))
+        .font(.system(size: 10, weight: .medium, design: .rounded))
+        .monospacedDigit()
+        .lineLimit(1)
+        .minimumScaleFactor(0.65)
+        .frame(maxWidth: .infinity)
     }
 
 }
