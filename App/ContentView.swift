@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var selectedTab = 0
+    @State private var detailVisible = false
     var body: some View {
         ZStack(alignment: .bottom) {
             Color.black.ignoresSafeArea()
@@ -12,11 +13,18 @@ struct ContentView: View {
                 default: ProfileView()
                 }
             }
-            .safeAreaPadding(.bottom, 88)
-            GlassTabBar(selection: $selectedTab)
+            .safeAreaPadding(.bottom, detailVisible ? 0 : 88)
+            if !detailVisible { GlassTabBar(selection: $selectedTab) }
         }
         .preferredColorScheme(.dark)
+        .onReceive(NotificationCenter.default.publisher(for: .qihuiDetailVisibility)) { event in
+            detailVisible = (event.object as? Bool) ?? false
+        }
     }
+}
+
+extension Notification.Name {
+    static let qihuiDetailVisibility = Notification.Name("qihuiDetailVisibility")
 }
 
 private struct GlassTabBar: View {
