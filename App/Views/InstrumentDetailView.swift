@@ -212,74 +212,66 @@ struct InstrumentDetailView: View {
             .frame(height:height - 28)
             .chartOverlay { proxy in
                 GeometryReader { geometry in
-                    Rectangle()
-                        .fill(Color.clear)
-                        .contentShape(Rectangle())
-                        .gesture(
-                            LongPressGesture(minimumDuration: 0.35)
-                                .sequenced(before: DragGesture(minimumDistance: 0))
-                                .onChanged { phase in
-                                    switch phase {
-                                    case .first(true):
-                                        guard !pinchActive else { return }
-                                        crosshairActive = true
-                                        dragBaseStart = nil
-                                    case .second(true, let drag):
-                                        guard !pinchActive else { return }
-                                        crosshairActive = true
-                                        if let drag {
-                                            let plot = geometry[proxy.plotFrame!]
-                                            let x = drag.location.x - plot.minX
-                                            if let value: Double = proxy.value(atX: x) {
-                                                let index = Int(value.rounded())
-                                                if candles.indices.contains(index) {
-                                                    selectedCandleIndex = index
-                                                }
-                                            }
-                                        }
-                                    default: break
-                                    }
+                    ChartTouchSurface(
+                        onPan: { translation, ended in
+                            if ended {
+                                dragBaseStart = nil
+                                return
+                            }
+                            guard !crosshairActive, !pinchActive else { return }
+                            if dragBaseStart == nil {
+                                dragBaseStart = visibleStart
+                                selectedCandleIndex = nil
+                            }
+                            guard let base = dragBaseStart else { return }
+                            let plotWidth = max(geometry.size.width - 38, 1)
+                            let shift = Double(translation / plotWidth) * visibleCount
+                            visibleStart = min(max(0, base - shift),
+                                               max(0, Double(candles.count) - visibleCount))
+                        },
+                        onCrosshair: { locationX, ended in
+                            if ended {
+                                crosshairActive = false
+                                return
+                            }
+                            guard !pinchActive else { return }
+                            crosshairActive = true
+                            dragBaseStart = nil
+                            let plot = geometry[proxy.plotFrame!]
+                            if let value: Double = proxy.value(atX: locationX - plot.minX) {
+                                let index = Int(value.rounded())
+                                if candles.indices.contains(index) {
+                                    selectedCandleIndex = index
                                 }
-                                .onEnded { _ in
-                                    crosshairActive = false
-                                }
-                        )
+                            }
+                        },
+                        onPinch: { scale, ended in
+                            if ended {
+                                zoomBaseCount = nil
+                                zoomBaseStart = nil
+                                pinchActive = false
+                                return
+                            }
+                            pinchActive = true
+                            crosshairActive = false
+                            selectedCandleIndex = nil
+                            dragBaseStart = nil
+                            if zoomBaseCount == nil {
+                                zoomBaseCount = visibleCount
+                                zoomBaseStart = visibleStart
+                            }
+                            guard let baseCount = zoomBaseCount,
+                                  let baseStart = zoomBaseStart else { return }
+                            let total = Double(candles.count)
+                            let nextCount = min(total, max(min(20, total), baseCount / Double(scale)))
+                            let center = baseStart + (baseCount - 1) / 2
+                            visibleCount = nextCount
+                            visibleStart = min(max(0, center - (nextCount - 1) / 2),
+                                               max(0, total - nextCount))
+                        }
+                    )
                 }
             }
-            .simultaneousGesture(MagnificationGesture().onChanged { scale in
-                pinchActive = true
-                crosshairActive = false
-                selectedCandleIndex = nil
-                if zoomBaseCount == nil {
-                    zoomBaseCount = visibleCount
-                    zoomBaseStart = visibleStart
-                    dragBaseStart = nil
-                }
-                guard let baseCount = zoomBaseCount, let baseStart = zoomBaseStart else { return }
-                let total = Double(candles.count)
-                let nextCount = min(total, max(min(20,total), baseCount / Double(scale)))
-                let fixedCenter = baseStart + (baseCount - 1) / 2
-                let nextStart = fixedCenter - (nextCount - 1) / 2
-                visibleCount = nextCount
-                visibleStart = min(max(0, nextStart), total - nextCount)
-            }.onEnded { _ in
-                zoomBaseCount = nil
-                zoomBaseStart = nil
-                crosshairActive = false
-                selectedCandleIndex = nil
-                pinchActive = false
-            })
-            .simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { value in
-                guard !crosshairActive, !pinchActive, zoomBaseCount == nil else { return }
-                if dragBaseStart == nil {
-                    dragBaseStart = visibleStart
-                    selectedCandleIndex = nil
-                }
-                guard let base = dragBaseStart else { return }
-                let plotWidth = max(UIScreen.main.bounds.width - 48, 1)
-                let shift = Double(value.translation.width / plotWidth) * visibleCount
-                visibleStart = min(max(0, base - shift), max(0, Double(candles.count) - visibleCount))
-            }.onEnded { _ in dragBaseStart = nil })
             .onTapGesture(count:2) {
                 withAnimation(.easeOut(duration:0.2)) {
                     visibleCount = Double(min(100, candles.count))
