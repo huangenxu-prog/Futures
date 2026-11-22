@@ -58,6 +58,10 @@ struct InstrumentDetailView: View {
             .padding(.horizontal, 3)
             .padding(.top, 2)
         }
+        .simultaneousGesture(TapGesture().onEnded {
+            selectedCandleIndex = nil
+            crosshairActive = false
+        })
         .background(Color.black.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .preferredColorScheme(.dark)
@@ -268,6 +272,10 @@ struct InstrumentDetailView: View {
                             visibleCount = nextCount
                             visibleStart = min(max(0, center - (nextCount - 1) / 2),
                                                max(0, total - nextCount))
+                        },
+                        onTap: {
+                            selectedCandleIndex = nil
+                            crosshairActive = false
                         }
                     )
                 }
