@@ -5,6 +5,9 @@ struct InstrumentDetailView: View {
     let instrument: FuturesInstrument
     @Environment(\.dismiss) private var dismiss
     @State private var period = "15分"
+    @State private var candles: [DemoCandle] = []
+    @State private var loadError: String? = nil
+    @State private var loading = false
     @State private var showIndicators = true
     @State private var selectedCandleIndex: Int? = nil
     @State private var visibleStart = 0.0
@@ -13,32 +16,55 @@ struct InstrumentDetailView: View {
     @State private var zoomBaseStart: Double? = nil
     @State private var dragBaseStart: Double? = nil
     private let periods = ["1分","5分","15分","30分","60分","日线"]
-    private var candles: [DemoCandle] { DemoCandle.make(base:instrument.lastPrice,count:100) }
+    private var latestPrice: Double { candles.last?.close ?? instrument.lastPrice }
+    private var periodSeconds: Int { ["1分":60,"5分":300,"15分":900,"30分":1800,"60分":3600,"日线":86400][period] ?? 900 }
     private var priceDomain: ClosedRange<Double> {
-        let low = candles.map(\.low).min() ?? instrument.lastPrice * 0.97
-        let high = candles.map(\.high).max() ?? instrument.lastPrice * 1.03
-        let padding = max((high - low) * 0.10, instrument.lastPrice * 0.002)
+        let low = candles.map(\.low).min() ?? latestPrice * 0.97
+        let high = candles.map(\.high).max() ?? latestPrice * 1.03
+        let padding = max((high - low) * 0.10, latestPrice * 0.002)
         return (low - padding)...(high + padding)
     }
     private var visibleDomain: ClosedRange<Double> { visibleStart...(visibleStart + visibleCount - 1) }
     private var macdDomain: ClosedRange<Double> {
         let peak = candles.map { max(abs($0.hist), abs($0.dif), abs($0.dea)) }.max() ?? 1
-        let limit = max(peak * 1.25, instrument.lastPrice * 0.0005)
+        let limit = max(peak * 1.25, latestPrice * 0.0005)
         return -limit...limit
     }
     var body: some View {
         ScrollView {
             VStack(spacing:10) {
                 topBar
-                candleChart
-                macdPanel
-                quotePanel
-                Text("本地生成的演示行情，不代表真实市场行情").font(.caption2).foregroundStyle(.gray).padding(.bottom,8)
+                if loading { ProgressView("正在获取行情").padding(.vertical, 20) }
+                if let loadError { Text(loadError).font(.caption).foregroundStyle(.orange).padding(12) }
+                if !candles.isEmpty {
+                    candleChart
+                    macdPanel
+                    quotePanel
+                }
             }.padding(.horizontal,10).padding(.top,2)
         }
         .background(Color.black)
         .toolbar(.hidden, for:.navigationBar)
         .preferredColorScheme(.dark)
+        .task(id: period) { await loadCandles() }
+    }
+    @MainActor private func loadCandles() async {
+        loading = true
+        loadError = nil
+        defer { loading = false }
+        do {
+            let bars = try await MarketDataService.fetch(symbol: instrument.id, period: periodSeconds)
+            try Task.checkCancellation()
+            candles = DemoCandle.from(bars)
+            visibleCount = Double(min(100, candles.count))
+            visibleStart = Double(max(0, candles.count - Int(visibleCount)))
+            selectedCandleIndex = nil
+        } catch is CancellationError {
+            return
+        } catch {
+            candles = []
+            loadError = error.localizedDescription
+        }
     }
     private var topBar: some View {
         HStack(spacing:8) {
@@ -113,11 +139,12 @@ struct InstrumentDetailView: View {
                     dragBaseStart = nil
                 }
                 guard let baseCount = zoomBaseCount, let baseStart = zoomBaseStart else { return }
-                let nextCount = min(100, max(20, baseCount / Double(scale)))
+                let total = Double(candles.count)
+                let nextCount = min(total, max(min(20,total), baseCount / Double(scale)))
                 let fixedCenter = baseStart + (baseCount - 1) / 2
                 let nextStart = fixedCenter - (nextCount - 1) / 2
                 visibleCount = nextCount
-                visibleStart = min(max(0, nextStart), 100 - nextCount)
+                visibleStart = min(max(0, nextStart), total - nextCount)
             }.onEnded { _ in
                 zoomBaseCount = nil
                 zoomBaseStart = nil
@@ -128,12 +155,12 @@ struct InstrumentDetailView: View {
                 guard let base = dragBaseStart else { return }
                 let plotWidth = max(UIScreen.main.bounds.width - 48, 1)
                 let shift = Double(value.translation.width / plotWidth) * visibleCount
-                visibleStart = min(max(0, base - shift), 100 - visibleCount)
+                visibleStart = min(max(0, base - shift), Double(candles.count) - visibleCount)
             }.onEnded { _ in dragBaseStart = nil })
             .onTapGesture(count:2) {
                 withAnimation(.easeOut(duration:0.2)) {
-                    visibleStart = 0
-                    visibleCount = 100
+                    visibleCount = Double(min(100, candles.count))
+                    visibleStart = Double(max(0, candles.count - Int(visibleCount)))
                     selectedCandleIndex = nil
                 }
             }
@@ -143,7 +170,7 @@ struct InstrumentDetailView: View {
     private func selectedCandleInfo(_ candle:DemoCandle,index:Int)->some View {
         let change = candle.close - candle.open
         let percent = candle.open == 0 ? 0 : change / candle.open * 100
-        let date = Calendar.current.date(byAdding:.minute,value:(index - 99) * 15,to:Date()) ?? Date()
+        let date = Date(timeIntervalSince1970: TimeInterval(candle.time))
         return VStack(alignment:.leading,spacing:4) {
             HStack {
                 Text("选中 K线").foregroundStyle(.white)
@@ -193,12 +220,12 @@ struct InstrumentDetailView: View {
     private var quotePanel: some View {
         HStack(spacing:8) {
             VStack(alignment:.leading,spacing:8) {
-                quoteRow("卖盘",price:instrument.lastPrice+1,size:"52")
-                quoteRow("买盘",price:instrument.lastPrice,size:"63")
+                quoteRow("卖盘",price:latestPrice+1,size:"52")
+                quoteRow("买盘",price:latestPrice,size:"63")
                 HStack { Text("持仓量"); Spacer(); Text("391338"); Text("-24978").foregroundStyle(.green) }.font(.system(size:13,design:.rounded))
             }.padding(9).background(.white.opacity(0.06),in:RoundedRectangle(cornerRadius:10))
             VStack(alignment:.leading,spacing:4) {
-                Text(instrument.lastPrice.formatted()).font(.system(size:29,weight:.medium,design:.rounded)).foregroundStyle(instrument.isRising ? .red : .green).minimumScaleFactor(0.7).lineLimit(1)
+                Text(latestPrice.formatted()).font(.system(size:29,weight:.medium,design:.rounded)).foregroundStyle(instrument.isRising ? .red : .green).minimumScaleFactor(0.7).lineLimit(1)
                 Text(String(format:"%.2f / %.2f%%",instrument.change,instrument.changePercent)).font(.system(size:13,design:.rounded)).foregroundStyle(instrument.isRising ? .red : .green)
                 Text("成交量 387415").font(.caption).foregroundStyle(.white.opacity(0.65))
             }.frame(maxWidth:.infinity,alignment:.leading)
@@ -208,35 +235,29 @@ struct InstrumentDetailView: View {
 }
 
 private struct DemoCandle {
-    let open,high,low,close,ema20,ema50,dif,dea,hist: Double
-    static func make(base:Double,count:Int)->[DemoCandle] {
-        guard count > 1 else { return [] }
-        var closes:[Double] = []
-        var price = base * 0.972
-        for i in 0..<count {
-            let x = Double(i)
-            let cycle = sin(x * 0.105) * 0.010 + sin(x * 0.31) * 0.004
-            let wave = cos(x * 0.047) * 0.006
-            let shock = (sin(x * 12.9898) * 0.5 + sin(x * 4.1414) * 0.5) * 0.0028
-            let drift = i < 34 ? 0.00055 : (i < 66 ? -0.00042 : 0.00048)
-            price *= 1 + drift + (cycle - (i > 34 && i < 66 ? 0.004 : 0)) * 0.12 + wave * 0.06 + shock
-            closes.append(price)
-        }
-        func ema(_ values:[Double],_ period:Int)->[Double] {
-            let k = 2.0 / (Double(period) + 1)
+    let time: Int64
+    let open, high, low, close, ema20, ema50, dif, dea, hist: Double
+
+    static func from(_ bars: [MarketBar]) -> [DemoCandle] {
+        guard !bars.isEmpty else { return [] }
+        let closes = bars.map(\.close)
+        func ema(_ values: [Double], _ period: Int) -> [Double] {
+            let factor = 2.0 / (Double(period) + 1)
             var result = [values[0]]
-            for value in values.dropFirst() { result.append(value * k + result[result.count - 1] * (1 - k)) }
+            for value in values.dropFirst() {
+                result.append(value * factor + result[result.count - 1] * (1 - factor))
+            }
             return result
         }
-        let e12 = ema(closes,12), e26 = ema(closes,26)
-        let difValues = zip(e12,e26).map { $0 - $1 }
-        let deaValues = ema(difValues,9), e20 = ema(closes,20), e50 = ema(closes,50)
-        return (0..<count).map { i in
-            let previous = i == 0 ? closes[i] * 0.998 : closes[i-1]
-            let open = previous + sin(Double(i) * 5.31) * base * 0.0018
-            let close = closes[i]
-            let wick = base * (0.0018 + abs(sin(Double(i) * 2.17)) * 0.0022)
-            return DemoCandle(open:open,high:max(open,close) + wick,low:min(open,close) - wick,close:close,ema20:e20[i],ema50:e50[i],dif:difValues[i],dea:deaValues[i],hist:2 * (difValues[i] - deaValues[i]))
+        let ema12 = ema(closes, 12), ema26 = ema(closes, 26)
+        let dif = zip(ema12, ema26).map { $0 - $1 }
+        let dea = ema(dif, 9), ema20 = ema(closes, 20), ema50 = ema(closes, 50)
+        return bars.indices.map { i in
+            let bar = bars[i]
+            return DemoCandle(time: bar.time, open: bar.open, high: bar.high,
+                              low: bar.low, close: bar.close, ema20: ema20[i],
+                              ema50: ema50[i], dif: dif[i], dea: dea[i],
+                              hist: 2 * (dif[i] - dea[i]))
         }
     }
 }
