@@ -2,6 +2,7 @@ import SwiftUI
 import Charts
 
 struct InstrumentDetailView: View {
+    @Environment(\.mainContracts) private var contracts
     let instrument: FuturesInstrument
     @Environment(\.dismiss) private var dismiss
     @State private var period = "15分"
@@ -140,10 +141,10 @@ struct InstrumentDetailView: View {
                     .font(.system(size: 16, weight: .medium))
                     .frame(width: 25, height: 36)
             }
-            Text(instrument.name)
+            Text(instrument.name + (contracts[instrument.id]?.month ?? ""))
                 .font(.system(size: 14, weight: .semibold))
                 .lineLimit(1)
-            Text(instrument.id)
+            Text(contracts[instrument.id]?.code ?? instrument.id)
                 .font(.system(size: 10))
                 .foregroundStyle(.gray)
                 .lineLimit(1)

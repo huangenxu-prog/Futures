@@ -53,7 +53,7 @@ enum MarketDataService {
 
     // Configure via QIHUI_API_BASE_URL in Info.plist at build time.
     // Must be an authenticated HTTPS gateway reachable from the device.
-    static func fetch(symbol: String, period: Int, count: Int = 100) async throws -> [MarketBar] {
+    private static func baseURL() throws -> URL {
         // Temporary device-test endpoint. Quick Tunnel URLs change when restarted.
         // The Info.plist setting takes precedence when available.
         let configured = Bundle.main.object(forInfoDictionaryKey: "QIHUI_API_BASE_URL") as? String
@@ -64,7 +64,23 @@ enum MarketDataService {
               let host = base.host, !host.isEmpty else {
             throw MarketDataError.notConfigured
         }
-        let url = base.appendingPathComponent("v1/klines")
+        return base
+    }
+
+    struct MainContract: Decodable {
+        let code: String
+        let month: String
+    }
+
+    static func mainContracts() async throws -> [String: MainContract] {
+        let url = try baseURL().appendingPathComponent("v1/main-contracts")
+        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 25))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw MarketDataError.invalidResponse }
+        return try JSONDecoder().decode([String: MainContract].self, from: data)
+    }
+
+    static func fetch(symbol: String, period: Int, count: Int = 100) async throws -> [MarketBar] {
+        let url = try baseURL().appendingPathComponent("v1/klines")
         guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             throw MarketDataError.invalidResponse
         }

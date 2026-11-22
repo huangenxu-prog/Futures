@@ -1,6 +1,19 @@
 import SwiftUI
 
+private struct MainContractsKey: EnvironmentKey {
+    static let defaultValue: [String: MarketDataService.MainContract] = [:]
+}
+
+extension EnvironmentValues {
+    var mainContracts: [String: MarketDataService.MainContract] {
+        get { self[MainContractsKey.self] }
+        set { self[MainContractsKey.self] = newValue }
+    }
+}
+
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var contracts: [String: MarketDataService.MainContract] = [:]
     @State private var selectedTab = 0
     @State private var detailVisible = false
     var body: some View {
@@ -17,6 +30,16 @@ struct ContentView: View {
             if !detailVisible { GlassTabBar(selection: $selectedTab) }
         }
         .preferredColorScheme(.dark)
+        .environment(\.mainContracts, contracts)
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                let current = try? await MarketDataService.mainContracts()
+                guard !Task.isCancelled else { return }
+                contracts = current ?? [:]
+                do { try await Task.sleep(for: .seconds(300)) } catch { return }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .qihuiDetailVisibility)) { event in
             detailVisible = (event.object as? Bool) ?? false
         }

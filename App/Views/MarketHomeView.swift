@@ -6,6 +6,7 @@ private struct QuoteColumn {
 }
 
 struct MarketHomeView: View {
+    @Environment(\.mainContracts) private var contracts
     private let instruments = FuturesInstrument.samples
     private let yellow = Color(red: 1, green: 0.82, blue: 0.02)
     private let pinnedWidth: CGFloat = 106
@@ -111,7 +112,7 @@ struct MarketHomeView: View {
 
     private func instrumentName(_ item: FuturesInstrument) -> some View {
         HStack(spacing: 5) {
-            Text(item.name)
+            Text(item.name + (contracts[item.id]?.month ?? ""))
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(yellow)
                 .lineLimit(1)

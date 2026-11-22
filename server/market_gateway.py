@@ -21,6 +21,37 @@ SYMBOLS = {
 LOCK = threading.Lock()
 
 
+contract_cache = {}
+contract_cache_until = 0.0
+
+
+def main_contracts():
+    global contract_cache, contract_cache_until
+    if time.monotonic() < contract_cache_until:
+        return contract_cache
+    with open(AUTH_PATH, encoding="utf-8") as handle:
+        credentials = json.load(handle)
+    api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+    try:
+        products = sorted(SYMBOLS)
+        continuous = api.get_quote_list(["KQ.m@" + product for product in products])
+        pairs = [(product, q.underlying_symbol) for product, q in zip(products, continuous)
+                 if q.underlying_symbol and q.underlying_symbol.startswith(product)]
+        if not pairs:
+            raise ValueError("missing contract identifiers")
+        quotes = api.get_quote_list([code for _, code in pairs])
+        result = {}
+        for (product, code), quote in zip(pairs, quotes):
+            year, month = quote.delivery_year, quote.delivery_month
+            if 2000 <= year <= 2099 and 1 <= month <= 12:
+                result[product] = {"code": code, "month": f"{int(year) % 100:02d}{int(month):02d}"}
+        contract_cache = result
+        contract_cache_until = time.monotonic() + (300 if len(result) == len(products) else 30)
+        return result
+    finally:
+        api.close()
+
+
 def load_bars(symbol, period, count):
     with open(AUTH_PATH, encoding="utf-8") as handle:
         credentials = json.load(handle)
@@ -66,6 +97,14 @@ class Handler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         if url.path == "/health":
             self.reply(200, {"ok": True})
+            return
+        if url.path == "/v1/main-contracts":
+            try:
+                with LOCK:
+                    contracts = main_contracts()
+                self.reply(200, contracts)
+            except Exception:
+                self.reply(503, {"error": "market_data_unavailable"})
             return
         if url.path != "/v1/klines":
             self.reply(404, {"error": "not_found"})

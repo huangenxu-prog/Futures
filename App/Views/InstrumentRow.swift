@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct InstrumentRow: View {
+    @Environment(\.mainContracts) private var contracts
     let instrument: FuturesInstrument
 
     private var movementColor: Color {
@@ -10,7 +11,7 @@ struct InstrumentRow: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(instrument.name)
+                Text(instrument.name + (contracts[instrument.id]?.month ?? ""))
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.primary)
                 Text("\(instrument.id) · \(instrument.exchange)")
