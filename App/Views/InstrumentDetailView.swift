@@ -13,6 +13,7 @@ struct InstrumentDetailView: View {
     @State private var showIndicators = true
     @State private var selectedCandleIndex: Int? = nil
     @State private var crosshairActive = false
+    @State private var pinchActive = false
     @State private var visibleStart = 0.0
     @State private var visibleCount = 100.0
     @State private var zoomBaseCount: Double? = nil
@@ -220,9 +221,11 @@ struct InstrumentDetailView: View {
                                 .onChanged { phase in
                                     switch phase {
                                     case .first(true):
+                                        guard !pinchActive else { return }
                                         crosshairActive = true
                                         dragBaseStart = nil
                                     case .second(true, let drag):
+                                        guard !pinchActive else { return }
                                         crosshairActive = true
                                         if let drag {
                                             let plot = geometry[proxy.plotFrame!]
@@ -244,6 +247,9 @@ struct InstrumentDetailView: View {
                 }
             }
             .simultaneousGesture(MagnificationGesture().onChanged { scale in
+                pinchActive = true
+                crosshairActive = false
+                selectedCandleIndex = nil
                 if zoomBaseCount == nil {
                     zoomBaseCount = visibleCount
                     zoomBaseStart = visibleStart
@@ -259,9 +265,12 @@ struct InstrumentDetailView: View {
             }.onEnded { _ in
                 zoomBaseCount = nil
                 zoomBaseStart = nil
+                crosshairActive = false
+                selectedCandleIndex = nil
+                pinchActive = false
             })
             .simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { value in
-                guard !crosshairActive, zoomBaseCount == nil else { return }
+                guard !crosshairActive, !pinchActive, zoomBaseCount == nil else { return }
                 if dragBaseStart == nil {
                     dragBaseStart = visibleStart
                     selectedCandleIndex = nil
