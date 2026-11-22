@@ -204,8 +204,31 @@ struct InstrumentDetailView: View {
             .clipped()
             Chart {
                 ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
-                    RuleMark(x:.value("序号",i),yStart:.value("低",c.low),yEnd:.value("高",c.high)).foregroundStyle(c.close >= c.open ? .red : .green).lineStyle(StrokeStyle(lineWidth:1))
-                    RectangleMark(x:.value("序号",i),yStart:.value("开",min(c.open,c.close)),yEnd:.value("收",max(c.open,c.close)),width:4).foregroundStyle(c.close >= c.open ? .red : Color(red:0.0,green:0.88,blue:0.92))
+                    let bottom = min(c.open, c.close)
+                    let top = max(c.open, c.close)
+                    let tint: Color = c.close == c.open ? .white : (c.close > c.open ? .red : .green)
+                    if c.low < bottom {
+                        RuleMark(x: .value("序号", i), yStart: .value("低", c.low), yEnd: .value("实体底", bottom))
+                            .foregroundStyle(tint)
+                            .lineStyle(StrokeStyle(lineWidth: 1))
+                    }
+                    if c.high > top {
+                        RuleMark(x: .value("序号", i), yStart: .value("实体顶", top), yEnd: .value("高", c.high))
+                            .foregroundStyle(tint)
+                            .lineStyle(StrokeStyle(lineWidth: 1))
+                    }
+                    if c.open == c.close {
+                        PointMark(x: .value("序号", i), y: .value("平盘", c.close))
+                            .symbol { Rectangle().fill(.white).frame(width: 4, height: 1) }
+                    } else {
+                        RectangleMark(x: .value("序号", i), yStart: .value("实体底", bottom),
+                                      yEnd: .value("实体顶", top), width: 4)
+                            .foregroundStyle(c.close > c.open ? Color.clear : Color.green)
+                            .overlay {
+                                Rectangle().stroke(tint, lineWidth: 0.8)
+                                    .allowsHitTesting(false)
+                            }
+                    }
 
                     if showIndicators {
                         LineMark(x:.value("序号",i),y:.value("EMA20",c.ema20),series:.value("均线","EMA20")).foregroundStyle(.orange).lineStyle(StrokeStyle(lineWidth:1.4))
