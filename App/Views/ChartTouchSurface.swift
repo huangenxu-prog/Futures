@@ -7,6 +7,7 @@ struct ChartTouchSurface: UIViewRepresentable {
     var onPan: (CGFloat, Bool) -> Void
     var onCrosshair: (CGFloat, Bool) -> Void
     var onPinch: (CGFloat, Bool) -> Void
+    var onTap: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -14,6 +15,12 @@ struct ChartTouchSurface: UIViewRepresentable {
         let view = UIView()
         view.backgroundColor = .clear
         view.isMultipleTouchEnabled = true
+
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap(_:)))
+        tap.numberOfTapsRequired = 1
+        tap.numberOfTouchesRequired = 1
+        tap.delegate = context.coordinator
+        view.addGestureRecognizer(tap)
 
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pan(_:)))
         pan.minimumNumberOfTouches = 1
@@ -47,6 +54,10 @@ struct ChartTouchSurface: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
             true
+        }
+
+        @objc func tap(_ gesture: UITapGestureRecognizer) {
+            if gesture.state == .ended && !holding && !pinching { parent.onTap() }
         }
 
         @objc func pan(_ gesture: UIPanGestureRecognizer) {
