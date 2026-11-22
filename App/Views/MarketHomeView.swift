@@ -5,24 +5,16 @@ private struct QuoteColumn {
     let width: CGFloat
 }
 
-private struct QuoteScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
 struct MarketHomeView: View {
-    @State private var instruments = FuturesInstrument.samples
-    @State private var quoteScrollOffset: CGFloat = 0
-
+    private let instruments = FuturesInstrument.samples
     private let yellow = Color(red: 1, green: 0.82, blue: 0.02)
     private let pinnedWidth: CGFloat = 132
     private let rowHeight: CGFloat = 49
+    private let headerHeight: CGFloat = 52
     private let columns: [QuoteColumn] = [
-        .init(title: "最新", width: 78),
-        .init(title: "涨幅%", width: 78),
-        .init(title: "日增仓", width: 78),
+        .init(title: "最新", width: 82),
+        .init(title: "涨幅%", width: 83),
+        .init(title: "日增仓", width: 94),
         .init(title: "涨跌额", width: 86),
         .init(title: "成交量", width: 92),
         .init(title: "持仓量", width: 92)
@@ -35,16 +27,12 @@ struct MarketHomeView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                headerBar
-                    .padding(.horizontal, 12)
-                    .padding(.top, 2)
-                    .padding(.bottom, 5)
-
-                // Only the quote values scroll sideways. All names stay pinned on the left.
-                // A single quote ScrollView contains every row, so all columns move in sync.
-                ScrollView(.vertical) {
+                // One vertical scroller owns all rows. Only the right-hand block
+                // scrolls horizontally, with its headings inside the same scroller.
+                ScrollView(.vertical, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 0) {
                         VStack(spacing: 0) {
+                            pinnedHeader
                             ForEach(instruments) { item in
                                 NavigationLink {
                                     InstrumentDetailView(instrument: item)
@@ -57,14 +45,11 @@ struct MarketHomeView: View {
                             }
                         }
                         .frame(width: pinnedWidth)
-                        .overlay(alignment: .trailing) {
-                            Rectangle()
-                                .fill(Color.white.opacity(0.12))
-                                .frame(width: 0.5)
-                        }
+                        .zIndex(1)
 
                         ScrollView(.horizontal, showsIndicators: false) {
                             VStack(spacing: 0) {
+                                quoteHeader
                                 ForEach(instruments) { item in
                                     NavigationLink {
                                         InstrumentDetailView(instrument: item)
@@ -76,78 +61,64 @@ struct MarketHomeView: View {
                                     .overlay(alignment: .bottom) { rowDivider }
                                 }
                             }
-                            .frame(width: quoteWidth)
-                            .background {
-                                GeometryReader { proxy in
-                                    Color.clear.preference(
-                                        key: QuoteScrollOffsetKey.self,
-                                        value: proxy.frame(in: .named("quoteHorizontalScroll")).minX
-                                    )
-                                }
-                            }
+                            .frame(width: quoteWidth, alignment: .leading)
                         }
-                        .coordinateSpace(name: "quoteHorizontalScroll")
-                        .onPreferenceChange(QuoteScrollOffsetKey.self) { quoteScrollOffset = $0 }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(alignment: .top) {
+                        Capsule()
+                            .fill(.ultraThinMaterial)
+                            .frame(height: headerHeight)
+                            .overlay(alignment: .top) {
+                                Capsule()
+                                    .stroke(
+                                        LinearGradient(colors: [.white, .cyan.opacity(0.5), .white.opacity(0.25)],
+                                                       startPoint: .topLeading, endPoint: .bottomTrailing),
+                                        lineWidth: 1
+                                    )
+                                    .frame(height: headerHeight)
+                            }
                     }
                     .padding(.horizontal, 12)
+                    .padding(.top, 2)
                 }
-                .scrollIndicators(.hidden)
-
-                Spacer(minLength: 0)
                 Text("演示行情 · 非实时数据")
                     .font(.caption2)
                     .foregroundStyle(.gray)
                     .padding(.bottom, 8)
             }
-            .background(Color.black)
+            .background(Color.black.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
     }
 
-    private var headerBar: some View {
-        HStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text("名称")
-                Spacer(minLength: 0)
-                Image(systemName: "square.grid.2x2.fill")
-                    .font(.system(size: 13))
-                    .frame(width: 25)
-            }
-            .padding(.leading, 12)
-            .padding(.trailing, 6)
-            .frame(width: pinnedWidth)
-
-            GeometryReader { _ in
-                HStack(spacing: 0) {
-                    ForEach(columns, id: \.title) { column in
-                        Text(column.title)
-                            .frame(width: column.width - 8, alignment: .trailing)
-                            .padding(.trailing, 8)
-                    }
-                }
-                .frame(width: quoteWidth, alignment: .leading)
-                .offset(x: quoteScrollOffset)
-            }
-            .clipped()
+    private var pinnedHeader: some View {
+        HStack(spacing: 7) {
+            Text("名称")
+            Spacer(minLength: 0)
+            Image(systemName: "square.grid.2x2.fill")
+                .font(.system(size: 13))
+                .frame(width: 25)
         }
         .font(.system(size: 14, weight: .semibold))
         .foregroundStyle(.white)
-        // The parent already adds 12pt outer padding. Keep quote columns
-        // aligned with the rows rather than insetting them a second time.
-        .frame(height: 50)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay {
-            Capsule().stroke(
-                LinearGradient(
-                    colors: [.white, .cyan.opacity(0.5), .white.opacity(0.25)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                lineWidth: 1
-            )
+        .padding(.leading, 12)
+        .padding(.trailing, 4)
+        .frame(width: pinnedWidth, height: headerHeight)
+    }
+
+    private var quoteHeader: some View {
+        HStack(spacing: 0) {
+            ForEach(columns, id: \.title) { column in
+                Text(column.title)
+                    .frame(width: column.width - 8, alignment: .trailing)
+                    .padding(.trailing, 8)
+            }
         }
-        .shadow(color: .cyan.opacity(0.2), radius: 8)
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(.white)
+        .frame(width: quoteWidth, height: headerHeight, alignment: .leading)
     }
 
     private func instrumentName(_ item: FuturesInstrument) -> some View {
@@ -157,7 +128,6 @@ struct MarketHomeView: View {
                 .foregroundStyle(yellow)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-
             Text("M")
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(.black)
@@ -174,6 +144,8 @@ struct MarketHomeView: View {
             ForEach(columns, id: \.title) { column in
                 Text(quoteValue(item, column.title))
                     .foregroundStyle(quoteColor(item, column.title))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                     .frame(width: column.width - 8, alignment: .trailing)
                     .padding(.trailing, 8)
             }
@@ -188,9 +160,8 @@ struct MarketHomeView: View {
         switch column {
         case "最新": return item.lastPrice.formatted()
         case "涨幅%": return String(format: "%.2f%%", item.changePercent)
-        case "日增仓": return String(Int(item.change * 37)) // Existing demo-only value.
+        case "日增仓": return "--"  // No open-interest source in demo model.
         case "涨跌额": return item.change.formatted()
-        // No corresponding fields exist in the current demo model. Never invent live figures.
         case "成交量", "持仓量": return "--"
         default: return "--"
         }
