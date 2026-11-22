@@ -127,7 +127,7 @@ struct InstrumentDetailView: View {
     }
     private func candleChart(height: CGFloat) -> some View {
         VStack(alignment:.leading,spacing:6) {
-            HStack(spacing: 7) {
+            HStack(spacing: 5) {
                 if let index = selectedCandleIndex, candles.indices.contains(index) {
                     selectedCandleInfo(candles[index], index: index)
                 } else {
@@ -139,8 +139,8 @@ struct InstrumentDetailView: View {
                     }
                 }
             }
-            .font(.system(size: 10))
-            .frame(height: 20)
+            .frame(height: 18)
+            .clipped()
             Chart {
                 ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
                     RuleMark(x:.value("序号",i),yStart:.value("低",c.low),yEnd:.value("高",c.high)).foregroundStyle(c.close >= c.open ? .red : .green).lineStyle(StrokeStyle(lineWidth:1))
@@ -216,22 +216,18 @@ struct InstrumentDetailView: View {
     }
 
     private func selectedCandleInfo(_ candle: DemoCandle, index: Int) -> some View {
-        let change = candle.close - candle.open
-        let percent = candle.open == 0 ? 0 : change / candle.open * 100
-        return HStack(spacing: 5) {
+        HStack(spacing: 5) {
             Text(timeLabel(index)).foregroundStyle(.gray)
             Text("开" + candle.open.formatted())
             Text("高" + candle.high.formatted())
             Text("低" + candle.low.formatted())
             Text("收" + candle.close.formatted())
-            Text(String(format: "%+.1f%%", percent))
-                .foregroundStyle(change >= 0 ? .red : .green)
         }
-        .font(.system(size: 9, design: .rounded))
+        .font(.system(size: 10, design: .rounded))
         .monospacedDigit()
         .foregroundStyle(.white.opacity(0.85))
         .lineLimit(1)
-        .minimumScaleFactor(0.65)
+        .minimumScaleFactor(0.7)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
