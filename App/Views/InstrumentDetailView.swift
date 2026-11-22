@@ -254,37 +254,63 @@ struct InstrumentDetailView: View {
         }.padding(.horizontal, 4).padding(.top, 3)
     }
     private var quotePanel: some View {
-        VStack(spacing: 5) {
-            Button { withAnimation(.easeInOut(duration: 0.2)) { showQuote.toggle() } } label: {
-                HStack {
-                    Text("行情数据").font(.system(size: 11)).foregroundStyle(.gray)
-                    Spacer()
-                    Text("最新K线收盘 " + latestPrice.formatted())
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.8))
-                    Image(systemName: showQuote ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10)).foregroundStyle(.gray)
-                }
-                .frame(height: 28)
-                .contentShape(Rectangle())
-            }.buttonStyle(.plain)
-            if showQuote, let last = candles.last {
-                HStack {
-                    Text("开 " + last.open.formatted())
-                    Text("高 " + last.high.formatted())
-                    Text("低 " + last.low.formatted())
-                    Text("收 " + last.close.formatted())
+        VStack(spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) { showQuote.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Text("行情详情")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.gray)
                     Spacer(minLength: 0)
-                    Text("量 " + String(last.volume))
+                    Text("K线收盘 " + latestPrice.formatted())
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.75))
+                    Image(systemName: showQuote ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.gray)
                 }
-                .font(.system(size: 10, design: .rounded))
-                .foregroundStyle(.gray)
-                .lineLimit(1).minimumScaleFactor(0.75)
-                .padding(.bottom, 5)
+                .frame(height: 30)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if showQuote {
+                Divider().overlay(.white.opacity(0.1))
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        detailValue("卖一", "--")
+                        detailValue("卖量", "--")
+                        detailValue("买一", "--")
+                        detailValue("买量", "--")
+                    }
+                    Spacer(minLength: 8)
+                    VStack(alignment: .leading, spacing: 7) {
+                        detailValue("最新价", "--")
+                        detailValue("涨跌幅", "--")
+                        detailValue("成交量", "--")
+                        detailValue("持仓量", "--")
+                        detailValue("增减仓", "--")
+                    }
+                }
+                .padding(.vertical, 10)
+                Text("实时盘口尚未接入 · 上方价格为最新K线收盘价")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.gray.opacity(0.8))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 8)
             }
         }
         .padding(.horizontal, 9)
         .background(Color.white.opacity(0.035))
+    }
+
+    private func detailValue(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 10) {
+            Text(label).foregroundStyle(.gray).frame(width: 43, alignment: .leading)
+            Text(value).foregroundStyle(.white.opacity(0.8)).monospacedDigit()
+        }
+        .font(.system(size: 12, design: .rounded))
     }
 
 }
