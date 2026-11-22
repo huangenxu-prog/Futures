@@ -204,32 +204,8 @@ struct InstrumentDetailView: View {
             .clipped()
             Chart {
                 ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
-                    let bottom = min(c.open, c.close)
-                    let top = max(c.open, c.close)
-                    let tint: Color = c.close == c.open ? .white : (c.close > c.open ? .red : .green)
-                    if c.low < bottom {
-                        RuleMark(x: .value("序号", i), yStart: .value("低", c.low), yEnd: .value("实体底", bottom))
-                            .foregroundStyle(tint)
-                            .lineStyle(StrokeStyle(lineWidth: 1))
-                    }
-                    if c.high > top {
-                        RuleMark(x: .value("序号", i), yStart: .value("实体顶", top), yEnd: .value("高", c.high))
-                            .foregroundStyle(tint)
-                            .lineStyle(StrokeStyle(lineWidth: 1))
-                    }
-                    if c.open == c.close {
-                        PointMark(x: .value("序号", i), y: .value("平盘", c.close))
-                            .symbol { Rectangle().fill(.white).frame(width: 4, height: 1) }
-                    } else {
-                        RectangleMark(x: .value("序号", i), yStart: .value("实体底", bottom),
-                                      yEnd: .value("实体顶", top), width: 4)
-                            .foregroundStyle(c.close > c.open ? Color.clear : Color.green)
-                            .overlay {
-                                Rectangle().stroke(tint, lineWidth: 0.8)
-                                    .allowsHitTesting(false)
-                            }
-                    }
-
+                    RuleMark(x: .value("序号", i), yStart: .value("低", c.low), yEnd: .value("高", c.high))
+                        .foregroundStyle(Color.clear)
                     if showIndicators {
                         LineMark(x:.value("序号",i),y:.value("EMA20",c.ema20),series:.value("均线","EMA20")).foregroundStyle(.orange).lineStyle(StrokeStyle(lineWidth:1.4))
                         LineMark(x:.value("序号",i),y:.value("EMA50",c.ema50),series:.value("均线","EMA50")).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.4))
@@ -244,6 +220,7 @@ struct InstrumentDetailView: View {
                         .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
                 }
             }
+            .chartBackground { proxy in candleBackground(proxy) }
             .chartYScale(domain: priceDomain)
             .chartXScale(domain: visibleDomain)
             .chartXAxis {
@@ -337,6 +314,46 @@ struct InstrumentDetailView: View {
                 }
             }
         }.padding(.horizontal, 4).padding(.top, 2)
+    }
+
+    private func candleBackground(_ proxy: ChartProxy) -> some View {
+        GeometryReader { geometry in
+            if let anchor = proxy.plotFrame {
+                let plot = geometry[anchor]
+                Canvas { context, _ in
+                    for (index, bar) in candles.enumerated() {
+                        guard let x = proxy.position(forX: index),
+                              let high = proxy.position(forY: bar.high),
+                              let low = proxy.position(forY: bar.low),
+                              let open = proxy.position(forY: bar.open),
+                              let close = proxy.position(forY: bar.close) else { continue }
+                        let top = min(open, close), bottom = max(open, close)
+                        let tint: Color = bar.close == bar.open ? .white : (bar.close > bar.open ? .red : .green)
+                        var lines = Path()
+                        lines.move(to: CGPoint(x: x, y: high))
+                        lines.addLine(to: CGPoint(x: x, y: top))
+                        lines.move(to: CGPoint(x: x, y: bottom))
+                        lines.addLine(to: CGPoint(x: x, y: low))
+                        if bar.open == bar.close {
+                            lines.move(to: CGPoint(x: x - 2, y: open))
+                            lines.addLine(to: CGPoint(x: x + 2, y: open))
+                        } else {
+                            let body = Path(CGRect(x: x - 2, y: top, width: 4, height: max(0.8, bottom - top)))
+                            if bar.close > bar.open {
+                                context.stroke(body, with: .color(tint), lineWidth: 0.8)
+                            } else {
+                                context.fill(body, with: .color(tint))
+                            }
+                        }
+                        context.stroke(lines, with: .color(tint), lineWidth: 1)
+                    }
+                }
+                .frame(width: plot.width, height: plot.height)
+                .clipped()
+                .position(x: plot.midX, y: plot.midY)
+                .allowsHitTesting(false)
+            }
+        }
     }
 
     private func selectedCandleInfo(_ candle: DemoCandle, index: Int) -> some View {
