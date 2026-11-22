@@ -8,6 +8,7 @@ struct InstrumentDetailView: View {
     @State private var candles: [DemoCandle] = []
     @State private var loadError: String? = nil
     @State private var loading = false
+    @State private var showQuote = false
     @State private var showIndicators = true
     @State private var selectedCandleIndex: Int? = nil
     @State private var visibleStart = 0.0
@@ -31,22 +32,39 @@ struct InstrumentDetailView: View {
         return -limit...limit
     }
     var body: some View {
-        ScrollView {
-            VStack(spacing:10) {
+        GeometryReader { geometry in
+            VStack(spacing: 3) {
                 topBar
-                if loading { ProgressView("正在获取行情").padding(.vertical, 20) }
-                if let loadError { Text(loadError).font(.caption).foregroundStyle(.orange).padding(12) }
-                if !candles.isEmpty {
-                    candleChart
-                    macdPanel
+                if loading && candles.isEmpty {
+                    Spacer()
+                    ProgressView("正在获取行情")
+                    Spacer()
+                } else if let loadError, candles.isEmpty {
+                    Spacer()
+                    Text(loadError).font(.caption).foregroundStyle(.orange)
+                    Spacer()
+                } else if !candles.isEmpty {
+                    candleChart(height: max(240, geometry.size.height * 0.65))
+                    macdPanel(height: max(115, geometry.size.height * 0.24))
                     quotePanel
+                    Spacer(minLength: 0)
+                } else {
+                    Spacer()
                 }
-            }.padding(.horizontal,10).padding(.top,2)
+            }
+            .padding(.horizontal, 3)
+            .padding(.top, 2)
         }
-        .background(Color.black)
-        .toolbar(.hidden, for:.navigationBar)
+        .background(Color.black.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
         .preferredColorScheme(.dark)
         .task(id: period) { await loadCandles() }
+        .onAppear {
+            NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true)
+        }
+        .onDisappear {
+            NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false)
+        }
     }
     @MainActor private func loadCandles() async {
         loading = true
@@ -67,35 +85,45 @@ struct InstrumentDetailView: View {
         }
     }
     private var topBar: some View {
-        HStack(spacing:8) {
+        HStack(spacing: 7) {
             Button { dismiss() } label: {
-                Image(systemName:"chevron.left")
-                    .font(.system(size:18,weight:.medium))
-                    .foregroundStyle(.white)
-                    .frame(width:36,height:36)
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 30, height: 36)
             }
-            Text(instrument.name).font(.system(size:15,weight:.semibold))
-            Text(instrument.id).font(.caption).foregroundStyle(.gray)
-            Rectangle().fill(.white.opacity(0.3)).frame(width:1,height:20)
-            Text(Date.now.formatted(date:.numeric,time:.shortened))
-                .font(.caption).foregroundStyle(.white.opacity(0.8))
+            Text(instrument.name).font(.system(size: 15, weight: .semibold))
+            Text(instrument.id).font(.system(size: 11)).foregroundStyle(.gray)
                 .lineLimit(1).minimumScaleFactor(0.8)
-            Spacer(minLength:2)
-            Menu { ForEach(periods,id:\.self){ p in Button(p){period=p} } } label: {
-                Text(period+"⌄").font(.caption.weight(.semibold))
-                    .padding(.horizontal,10).padding(.vertical,8)
-                    .background(.white.opacity(0.12),in:Capsule())
+            Spacer(minLength: 2)
+            Text(latestPrice.formatted(.number.precision(.fractionLength(0...2))))
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(.red)
+                .monospacedDigit()
+            Menu {
+                ForEach(periods, id: \.self) { p in Button(p) { period = p } }
+            } label: {
+                Text(period + "⌄").font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 8).padding(.vertical, 7)
+                    .background(.white.opacity(0.10), in: Capsule())
             }
             Button { showIndicators.toggle() } label: {
-                Image(systemName:"eye").padding(8)
-                    .background(.white.opacity(0.12),in:Circle())
+                Image(systemName: showIndicators ? "eye" : "eye.slash")
+                    .font(.system(size: 15)).frame(width: 30, height: 36)
             }
         }
-        .padding(.horizontal,7).padding(.vertical,6)
-        .background(.ultraThinMaterial,in:Capsule())
-        .overlay(Capsule().stroke(.white.opacity(0.35),lineWidth:1))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 6)
+        .frame(height: 43)
     }
-    private var candleChart: some View {
+    private func timeLabel(_ index: Int) -> String {
+        guard candles.indices.contains(index) else { return "" }
+        let date = Date(timeIntervalSince1970: TimeInterval(candles[index].time))
+        let formatter = DateFormatter()
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.dateFormat = period == "日线" ? "MM/dd" : "MM/dd HH:mm"
+        return formatter.string(from: date)
+    }
+    private func candleChart(height: CGFloat) -> some View {
         VStack(alignment:.leading,spacing:6) {
             HStack { Text("K线").font(.caption).foregroundStyle(.gray); Spacer(); if showIndicators { Text("EMA20").foregroundStyle(.orange); Text("EMA50").foregroundStyle(.cyan) } }.font(.caption2)
             if let index = selectedCandleIndex, candles.indices.contains(index) {
@@ -119,9 +147,13 @@ struct InstrumentDetailView: View {
             .chartYScale(domain: priceDomain)
             .chartXScale(domain: visibleDomain)
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 5)) { _ in
-                    AxisValueLabel().foregroundStyle(.white.opacity(0.65))
-                    AxisGridLine().foregroundStyle(.red.opacity(0.16))
+                AxisMarks(values: .automatic(desiredCount: 3)) { value in
+                    AxisValueLabel {
+                        if let index = value.as(Int.self) {
+                            Text(timeLabel(index)).font(.system(size: 9)).foregroundStyle(.gray)
+                        }
+                    }
+                    AxisGridLine().foregroundStyle(.white.opacity(0.08))
                 }
             }
             .chartYAxis {
@@ -130,7 +162,7 @@ struct InstrumentDetailView: View {
                     AxisGridLine().foregroundStyle(.white.opacity(0.12))
                 }
             }
-            .frame(height:300)
+            .frame(height:height - 28)
             .chartXSelection(value:$selectedCandleIndex)
             .simultaneousGesture(MagnificationGesture().onChanged { scale in
                 if zoomBaseCount == nil {
@@ -164,7 +196,7 @@ struct InstrumentDetailView: View {
                     selectedCandleIndex = nil
                 }
             }
-        }.padding(10).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).stroke(.white.opacity(0.22),lineWidth:1))
+        }.padding(.horizontal, 4).padding(.top, 2)
     }
 
     private func selectedCandleInfo(_ candle:DemoCandle,index:Int)->some View {
@@ -204,7 +236,7 @@ struct InstrumentDetailView: View {
         }
     }
 
-    private var macdPanel: some View {
+    private func macdPanel(height: CGFloat) -> some View {
         VStack(alignment:.leading,spacing:5) {
             HStack { Text("MACD(12, 26, 9)").font(.caption.weight(.semibold)); Spacer(); Text("DIF"); Text("DEA") }.foregroundStyle(.white.opacity(0.75)).font(.caption2)
             Chart {
@@ -214,29 +246,49 @@ struct InstrumentDetailView: View {
                     LineMark(x:.value("序号",i),y:.value("DEA",c.dea),series:.value("MACD线","DEA")).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.2))
                 }
                 RuleMark(y:.value("零轴",0)).foregroundStyle(.white.opacity(0.3))
-            }.chartYScale(domain: macdDomain).chartXScale(domain: visibleDomain).chartXAxis(.hidden).chartYAxis(.hidden).frame(height:150)
-        }.padding(10).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).stroke(.white.opacity(0.2),lineWidth:1))
+            }.chartYScale(domain: macdDomain).chartXScale(domain: visibleDomain).chartXAxis(.hidden).chartYAxis(.hidden).frame(height:height - 24)
+        }.padding(.horizontal, 4).padding(.top, 3)
     }
     private var quotePanel: some View {
-        HStack(spacing:8) {
-            VStack(alignment:.leading,spacing:8) {
-                quoteRow("卖盘",price:latestPrice+1,size:"52")
-                quoteRow("买盘",price:latestPrice,size:"63")
-                HStack { Text("持仓量"); Spacer(); Text("391338"); Text("-24978").foregroundStyle(.green) }.font(.system(size:13,design:.rounded))
-            }.padding(9).background(.white.opacity(0.06),in:RoundedRectangle(cornerRadius:10))
-            VStack(alignment:.leading,spacing:4) {
-                Text(latestPrice.formatted()).font(.system(size:29,weight:.medium,design:.rounded)).foregroundStyle(instrument.isRising ? .red : .green).minimumScaleFactor(0.7).lineLimit(1)
-                Text(String(format:"%.2f / %.2f%%",instrument.change,instrument.changePercent)).font(.system(size:13,design:.rounded)).foregroundStyle(instrument.isRising ? .red : .green)
-                Text("成交量 387415").font(.caption).foregroundStyle(.white.opacity(0.65))
-            }.frame(maxWidth:.infinity,alignment:.leading)
-        }.padding(8).background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).stroke(.white.opacity(0.2),lineWidth:1))
+        VStack(spacing: 5) {
+            Button { withAnimation(.easeInOut(duration: 0.2)) { showQuote.toggle() } } label: {
+                HStack {
+                    Text("行情数据").font(.system(size: 11)).foregroundStyle(.gray)
+                    Spacer()
+                    Text("最新K线收盘 " + latestPrice.formatted())
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.8))
+                    Image(systemName: showQuote ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10)).foregroundStyle(.gray)
+                }
+                .frame(height: 28)
+                .contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            if showQuote, let last = candles.last {
+                HStack {
+                    Text("开 " + last.open.formatted())
+                    Text("高 " + last.high.formatted())
+                    Text("低 " + last.low.formatted())
+                    Text("收 " + last.close.formatted())
+                    Spacer(minLength: 0)
+                    Text("量 " + String(last.volume))
+                }
+                .font(.system(size: 10, design: .rounded))
+                .foregroundStyle(.gray)
+                .lineLimit(1).minimumScaleFactor(0.75)
+                .padding(.bottom, 5)
+            }
+        }
+        .padding(.horizontal, 9)
+        .background(Color.white.opacity(0.035))
     }
-    private func quoteRow(_ title:String,price:Double,size:String)->some View { HStack { Text(title); Spacer(); Text(price.formatted()).foregroundStyle(.red); Text(size) }.font(.system(size:13,design:.rounded)) }
+
 }
 
 private struct DemoCandle {
     let time: Int64
     let open, high, low, close, ema20, ema50, dif, dea, hist: Double
+    let volume: Int64
 
     static func from(_ bars: [MarketBar]) -> [DemoCandle] {
         guard !bars.isEmpty else { return [] }
@@ -257,7 +309,7 @@ private struct DemoCandle {
             return DemoCandle(time: bar.time, open: bar.open, high: bar.high,
                               low: bar.low, close: bar.close, ema20: ema20[i],
                               ema50: ema50[i], dif: dif[i], dea: dea[i],
-                              hist: 2 * (dif[i] - dea[i]))
+                              hist: 2 * (dif[i] - dea[i]), volume: bar.volume)
         }
     }
 }
