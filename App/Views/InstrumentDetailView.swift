@@ -11,6 +11,7 @@ struct InstrumentDetailView: View {
     @State private var showQuote = false
     @State private var showIndicators = true
     @State private var selectedCandleIndex: Int? = nil
+    @State private var selectedPrice: Double? = nil
     @State private var visibleStart = 0.0
     @State private var visibleCount = 100.0
     @State private var zoomBaseCount: Double? = nil
@@ -77,6 +78,7 @@ struct InstrumentDetailView: View {
             visibleCount = Double(min(100, candles.count))
             visibleStart = Double(max(0, candles.count - Int(visibleCount)))
             selectedCandleIndex = nil
+            selectedPrice = nil
         } catch is CancellationError {
             return
         } catch {
@@ -125,23 +127,37 @@ struct InstrumentDetailView: View {
     }
     private func candleChart(height: CGFloat) -> some View {
         VStack(alignment:.leading,spacing:6) {
-            HStack { Text("K线").font(.caption).foregroundStyle(.gray); Spacer(); if showIndicators { Text("EMA20").foregroundStyle(.orange); Text("EMA50").foregroundStyle(.cyan) } }.font(.caption2)
-            if let index = selectedCandleIndex, candles.indices.contains(index) {
-                selectedCandleInfo(candles[index], index:index)
+            HStack(spacing: 7) {
+                if let index = selectedCandleIndex, candles.indices.contains(index) {
+                    selectedCandleInfo(candles[index], index: index)
+                } else {
+                    Text("K线").foregroundStyle(.gray)
+                    Spacer(minLength: 2)
+                    if showIndicators {
+                        Text("EMA20").foregroundStyle(.orange)
+                        Text("EMA50").foregroundStyle(.cyan)
+                    }
+                }
             }
+            .font(.system(size: 10))
+            .frame(height: 20)
             Chart {
                 ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
                     RuleMark(x:.value("序号",i),yStart:.value("低",c.low),yEnd:.value("高",c.high)).foregroundStyle(c.close >= c.open ? .red : .green).lineStyle(StrokeStyle(lineWidth:1))
                     RectangleMark(x:.value("序号",i),yStart:.value("开",min(c.open,c.close)),yEnd:.value("收",max(c.open,c.close)),width:4).foregroundStyle(c.close >= c.open ? .red : Color(red:0.0,green:0.88,blue:0.92))
-                    if selectedCandleIndex == i {
-                        RuleMark(x:.value("选中K线",i))
-                            .foregroundStyle(.white.opacity(0.8))
-                            .lineStyle(StrokeStyle(lineWidth:1,dash:[4,3]))
-                    }
+
                     if showIndicators {
                         LineMark(x:.value("序号",i),y:.value("EMA20",c.ema20),series:.value("均线","EMA20")).foregroundStyle(.orange).lineStyle(StrokeStyle(lineWidth:1.4))
                         LineMark(x:.value("序号",i),y:.value("EMA50",c.ema50),series:.value("均线","EMA50")).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.4))
                     }
+                }
+                if let index = selectedCandleIndex, candles.indices.contains(index) {
+                    RuleMark(x: .value("十字时间", index))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
+                    RuleMark(y: .value("十字价格", candles[index].close))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
                 }
             }
             .chartYScale(domain: priceDomain)
@@ -199,41 +215,24 @@ struct InstrumentDetailView: View {
         }.padding(.horizontal, 4).padding(.top, 2)
     }
 
-    private func selectedCandleInfo(_ candle:DemoCandle,index:Int)->some View {
+    private func selectedCandleInfo(_ candle: DemoCandle, index: Int) -> some View {
         let change = candle.close - candle.open
         let percent = candle.open == 0 ? 0 : change / candle.open * 100
-        let date = Date(timeIntervalSince1970: TimeInterval(candle.time))
-        return VStack(alignment:.leading,spacing:4) {
-            HStack {
-                Text("选中 K线").foregroundStyle(.white)
-                Spacer()
-                Text(date.formatted(date:.numeric,time:.shortened)).foregroundStyle(.gray)
-            }
-            HStack(spacing:12) {
-                valueCell("开盘",candle.open)
-                valueCell("最高",candle.high)
-                valueCell("最低",candle.low)
-                valueCell("收盘",candle.close)
-                Spacer(minLength:0)
-                Text(String(format:"%+.2f%%",percent))
-                    .foregroundStyle(change >= 0 ? .red : .green)
-            }
+        return HStack(spacing: 5) {
+            Text(timeLabel(index)).foregroundStyle(.gray)
+            Text("开" + candle.open.formatted())
+            Text("高" + candle.high.formatted())
+            Text("低" + candle.low.formatted())
+            Text("收" + candle.close.formatted())
+            Text(String(format: "%+.1f%%", percent))
+                .foregroundStyle(change >= 0 ? .red : .green)
         }
-        .font(.system(size:10,design:.rounded))
-        .padding(7)
-        .frame(maxWidth:.infinity,alignment:.leading)
-        .background(Color.black.opacity(0.72),in:RoundedRectangle(cornerRadius:7))
-        .overlay(RoundedRectangle(cornerRadius:7).stroke(.white.opacity(0.18),lineWidth:0.7))
-    }
-
-    private func valueCell(_ title:String,_ value:Double)->some View {
-        VStack(alignment:.leading,spacing:2) {
-            Text(title).foregroundStyle(.gray)
-            Text(value.formatted(.number.precision(.fractionLength(0...2))))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
+        .font(.system(size: 9, design: .rounded))
+        .monospacedDigit()
+        .foregroundStyle(.white.opacity(0.85))
+        .lineLimit(1)
+        .minimumScaleFactor(0.65)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func macdPanel(height: CGFloat) -> some View {
@@ -246,6 +245,11 @@ struct InstrumentDetailView: View {
                     LineMark(x:.value("序号",i),y:.value("DEA",c.dea),series:.value("MACD线","DEA")).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.2))
                 }
                 RuleMark(y:.value("零轴",0)).foregroundStyle(.white.opacity(0.3))
+                if let index = selectedCandleIndex, candles.indices.contains(index) {
+                    RuleMark(x: .value("选中时间", index))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
+                }
             }.chartYScale(domain: macdDomain).chartXScale(domain: visibleDomain).chartXAxis(.hidden).chartYAxis(.hidden).frame(height:height - 24)
         }.padding(.horizontal, 4).padding(.top, 3)
     }
