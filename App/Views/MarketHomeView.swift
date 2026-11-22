@@ -57,6 +57,11 @@ struct MarketHomeView: View {
                             }
                         }
                         .frame(width: pinnedWidth)
+                        .overlay(alignment: .trailing) {
+                            Rectangle()
+                                .fill(Color.white.opacity(0.12))
+                                .frame(width: 0.5)
+                        }
 
                         ScrollView(.horizontal, showsIndicators: false) {
                             VStack(spacing: 0) {
@@ -109,6 +114,8 @@ struct MarketHomeView: View {
                     .font(.system(size: 13))
                     .frame(width: 25)
             }
+            .padding(.leading, 12)
+            .padding(.trailing, 6)
             .frame(width: pinnedWidth)
 
             GeometryReader { _ in
@@ -126,7 +133,8 @@ struct MarketHomeView: View {
         }
         .font(.system(size: 14, weight: .semibold))
         .foregroundStyle(.white)
-        .padding(.horizontal, 12)
+        // The parent already adds 12pt outer padding. Keep quote columns
+        // aligned with the rows rather than insetting them a second time.
         .frame(height: 50)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay {
