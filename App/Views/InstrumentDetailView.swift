@@ -8,6 +8,7 @@ struct InstrumentDetailView: View {
     @State private var candles: [DemoCandle] = []
     @State private var loadError: String? = nil
     @State private var loading = false
+    @State private var showingCachedData = false
     @State private var showQuote = false
     @State private var showIndicators = true
     @State private var selectedCandleIndex: Int? = nil
@@ -68,22 +69,46 @@ struct InstrumentDetailView: View {
         }
     }
     @MainActor private func loadCandles() async {
-        loading = true
-        loadError = nil
-        defer { loading = false }
-        do {
-            let bars = try await MarketDataService.fetch(symbol: instrument.id, period: periodSeconds)
-            try Task.checkCancellation()
-            candles = DemoCandle.from(bars)
+        let requestedPeriod = periodSeconds
+        let symbol = instrument.id
+        // Render persisted data immediately; update it quietly in the background.
+        if let cached = MarketDataService.cached(symbol: symbol, period: requestedPeriod) {
+            candles = DemoCandle.from(cached)
             visibleCount = Double(min(100, candles.count))
             visibleStart = Double(max(0, candles.count - Int(visibleCount)))
             selectedCandleIndex = nil
-            selectedPrice = nil
+            showingCachedData = true
+        } else {
+            candles = []
+            selectedCandleIndex = nil
+            showingCachedData = false
+        }
+        loadError = nil
+        loading = candles.isEmpty
+        defer { loading = false }
+        do {
+            let bars = try await MarketDataService.fetch(symbol: symbol, period: requestedPeriod)
+            try Task.checkCancellation()
+            guard requestedPeriod == periodSeconds else { return }
+            let wasEmpty = candles.isEmpty
+            let wasAtLatest = visibleStart + visibleCount >= Double(candles.count) - 1
+            candles = DemoCandle.from(bars)
+            showingCachedData = false
+            if wasEmpty {
+                visibleCount = Double(min(100, candles.count))
+                visibleStart = Double(max(0, candles.count - Int(visibleCount)))
+                selectedCandleIndex = nil
+            } else if wasAtLatest {
+                visibleStart = max(0, Double(candles.count) - visibleCount)
+            }
         } catch is CancellationError {
             return
         } catch {
-            candles = []
-            loadError = error.localizedDescription
+            if candles.isEmpty {
+                loadError = error.localizedDescription
+            } else {
+                showingCachedData = true
+            }
         }
     }
     private var topBar: some View {
@@ -97,6 +122,9 @@ struct InstrumentDetailView: View {
             Text(instrument.id).font(.system(size: 11)).foregroundStyle(.gray)
                 .lineLimit(1).minimumScaleFactor(0.8)
             Spacer(minLength: 2)
+            if showingCachedData {
+                Text("缓存").font(.system(size: 9)).foregroundStyle(.orange.opacity(0.8))
+            }
             Text(latestPrice.formatted(.number.precision(.fractionLength(0...2))))
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
                 .foregroundStyle(.red)
