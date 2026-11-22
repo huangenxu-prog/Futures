@@ -12,7 +12,7 @@ struct InstrumentDetailView: View {
     @State private var showQuote = false
     @State private var showIndicators = true
     @State private var selectedCandleIndex: Int? = nil
-    @State private var selectedPrice: Double? = nil
+    @State private var crosshairActive = false
     @State private var visibleStart = 0.0
     @State private var visibleCount = 100.0
     @State private var zoomBaseCount: Double? = nil
@@ -77,10 +77,12 @@ struct InstrumentDetailView: View {
             visibleCount = Double(min(100, candles.count))
             visibleStart = Double(max(0, candles.count - Int(visibleCount)))
             selectedCandleIndex = nil
+            crosshairActive = false
             showingCachedData = true
         } else {
             candles = []
             selectedCandleIndex = nil
+            crosshairActive = false
             showingCachedData = false
         }
         loadError = nil
@@ -207,7 +209,40 @@ struct InstrumentDetailView: View {
                 }
             }
             .frame(height:height - 28)
-            .chartXSelection(value:$selectedCandleIndex)
+            .chartOverlay { proxy in
+                GeometryReader { geometry in
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            LongPressGesture(minimumDuration: 0.35)
+                                .sequenced(before: DragGesture(minimumDistance: 0))
+                                .onChanged { phase in
+                                    switch phase {
+                                    case .first(true):
+                                        crosshairActive = true
+                                        dragBaseStart = nil
+                                    case .second(true, let drag):
+                                        crosshairActive = true
+                                        if let drag {
+                                            let plot = geometry[proxy.plotFrame!]
+                                            let x = drag.location.x - plot.minX
+                                            if let value: Double = proxy.value(atX: x) {
+                                                let index = Int(value.rounded())
+                                                if candles.indices.contains(index) {
+                                                    selectedCandleIndex = index
+                                                }
+                                            }
+                                        }
+                                    default: break
+                                    }
+                                }
+                                .onEnded { _ in
+                                    crosshairActive = false
+                                }
+                        )
+                }
+            }
             .simultaneousGesture(MagnificationGesture().onChanged { scale in
                 if zoomBaseCount == nil {
                     zoomBaseCount = visibleCount
@@ -225,13 +260,16 @@ struct InstrumentDetailView: View {
                 zoomBaseCount = nil
                 zoomBaseStart = nil
             })
-            .simultaneousGesture(DragGesture(minimumDistance: 18).onChanged { value in
-                guard zoomBaseCount == nil else { return }
-                if dragBaseStart == nil { dragBaseStart = visibleStart }
+            .simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { value in
+                guard !crosshairActive, zoomBaseCount == nil else { return }
+                if dragBaseStart == nil {
+                    dragBaseStart = visibleStart
+                    selectedCandleIndex = nil
+                }
                 guard let base = dragBaseStart else { return }
                 let plotWidth = max(UIScreen.main.bounds.width - 48, 1)
                 let shift = Double(value.translation.width / plotWidth) * visibleCount
-                visibleStart = min(max(0, base - shift), Double(candles.count) - visibleCount)
+                visibleStart = min(max(0, base - shift), max(0, Double(candles.count) - visibleCount))
             }.onEnded { _ in dragBaseStart = nil })
             .onTapGesture(count:2) {
                 withAnimation(.easeOut(duration:0.2)) {
