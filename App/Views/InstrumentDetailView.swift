@@ -1,6 +1,12 @@
 import SwiftUI
 import Charts
 
+private enum ChartInk {
+    static let up = Color(red: 1, green: 0, blue: 0)
+    static let down = Color(red: 0, green: 252.0 / 255, blue: 252.0 / 255)
+    static let slow = Color(red: 1, green: 1, blue: 0)
+}
+
 struct InstrumentDetailView: View {
     @Environment(\.mainContracts) private var contracts
     let instrument: FuturesInstrument
@@ -194,8 +200,8 @@ struct InstrumentDetailView: View {
                 if let index = selectedCandleIndex, candles.indices.contains(index) {
                     selectedCandleInfo(candles[index], index: index)
                 } else if showIndicators {
-                    Text("EMA20").foregroundStyle(.orange)
-                    Text("EMA50").foregroundStyle(.cyan)
+                    Text("EMA20").foregroundStyle(.white)
+                    Text("EMA50").foregroundStyle(ChartInk.slow)
                     Spacer(minLength: 0)
                 }
             }
@@ -207,8 +213,8 @@ struct InstrumentDetailView: View {
                     RuleMark(x: .value("序号", i), yStart: .value("低", c.low), yEnd: .value("高", c.high))
                         .foregroundStyle(Color.clear)
                     if showIndicators {
-                        LineMark(x:.value("序号",i),y:.value("EMA20",c.ema20),series:.value("均线","EMA20")).foregroundStyle(.orange).lineStyle(StrokeStyle(lineWidth:1.4))
-                        LineMark(x:.value("序号",i),y:.value("EMA50",c.ema50),series:.value("均线","EMA50")).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.4))
+                        LineMark(x:.value("序号",i),y:.value("EMA20",c.ema20),series:.value("均线","EMA20")).foregroundStyle(.white).lineStyle(StrokeStyle(lineWidth:1.4))
+                        LineMark(x:.value("序号",i),y:.value("EMA50",c.ema50),series:.value("均线","EMA50")).foregroundStyle(ChartInk.slow).lineStyle(StrokeStyle(lineWidth:1.4))
                     }
                 }
                 if let index = selectedCandleIndex, candles.indices.contains(index) {
@@ -320,7 +326,9 @@ struct InstrumentDetailView: View {
         GeometryReader { geometry in
             if let anchor = proxy.plotFrame {
                 let plot = geometry[anchor]
-                Canvas { context, _ in
+                Canvas { context, size in
+                    let spacing = size.width / CGFloat(max(1, visibleCount - 1))
+                    let bodyWidth = max(0.5, spacing * 0.66)
                     for (index, bar) in candles.enumerated() {
                         guard let x = proxy.position(forX: index),
                               let high = proxy.position(forY: bar.high),
@@ -328,17 +336,17 @@ struct InstrumentDetailView: View {
                               let open = proxy.position(forY: bar.open),
                               let close = proxy.position(forY: bar.close) else { continue }
                         let top = min(open, close), bottom = max(open, close)
-                        let tint: Color = bar.close == bar.open ? .white : (bar.close > bar.open ? .red : .green)
+                        let tint: Color = bar.close == bar.open ? .white : (bar.close > bar.open ? ChartInk.up : ChartInk.down)
                         var lines = Path()
                         lines.move(to: CGPoint(x: x, y: high))
                         lines.addLine(to: CGPoint(x: x, y: top))
                         lines.move(to: CGPoint(x: x, y: bottom))
                         lines.addLine(to: CGPoint(x: x, y: low))
                         if bar.open == bar.close {
-                            lines.move(to: CGPoint(x: x - 2, y: open))
-                            lines.addLine(to: CGPoint(x: x + 2, y: open))
+                            lines.move(to: CGPoint(x: x - bodyWidth / 2, y: open))
+                            lines.addLine(to: CGPoint(x: x + bodyWidth / 2, y: open))
                         } else {
-                            let body = Path(CGRect(x: x - 2, y: top, width: 4, height: max(0.8, bottom - top)))
+                            let body = Path(CGRect(x: x - bodyWidth / 2, y: top, width: bodyWidth, height: max(0.8, bottom - top)))
                             if bar.close > bar.open {
                                 context.stroke(body, with: .color(tint), lineWidth: 0.8)
                             } else {
@@ -374,20 +382,23 @@ struct InstrumentDetailView: View {
 
     private func macdPanel(height: CGFloat) -> some View {
         VStack(alignment:.leading,spacing:3) {
-            HStack { Text("MACD(12,26,9)").font(.system(size: 10, weight: .medium)); Spacer(); Text("DIF"); Text("DEA") }.foregroundStyle(.white.opacity(0.65)).font(.system(size: 10))
-            Chart {
-                ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
-                    BarMark(x:.value("序号",i),y:.value("MACD",c.hist),width:.fixed(4)).foregroundStyle(c.hist >= 0 ? .red : .green)
-                    LineMark(x:.value("序号",i),y:.value("DIF",c.dif),series:.value("MACD线","DIF")).foregroundStyle(.orange).lineStyle(StrokeStyle(lineWidth:1.2))
-                    LineMark(x:.value("序号",i),y:.value("DEA",c.dea),series:.value("MACD线","DEA")).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.2))
-                }
-                RuleMark(y:.value("零轴",0)).foregroundStyle(.white.opacity(0.10))
-                if let index = selectedCandleIndex, candles.indices.contains(index) {
-                    RuleMark(x: .value("选中时间", index))
-                        .foregroundStyle(.white.opacity(0.55))
-                        .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
-                }
-            }.chartYScale(domain: macdDomain).chartXScale(domain: visibleDomain).chartXAxis(.hidden).chartYAxis(.hidden).frame(height:height - 20)
+            HStack { Text("MACD(12,26,9)").foregroundStyle(ChartInk.slow).font(.system(size: 10, weight: .medium)); Spacer(); Text("DIF").foregroundStyle(.white); Text("DEA").foregroundStyle(ChartInk.slow) }.foregroundStyle(.white.opacity(0.65)).font(.system(size: 10))
+            GeometryReader { geometry in
+                let barWidth = max(0.5, geometry.size.width / CGFloat(max(1, visibleCount - 1)) * 0.26)
+                Chart {
+                    ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
+                        BarMark(x:.value("序号",i),y:.value("MACD",c.hist),width:.fixed(barWidth)).foregroundStyle(c.hist >= 0 ? ChartInk.up : ChartInk.down)
+                        LineMark(x:.value("序号",i),y:.value("DIF",c.dif),series:.value("MACD线","DIF")).foregroundStyle(.white).lineStyle(StrokeStyle(lineWidth:1.2))
+                        LineMark(x:.value("序号",i),y:.value("DEA",c.dea),series:.value("MACD线","DEA")).foregroundStyle(ChartInk.slow).lineStyle(StrokeStyle(lineWidth:1.2))
+                    }
+                    RuleMark(y:.value("零轴",0)).foregroundStyle(.white.opacity(0.10))
+                    if let index = selectedCandleIndex, candles.indices.contains(index) {
+                        RuleMark(x: .value("选中时间", index))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
+                    }
+                }.chartYScale(domain: macdDomain).chartXScale(domain: visibleDomain).chartXAxis(.hidden).chartYAxis(.hidden)
+            }.frame(height:height - 20)
         }.padding(.horizontal, 4).padding(.top, 2)
     }
     private var quoteStrip: some View {
