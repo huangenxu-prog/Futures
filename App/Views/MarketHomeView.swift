@@ -8,9 +8,9 @@ private struct QuoteColumn {
 struct MarketHomeView: View {
     private let instruments = FuturesInstrument.samples
     private let yellow = Color(red: 1, green: 0.82, blue: 0.02)
-    private let pinnedWidth: CGFloat = 132
-    private let rowHeight: CGFloat = 49
-    private let headerHeight: CGFloat = 52
+    private let pinnedWidth: CGFloat = 106
+    private let rowHeight: CGFloat = 34
+    private let headerHeight: CGFloat = 36
     private let columns: [QuoteColumn] = [
         .init(title: "最新", width: 82),
         .init(title: "涨幅%", width: 83),
@@ -65,20 +65,6 @@ struct MarketHomeView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(alignment: .top) {
-                        Capsule()
-                            .fill(.ultraThinMaterial)
-                            .frame(height: headerHeight)
-                            .overlay(alignment: .top) {
-                                Capsule()
-                                    .stroke(
-                                        LinearGradient(colors: [.white, .cyan.opacity(0.5), .white.opacity(0.25)],
-                                                       startPoint: .topLeading, endPoint: .bottomTrailing),
-                                        lineWidth: 1
-                                    )
-                                    .frame(height: headerHeight)
-                            }
-                    }
                     .padding(.horizontal, 12)
                     .padding(.top, 2)
                 }
@@ -103,9 +89,10 @@ struct MarketHomeView: View {
         }
         .font(.system(size: 14, weight: .semibold))
         .foregroundStyle(.white)
-        .padding(.leading, 12)
+        .padding(.leading, 0)
         .padding(.trailing, 4)
         .frame(width: pinnedWidth, height: headerHeight)
+        .overlay(alignment: .bottom) { rowDivider }
     }
 
     private var quoteHeader: some View {
@@ -119,6 +106,7 @@ struct MarketHomeView: View {
         .font(.system(size: 14, weight: .semibold))
         .foregroundStyle(.white)
         .frame(width: quoteWidth, height: headerHeight, alignment: .leading)
+        .overlay(alignment: .bottom) { rowDivider }
     }
 
     private func instrumentName(_ item: FuturesInstrument) -> some View {
@@ -178,7 +166,7 @@ struct MarketHomeView: View {
 
     private var rowDivider: some View {
         Rectangle()
-            .fill(.white.opacity(0.14))
+            .fill(.white.opacity(0.075))
             .frame(height: 0.5)
     }
 }

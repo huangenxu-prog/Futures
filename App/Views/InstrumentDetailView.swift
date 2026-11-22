@@ -19,21 +19,19 @@ struct InstrumentDetailView: View {
     @State private var zoomBaseStart: Double? = nil
     @State private var dragBaseStart: Double? = nil
     private let periods = ["1分","5分","15分","30分","60分","日线"]
-    private var latestPrice: Double { candles.last?.close ?? instrument.lastPrice }
-    // This is a change versus the preceding K-line close, NOT the exchange's
-    // daily settlement-based percentage. The API does not supply settlement yet.
-    private var barChangePercent: Double? {
-        guard candles.count >= 2 else { return nil }
-        let previous = candles[candles.count - 2].close
-        guard previous != 0 else { return nil }
-        return (candles[candles.count - 1].close / previous - 1) * 100
+    private var latestPrice: Double { candles.last?.close ?? 0 }
+    private var sessionChangePercent: Double? {
+        guard let bar = candles.last, let settlement = bar.preSettlement,
+              settlement.isFinite, settlement > 0 else { return nil }
+        let change = (bar.close / settlement - 1) * 100
+        return change.isFinite ? change : nil
     }
     private var changeColor: Color {
-        guard let change = barChangePercent else { return .white }
+        guard let change = sessionChangePercent else { return .white }
         return change > 0 ? .red : change < 0 ? .green : .white
     }
     private var changeText: String {
-        guard let change = barChangePercent else { return "--%" }
+        guard let change = sessionChangePercent else { return "--" }
         return String(format: "%+.2f%%", change)
     }
     private var periodSeconds: Int { ["1分":60,"5分":300,"15分":900,"30分":1800,"60分":3600,"日线":86400][period] ?? 900 }
@@ -51,11 +49,9 @@ struct InstrumentDetailView: View {
     }
     var body: some View {
         GeometryReader { geometry in
-            // Reserve a single compact quote row and a ~20% MACD panel.
-            // Let the K-line chart take all remaining available height.
-            let quoteHeight: CGFloat = 36
-            let macdHeight = max(105, geometry.size.height * 0.205)
-            let candleHeight = max(210, geometry.size.height - 43 - quoteHeight - macdHeight - 12)
+            let quoteHeight: CGFloat = 62
+            let macdHeight = min(128, geometry.size.height * 0.16)
+            let candleHeight = max(32, geometry.size.height - 43 - quoteHeight - macdHeight - 11)
             VStack(spacing: 3) {
                 topBar
                 if loading && candles.isEmpty {
@@ -153,7 +149,7 @@ struct InstrumentDetailView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Spacer(minLength: 1)
-            Text(latestPrice.formatted(.number.precision(.fractionLength(0...2))))
+            Text(candles.last?.close.formatted(.number.precision(.fractionLength(0...2))) ?? "--")
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
                 .foregroundStyle(changeColor)
                 .monospacedDigit()
@@ -233,13 +229,12 @@ struct InstrumentDetailView: View {
                             Text(timeLabel(index)).font(.system(size: 9)).foregroundStyle(.gray)
                         }
                     }
-                    AxisGridLine().foregroundStyle(.white.opacity(0.08))
                 }
             }
             .chartYAxis {
                 AxisMarks(position: .trailing) { _ in
                     AxisValueLabel().foregroundStyle(.white.opacity(0.7))
-                    AxisGridLine().foregroundStyle(.white.opacity(0.12))
+                    AxisGridLine().foregroundStyle(.white.opacity(0.075))
                 }
             }
             .frame(height:height - 28)
@@ -270,7 +265,8 @@ struct InstrumentDetailView: View {
                             guard !pinchActive else { return }
                             crosshairActive = true
                             dragBaseStart = nil
-                            let plot = geometry[proxy.plotFrame!]
+                            guard let plotFrame = proxy.plotFrame else { return }
+                            let plot = geometry[plotFrame]
                             if let value: Double = proxy.value(atX: locationX - plot.minX) {
                                 let index = Int(value.rounded())
                                 if candles.indices.contains(index) {
@@ -344,7 +340,7 @@ struct InstrumentDetailView: View {
                     LineMark(x:.value("序号",i),y:.value("DIF",c.dif),series:.value("MACD线","DIF")).foregroundStyle(.orange).lineStyle(StrokeStyle(lineWidth:1.2))
                     LineMark(x:.value("序号",i),y:.value("DEA",c.dea),series:.value("MACD线","DEA")).foregroundStyle(.cyan).lineStyle(StrokeStyle(lineWidth:1.2))
                 }
-                RuleMark(y:.value("零轴",0)).foregroundStyle(.white.opacity(0.3))
+                RuleMark(y:.value("零轴",0)).foregroundStyle(.white.opacity(0.10))
                 if let index = selectedCandleIndex, candles.indices.contains(index) {
                     RuleMark(x: .value("选中时间", index))
                         .foregroundStyle(.white.opacity(0.55))
@@ -353,39 +349,34 @@ struct InstrumentDetailView: View {
             }.chartYScale(domain: macdDomain).chartXScale(domain: visibleDomain).chartXAxis(.hidden).chartYAxis(.hidden).frame(height:height - 20)
         }.padding(.horizontal, 4).padding(.top, 2)
     }
-    // Compact bottom line: only genuine quote fields are shown. The current
-    // K-line-only API has no bid/ask, open interest or session volume data.
     private var quoteStrip: some View {
-        HStack(spacing: 0) {
-            smallQuote("卖1", "--", .white)
-            quoteSeparator
-            smallQuote("买1", "--", .white)
-            quoteSeparator
-            smallQuote("持", "--", .white)
-            quoteSeparator
-            smallQuote("成", "--", .white)
-            quoteSeparator
-            smallQuote("增", "--", .white)
-            quoteSeparator
-            smallQuote("幅", changeText, changeColor)
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                smallQuote("卖1", "--", .white)
+                smallQuote("买1", "--", .white)
+                smallQuote("持仓", "--", .white)
+            }
+            .frame(height: 31)
+            .overlay(alignment: .top) { quoteSeparator }
+            HStack(spacing: 12) {
+                smallQuote("成交", "--", .white)
+                smallQuote("增仓", "--", .white)
+                smallQuote("幅度", changeText, changeColor)
+            }
+            .frame(height: 31)
+            .overlay(alignment: .top) { quoteSeparator }
         }
-        .frame(height: 36)
-        .padding(.horizontal, 3)
-        .overlay(alignment: .top) {
-            Rectangle().fill(.white.opacity(0.16)).frame(height: 0.5)
-        }
-        .accessibilityLabel("卖一、买一、持仓、成交、增仓数据尚未接入。幅度为最近两根K线收盘价变化。")
+        .padding(.horizontal, 6)
     }
 
     private var quoteSeparator: some View {
-        Rectangle()
-            .fill(.white.opacity(0.20))
-            .frame(width: 0.5, height: 13)
+        Rectangle().fill(.white.opacity(0.075)).frame(height: 0.5)
     }
 
     private func smallQuote(_ label: String, _ value: String, _ tint: Color) -> some View {
         HStack(spacing: 2) {
             Text(label).foregroundStyle(.gray)
+            Spacer(minLength: 1)
             Text(value).foregroundStyle(tint)
         }
         .font(.system(size: 10, weight: .medium, design: .rounded))
@@ -400,6 +391,7 @@ struct InstrumentDetailView: View {
 private struct DemoCandle {
     let time: Int64
     let open, high, low, close, ema20, ema50, dif, dea, hist: Double
+    let preSettlement: Double?
     let volume: Int64
 
     static func from(_ bars: [MarketBar]) -> [DemoCandle] {
@@ -421,7 +413,7 @@ private struct DemoCandle {
             return DemoCandle(time: bar.time, open: bar.open, high: bar.high,
                               low: bar.low, close: bar.close, ema20: ema20[i],
                               ema50: ema50[i], dif: dif[i], dea: dea[i],
-                              hist: 2 * (dif[i] - dea[i]), volume: bar.volume)
+                              hist: 2 * (dif[i] - dea[i]), preSettlement: bar.preSettlement, volume: bar.volume)
         }
     }
 }

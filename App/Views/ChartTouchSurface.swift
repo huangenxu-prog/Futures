@@ -31,9 +31,11 @@ struct ChartTouchSurface: UIViewRepresentable {
         let hold = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.hold(_:)))
         hold.minimumPressDuration = 0.35
         hold.numberOfTouchesRequired = 1
-        hold.allowableMovement = 12
+        hold.allowableMovement = 7
         hold.delegate = context.coordinator
         view.addGestureRecognizer(hold)
+        tap.require(toFail: hold)
+        pan.require(toFail: hold)
 
         let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pinch(_:)))
         pinch.delegate = context.coordinator
