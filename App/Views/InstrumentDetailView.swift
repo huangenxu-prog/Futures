@@ -18,6 +18,7 @@ struct InstrumentDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var period = "15分"
     @State private var candles: [DemoCandle] = []
+    @State private var rawBars: [MarketBar] = []
     @State private var loadError: String? = nil
     @State private var loading = false
     @State private var showingCachedData = false
@@ -98,9 +99,22 @@ struct InstrumentDetailView: View {
         .task(id: chartKey + (scenePhase == .active ? "/active" : "/paused")) {
             guard scenePhase == .active else { return }
             await loadCandles(reset: displayedKey != chartKey)
+            let symbol = chartSymbol
+            let seconds = periodSeconds
+            // Live K-line subscription updates only the most recent bar on each tick.
+            // If the tunnel or legacy gateway cannot stream, preserve 30s HTTP fallback.
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(30)) } catch { return }
-                await loadCandles(reset: false)
+                do {
+                    try await MarketDataService.streamCandles(symbol: symbol, period: seconds) { event in
+                        guard chartSymbol == symbol, periodSeconds == seconds else { return }
+                        applyLiveCandle(event)
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    await loadCandles(reset: false)
+                    do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                }
             }
         }
         .sheet(isPresented: $showTrade) { ProfileView() }
@@ -119,6 +133,7 @@ struct InstrumentDetailView: View {
         // Render persisted data immediately; update it quietly in the background.
         if reset {
             if let cached = MarketDataService.cached(symbol: symbol, period: requestedPeriod) {
+                rawBars = cached
                 candles = DemoCandle.from(cached)
                 visibleCount = Double(min(100, candles.count))
                 visibleStart = Double(max(0, candles.count - Int(visibleCount)))
@@ -127,6 +142,7 @@ struct InstrumentDetailView: View {
                 showingCachedData = true
             } else {
                 candles = []
+                rawBars = []
                 selectedCandleIndex = nil
                 crosshairActive = false
                 showingCachedData = false
@@ -144,6 +160,7 @@ struct InstrumentDetailView: View {
             let oldCount = candles.count
             let anchor = candles.indices.contains(Int(visibleStart)) ? candles[Int(visibleStart)].time : nil
             let fraction = visibleStart - floor(visibleStart)
+            rawBars = bars
             candles = DemoCandle.from(bars)
             showingCachedData = false
             if wasEmpty {
@@ -166,6 +183,49 @@ struct InstrumentDetailView: View {
             }
         }
     }
+    @MainActor
+    private func applyLiveCandle(_ event: MarketDataService.CandlePush) {
+        guard event.symbol == chartSymbol, displayedKey == chartKey else { return }
+        let updated: [MarketBar]
+        if let full = event.bars, !full.isEmpty {
+            updated = full
+        } else if let bar = event.bar, !rawBars.isEmpty {
+            var next = rawBars
+            if let index = next.lastIndex(where: { $0.time == bar.time }) {
+                next[index] = bar
+            } else if let last = next.last, bar.time > last.time {
+                next.append(bar)
+                if next.count > 500 { next.removeFirst(next.count - 500) }
+            } else {
+                return
+            }
+            updated = next
+        } else {
+            return
+        }
+
+        let wasEmpty = candles.isEmpty
+        let wasAtLatest = visibleStart + visibleCount >= Double(candles.count) - 1
+        let oldCount = candles.count
+        let anchor = candles.indices.contains(Int(visibleStart)) ? candles[Int(visibleStart)].time : nil
+        let fraction = visibleStart - floor(visibleStart)
+        rawBars = updated
+        candles = DemoCandle.from(updated)
+        showingCachedData = false
+        loadError = nil
+        loading = false
+        if wasEmpty {
+            visibleCount = Double(min(100, candles.count))
+            visibleStart = Double(max(0, candles.count - Int(visibleCount)))
+            selectedCandleIndex = nil
+        } else if wasAtLatest {
+            visibleStart = min(maxStart(visibleCount),
+                               max(0, visibleStart + Double(candles.count - oldCount)))
+        } else if let anchor, let index = candles.firstIndex(where: { $0.time >= anchor }) {
+            visibleStart = min(maxStart(visibleCount), Double(index) + fraction)
+        }
+    }
+
     private var topBar: some View {
         HStack(spacing: 5) {
             Button { dismiss() } label: {
