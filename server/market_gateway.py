@@ -371,6 +371,29 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.reply(503, {"error": "options_unavailable"})
             return
+        if url.path == "/v1/history":
+            try:
+                params = parse_qs(url.query)
+                symbol = params["symbol"][0]
+                period = int(params["period"][0])
+                before = int(params["before"][0])
+                count = int(params.get("count", ["300"])[0])
+                depth = int(params.get("depth", ["1100"])[0])
+                if ((symbol not in SYMBOLS and contract_product(symbol) not in SYMBOLS)
+                        or period not in PERIODS or before <= 0
+                        or not 5 <= count <= 300 or not 500 <= depth <= 8964):
+                    raise ValueError("invalid history request")
+            except (KeyError, ValueError, IndexError):
+                self.reply(400, {"error": "invalid_history_parameters"})
+                return
+            try:
+                with LOCK:
+                    candles = load_bars(symbol, period, depth)
+                older = [bar for bar in candles if bar["time"] < before]
+                self.reply(200, {"symbol": symbol, "period": period, "bars": older[-count:]})
+            except Exception:
+                self.reply(503, {"error": "history_unavailable"})
+            return
         if url.path != "/v1/klines":
             self.reply(404, {"error": "not_found"})
             return
