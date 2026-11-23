@@ -13,6 +13,13 @@ struct InstrumentDetailView: View {
     @State private var showOptions = false
     @State private var showContracts = false
     let instrument: FuturesInstrument
+    let selectedContract: MarketDataService.ContractQuote?
+
+    init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote? = nil) {
+        self.instrument = instrument
+        self.selectedContract = selectedContract
+    }
+
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @State private var period = "15分"
@@ -34,14 +41,12 @@ struct InstrumentDetailView: View {
     private let periods = ["1分","5分","15分","30分","60分","日线"]
     private var latestPrice: Double { candles.last?.close ?? 0 }
     private var quote: MarketDataService.MainContract? { contracts[instrument.id] }
-    private var chartSymbol: String { quote?.code ?? instrument.id }
+    private var chartSymbol: String { selectedContract?.code ?? quote?.code ?? instrument.id }
     private var chartKey: String { chartSymbol + "/" + period }
     @State private var displayedKey = ""
-    private var changeColor: Color {
-        let change = quote?.change ?? 0
-        return MarketPalette.movement(quote?.change)
-    }
-    private var changeText: String { quote?.changePercent ?? "--" }
+    private var displayedChange: Double? { selectedContract?.change ?? quote?.change }
+    private var changeColor: Color { MarketPalette.movement(displayedChange) }
+    private var changeText: String { selectedContract?.changePercent ?? quote?.changePercent ?? "--" }
     private var periodSeconds: Int { ["1分":60,"5分":300,"15分":900,"30分":1800,"60分":3600,"日线":86400][period] ?? 900 }
     private var window: Range<Int> {
         let lower = min(candles.count, max(0, Int(floor(visibleStart)) - 1))
@@ -234,16 +239,16 @@ struct InstrumentDetailView: View {
                     .font(.system(size: 16, weight: .medium))
                     .frame(width: 25, height: 36)
             }
-            Text(instrument.name + (contracts[instrument.id]?.month ?? ""))
+            Text(instrument.name + (selectedContract?.month ?? contracts[instrument.id]?.month ?? ""))
                 .font(.system(size: 14, weight: .semibold))
                 .lineLimit(1)
-            Text(quote?.code ?? (instrument.id + " 主连"))
+            Text(selectedContract?.code ?? quote?.code ?? (instrument.id + " 主连"))
                 .font(.system(size: 10))
                 .foregroundStyle(.gray)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Spacer(minLength: 1)
-            Text(quote?.last?.formatted() ?? "--")
+            Text((selectedContract == nil ? quote?.last : rawBars.last?.close ?? selectedContract?.last)?.formatted() ?? "--")
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
                 .foregroundStyle(changeColor)
                 .monospacedDigit()
@@ -488,7 +493,7 @@ struct InstrumentDetailView: View {
                 favorites.toggle(instrument.id)
             }
             Button("查看期权 T 型报价") { showOptions = true }
-                .disabled(quote == nil)
+                .disabled(selectedContract == nil && quote == nil)
             Button("选择合约月份") { showContracts = true }
         } label: {
             Image(systemName: "ellipsis").frame(width: 38, height: 24)
