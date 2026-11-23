@@ -40,7 +40,7 @@ struct InstrumentDetailView: View {
     @State private var displayedKey = ""
     private var changeColor: Color {
         let change = quote?.change ?? 0
-        return change > 0 ? .red : change < 0 ? .green : .white
+        return MarketPalette.movement(quote?.change)
     }
     private var changeText: String { quote?.changePercent ?? "--" }
     private var periodSeconds: Int { ["1分":60,"5分":300,"15分":900,"30分":1800,"60分":3600,"日线":86400][period] ?? 900 }
@@ -94,9 +94,9 @@ struct InstrumentDetailView: View {
             .padding(.horizontal, 3)
             .padding(.top, 2)
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(MarketPalette.surface.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
         .task(id: chartKey + (scenePhase == .active ? "/active" : "/paused")) {
             guard scenePhase == .active else { return }
             await loadCandles(reset: displayedKey != chartKey)
@@ -263,7 +263,7 @@ struct InstrumentDetailView: View {
                 Text(period + "⌄")
                     .font(.system(size: 12, weight: .semibold))
                     .padding(.horizontal, 7).padding(.vertical, 7)
-                    .background(.white.opacity(0.10), in: Capsule())
+                    .background(MarketPalette.background, in: Capsule())
             }
             Button { showIndicators.toggle() } label: {
                 Image(systemName: showIndicators ? "eye" : "eye.slash")
@@ -271,7 +271,7 @@ struct InstrumentDetailView: View {
                     .frame(width: 26, height: 36)
             }
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(MarketPalette.ink)
         .padding(.horizontal, 4)
         .frame(height: 43)
     }
@@ -289,8 +289,8 @@ struct InstrumentDetailView: View {
                    let index = candles.firstIndex(where: { $0.time == timestamp }) {
                     selectedCandleInfo(candles[index], index: index)
                 } else if showIndicators {
-                    Text("EMA20").foregroundStyle(.white)
-                    Text("EMA50").foregroundStyle(ChartInk.slow)
+                    Text("EMA20").foregroundStyle(.orange)
+                    Text("EMA50").foregroundStyle(MarketPalette.accent)
                 }
                 Spacer(minLength: 0)
                 actions
@@ -535,15 +535,15 @@ struct InstrumentDetailView: View {
     private var quoteStrip: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                smallQuote("卖1", quote?.ask?.formatted() ?? "--", .white)
-                smallQuote("买1", quote?.bid?.formatted() ?? "--", .white)
-                smallQuote("持仓", quote?.interest?.formatted() ?? "--", .white)
+                smallQuote("卖1", quote?.ask?.formatted() ?? "--", MarketPalette.ink)
+                smallQuote("买1", quote?.bid?.formatted() ?? "--", MarketPalette.ink)
+                smallQuote("持仓", quote?.interest?.formatted() ?? "--", MarketPalette.ink)
             }
             .frame(height: 31)
             .overlay(alignment: .top) { quoteSeparator }
             HStack(spacing: 12) {
-                smallQuote("成交", quote?.volume?.formatted() ?? "--", .white)
-                smallQuote("增仓", quote?.interestChange?.formatted() ?? "--", .white)
+                smallQuote("成交", quote?.volume?.formatted() ?? "--", MarketPalette.ink)
+                smallQuote("增仓", quote?.interestChange?.formatted() ?? "--", MarketPalette.ink)
                 smallQuote("幅度", changeText, changeColor)
             }
             .frame(height: 31)
@@ -553,7 +553,7 @@ struct InstrumentDetailView: View {
     }
 
     private var quoteSeparator: some View {
-        Rectangle().fill(.white.opacity(0.075)).frame(height: 0.5)
+        Rectangle().fill(MarketPalette.divider).frame(height: 0.5)
     }
 
     private func smallQuote(_ label: String, _ value: String, _ tint: Color) -> some View {
