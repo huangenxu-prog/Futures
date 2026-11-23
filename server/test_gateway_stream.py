@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 # The CI worker only needs to validate the transport; it does not log in to TqSdk.
@@ -43,6 +44,26 @@ class GatewayStreamingTests(unittest.TestCase):
         self.assertEqual(gateway.contract_product("CZCE.SR701"), "CZCE.SR")
         self.assertEqual(gateway.contract_product("SHFE.rb2701"), "SHFE.rb")
         self.assertIsNone(gateway.contract_product("KQ.m@SHFE.rb"))
+
+    def test_history_page_contains_only_older_bars(self):
+        results = []
+        handler = SimpleNamespace(
+            path="/v1/history?symbol=CZCE.SR701&period=900&before=145&count=5&depth=600",
+            reply=lambda status, payload: results.append((status, payload))
+        )
+        with patch.object(gateway, "load_bars", return_value=[{"time": t} for t in range(100, 200)]):
+            gateway.Handler.do_GET(handler)
+        self.assertEqual(results[0][0], 200)
+        self.assertEqual([bar["time"] for bar in results[0][1]["bars"]], [140, 141, 142, 143, 144])
+
+    def test_history_page_rejects_unbounded_depth(self):
+        results = []
+        handler = SimpleNamespace(
+            path="/v1/history?symbol=CZCE.SR701&period=900&before=145&count=5&depth=10000",
+            reply=lambda status, payload: results.append((status, payload))
+        )
+        gateway.Handler.do_GET(handler)
+        self.assertEqual(results[0][0], 400)
 
     def test_numeric_snapshot_never_sends_nan(self):
         q = SimpleNamespace(datetime="2026-11-23 10:01:00",
