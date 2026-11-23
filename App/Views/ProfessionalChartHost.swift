@@ -27,11 +27,28 @@ struct ProfessionalChartHost: View {
         return TradingChartModel(style: .candles, configuration: configuration)
     }()
 
+    @State private var sessionAxis = TradingSessionAxis()
     @State private var historyDepth = 1100
     @State private var historyTask: Task<Void, Never>?
 
     private var interval: ChartInterval {
         ChartInterval(seconds: TimeInterval(period))
+    }
+
+    private var chartTimeFormatter: TimeFormatter {
+        // The chart's X values are synthetic, while labels must always reflect
+        // the original China futures exchange timestamps.
+        let mapping = sessionAxis
+        let daily = period == 86_400
+        return TimeFormatter { chartDate, _, context in
+            guard let actual = mapping.nearestActual(for: chartDate) else { return "" }
+            let formatter = DateFormatter()
+            formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+            formatter.dateFormat = context == .crosshair
+                ? "MM/dd HH:mm"
+                : (daily ? "MM/dd" : "MM/dd HH:mm")
+            return formatter.string(from: Date(timeIntervalSince1970: Double(actual)))
+        }
     }
 
     private var theme: TradingChartTheme {
@@ -55,6 +72,7 @@ struct ProfessionalChartHost: View {
     var body: some View {
         TradingChartView(model: model)
             .tradingChartTheme(theme)
+            .tradingChartTimeFormatter(chartTimeFormatter)
             .background(Color.black)
             .onAppear {
                 configureChart()
@@ -78,7 +96,7 @@ struct ProfessionalChartHost: View {
         model.onEvent = { event in
             switch event {
             case .crosshairChanged(let state):
-                selectedCandleTime = state.map { Int64($0.time.timeIntervalSince1970) }
+                selectedCandleTime = state.flatMap { sessionAxis.actualTime(for: $0.time) }
             case .approachedHistoryStart:
                 guard historyTask == nil else { return }
                 historyTask = Task { @MainActor in
@@ -109,6 +127,7 @@ struct ProfessionalChartHost: View {
     @MainActor
     private func synchronizeBars(previous: [MarketBar], incoming: [MarketBar]) {
         guard !incoming.isEmpty else { return }
+        sessionAxis.register(incoming.map(\.time), period: period)
         let requiresReset = model.series.isEmpty
             || incoming.count < previous.count
             || previous.first?.time != incoming.first?.time
@@ -118,7 +137,7 @@ struct ProfessionalChartHost: View {
         if requiresReset {
             // A fresh 500-bar snapshot must not discard older pages that the
             // user has already scrolled into.
-            let incomingStart = Date(timeIntervalSince1970: TimeInterval(incoming[0].time))
+            guard let incomingStart = sessionAxis.chartTime(for: incoming[0].time) else { return }
             let retained = model.series.candles?.filter { $0.time < incomingStart } ?? []
             let combined = retained + incoming.map(chartCandle)
             model.setSeries(ChartSeries(candles: combined, interval: interval),
@@ -132,7 +151,8 @@ struct ProfessionalChartHost: View {
     }
 
     private func chartCandle(_ bar: MarketBar) -> Candle {
-        Candle(time: Date(timeIntervalSince1970: TimeInterval(bar.time)),
+        Candle(time: sessionAxis.chartTime(for: bar.time)
+                   ?? Date(timeIntervalSince1970: Double(bar.time)),
                open: bar.open, high: bar.high, low: bar.low, close: bar.close,
                volume: Double(bar.volume))
     }
@@ -142,7 +162,10 @@ struct ProfessionalChartHost: View {
         guard !model.isLoadingHistory, model.hasMoreHistory,
               let first = model.series.firstTime else { return }
         model.isLoadingHistory = true
-        let before = Int64(first.timeIntervalSince1970)
+        guard let before = sessionAxis.actualTime(for: first) else {
+            model.isLoadingHistory = false
+            return
+        }
         do {
             // TqSdk's rolling serial has a bounded depth. Expand the lookback
             // only when needed; the chart keeps the user's historical anchor.
@@ -152,6 +175,7 @@ struct ProfessionalChartHost: View {
                     count: 300, depth: historyDepth
                 )
                 if !older.isEmpty {
+                    sessionAxis.register(older.map(\.time), period: period)
                     model.prependHistory(ChartSeries(candles: older.map(chartCandle),
                                                      interval: interval))
                     historyDepth = min(8964, historyDepth + 450)
