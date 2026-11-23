@@ -68,6 +68,34 @@ enum MarketDataService {
         return base
     }
 
+    static func catalogProducts() async throws -> [FuturesInstrument] {
+        let url = try baseURL().appendingPathComponent("v1/catalog")
+        let (data, response) = try await URLSession.shared.data(
+            for: URLRequest(url: url, timeoutInterval: 35)
+        )
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw MarketDataError.invalidResponse
+        }
+        let catalog = try JSONDecoder().decode([FuturesInstrument].self, from: data)
+        guard !catalog.isEmpty else { throw MarketDataError.noData }
+        return catalog
+    }
+
+    /// Fetches only actively viewed or favorited main-contract quotes.
+    /// The server rejects requests larger than 48 products.
+    static func selectedProductQuotes(_ products: [String]) async throws -> [String: MainContract] {
+        guard !products.isEmpty, products.count <= 48 else { return [:] }
+        let url = try baseURL().appendingPathComponent("v1/product-quotes")
+            .appending(queryItems: products.map { URLQueryItem(name: "product", value: $0) })
+        let (data, response) = try await URLSession.shared.data(
+            for: URLRequest(url: url, timeoutInterval: 12)
+        )
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw MarketDataError.invalidResponse
+        }
+        return try JSONDecoder().decode([String: MainContract].self, from: data)
+    }
+
     struct MainContract: Codable {
         let code: String
         let month: String
