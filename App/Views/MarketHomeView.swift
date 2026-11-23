@@ -67,12 +67,30 @@ struct MarketHomeView: View {
                                         }
                                         .accessibilityAction { destination = item }
                                         .accessibilityAction(named: "删除自选") { favorites.toggle(item.id) }
+                                        .accessibilityHidden(deleteID == item.id)
+                                        .allowsHitTesting(deleteID != item.id)
                                     if deleteID == item.id {
-                                        Button("删除自选", role: .destructive) {
-                                            favorites.toggle(item.id)
-                                            deleteID = nil
+                                        HStack(spacing: 0) {
+                                            Button {
+                                                deleteID = nil
+                                            } label: {
+                                                Text("取消")
+                                                    .foregroundStyle(.white)
+                                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                                    .contentShape(Rectangle())
+                                            }
+                                            Button(role: .destructive) {
+                                                favorites.toggle(item.id)
+                                                deleteID = nil
+                                            } label: {
+                                                Text("删除")
+                                                    .foregroundStyle(.red)
+                                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                                    .contentShape(Rectangle())
+                                            }
+                                            .accessibilityLabel("删除自选")
                                         }
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                        .buttonStyle(.plain)
                                         .background(.black)
                                     }
                                 }
