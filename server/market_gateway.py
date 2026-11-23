@@ -93,6 +93,44 @@ def option_chain(underlying):
         api.close()
 
 
+def listed_contracts(product):
+    """Query genuine unexpired delivery months, with quotes if available."""
+    if product not in SYMBOLS:
+        raise ValueError("unknown product")
+    exchange, product_id = product.split(".", 1)
+    with open(AUTH_PATH, encoding="utf-8") as handle:
+        credentials = json.load(handle)
+    api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+    try:
+        available = api.query_quotes(ins_class="FUTURE", exchange_id=exchange,
+                                     product_id=product_id, expired=False)
+        codes = sorted(code for code in available if contract_product(code) == product)[:48]
+        if not codes:
+            return []
+        quotes = api.get_quote_list(codes)
+        # Quote metadata can arrive before the live snapshot. Give it a short
+        # window, but don't block the request waiting for off-session ticks.
+        deadline = time.time() + 2
+        while time.time() < deadline and not any(q.datetime for q in quotes):
+            api.wait_update(deadline=time.time() + 0.3)
+        contracts = []
+        for code, quote in zip(codes, quotes):
+            year = getattr(quote, "delivery_year", 0)
+            month = getattr(quote, "delivery_month", 0)
+            if not (2000 <= year <= 2099 and 1 <= month <= 12):
+                continue
+            row = dict(snapshot(quote), code=code, month=f"{int(year) % 100:02d}{int(month):02d}")
+            for field, key in (("price_tick", "priceTick"),
+                               ("volume_multiple", "volumeMultiple")):
+                value = getattr(quote, field, None)
+                if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
+                    row[key] = float(value)
+            contracts.append(row)
+        return sorted(contracts, key=lambda row: (row["month"], row["code"]))
+    finally:
+        api.close()
+
+
 def load_bars(symbol, period, count):
     with open(AUTH_PATH, encoding="utf-8") as handle:
         credentials = json.load(handle)
@@ -358,6 +396,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, contracts)
             except Exception:
                 self.reply(503, {"error": "market_data_unavailable"})
+            return
+        if url.path == "/v1/contracts":
+            product = parse_qs(url.query).get("product", [""])[0]
+            if product not in SYMBOLS:
+                self.reply(400, {"error": "invalid_product"})
+                return
+            try:
+                with LOCK:
+                    contracts = listed_contracts(product)
+                self.reply(200, contracts)
+            except Exception as exc:
+                print("挂牌合约查询失败:", type(exc).__name__, str(exc)[:140], flush=True)
+                self.reply(503, {"error": "contracts_unavailable"})
             return
         if url.path == "/v1/options":
             code = parse_qs(url.query).get("symbol", [""])[0]
