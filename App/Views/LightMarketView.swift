@@ -66,6 +66,8 @@ struct LightMarketView: View {
         var options = keyword.isEmpty && scope == .favorites
             ? favorites.ids
             : catalog.map(\.id)
+        let available = Set(catalog.map(\.id))
+        options = options.filter { available.contains($0) }
         if let exchange = exchangeCode(for: selectedCategory) {
             let supported = Set(catalog.filter { $0.exchange == exchange }.map(\.id))
             options = options.filter { supported.contains($0) }
