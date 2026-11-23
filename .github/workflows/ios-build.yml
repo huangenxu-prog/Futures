@@ -22,6 +22,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Verify continuous trading-time axis
+        run: |
+          swiftc App/Models/TradingSessionAxis.swift scripts/SessionAxisSelfTest.swift -o /tmp/trading-session-axis-test
+          /tmp/trading-session-axis-test
+
       - name: Generate app icon asset
         run: swift scripts/generate-app-icon.swift
 
