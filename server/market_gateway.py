@@ -18,6 +18,14 @@ SYMBOLS = {
     "CZCE.SR", "CZCE.RM", "CZCE.MA", "CZCE.CF", "CZCE.TA", "CZCE.SA",
     "DCE.m", "DCE.p", "DCE.jm", "DCE.c", "DCE.y", "GFEX.lc", "INE.sc",
 }
+EXCHANGES = {"CFFEX", "SHFE", "DCE", "CZCE", "INE", "GFEX"}
+CATALOG_LOCK = threading.Lock()
+CATALOG_CACHE = []
+CATALOG_UNTIL = 0.0
+DYNAMIC_QUOTE_LOCK = threading.Lock()
+QUOTE_BATCH_CACHE = {}
+QUOTE_BATCH_UNTIL = {}
+
 # Serialize TqSdk requests: the SDK manages its own event loop and is not thread-safe.
 LOCK = threading.Lock()
 
@@ -29,6 +37,104 @@ contract_cache_until = 0.0
 def contract_product(code):
     match = re.fullmatch(r"([A-Z]+\.[A-Za-z]+)[0-9]{3,4}", code)
     return match.group(1) if match else None
+
+
+def product_catalog():
+    """Discover listed futures from TqSdk's authoritative contract directory."""
+    global CATALOG_CACHE, CATALOG_UNTIL
+    with CATALOG_LOCK:
+        if CATALOG_CACHE and time.monotonic() < CATALOG_UNTIL:
+            return list(CATALOG_CACHE)
+        with open(AUTH_PATH, encoding="utf-8") as handle:
+            credentials = json.load(handle)
+        api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+        try:
+            symbols = api.query_quotes(ins_class="FUTURE",
+                                       exchange_id=sorted(EXCHANGES), expired=False)
+            samples = {}
+            for symbol in sorted(set(symbols)):
+                product = contract_product(symbol)
+                if product and product.split(".")[0] in EXCHANGES:
+                    samples.setdefault(product, symbol)
+            if not samples:
+                raise ValueError("TqSdk returned an empty listed futures catalog")
+            names = {}
+            sample_codes = list(samples.values())
+            for offset in range(0, len(sample_codes), 48):
+                chunk = sample_codes[offset:offset + 48]
+                quotes = api.get_quote_list(chunk)
+                for code, quote in zip(chunk, quotes):
+                    raw = getattr(quote, "instrument_name", "")
+                    if isinstance(raw, str) and raw.strip():
+                        # Quote names generally end with the delivery month.
+                        name = re.sub(r"[0-9]{3,4}$", "", raw).strip()
+                        if name and name != raw:
+                            names[contract_product(code)] = name
+            result = [
+                {"id": product, "name": names.get(product, product.split(".")[1]),
+                 "exchange": product.split(".")[0]}
+                for product in sorted(samples)
+            ]
+            CATALOG_CACHE = result
+            CATALOG_UNTIL = time.monotonic() + 6 * 3600
+            return list(result)
+        finally:
+            api.close()
+
+
+def supported_product(product):
+    if product in SYMBOLS:
+        return True
+    if not re.fullmatch(r"(CFFEX|SHFE|DCE|CZCE|INE|GFEX)\\.[A-Za-z]+", product or ""):
+        return False
+    return any(item["id"] == product for item in product_catalog())
+
+
+def supported_symbol(symbol):
+    return symbol in SYMBOLS or supported_product(contract_product(symbol))
+
+
+def selected_quotes(products):
+    """A bounded pull of main futures contracts, never subscribes the whole catalog."""
+    requested = sorted(set(products))
+    if not requested or len(requested) > 48 or any(not supported_product(p) for p in requested):
+        raise ValueError("invalid products")
+    key = tuple(requested)
+    with DYNAMIC_QUOTE_LOCK:
+        if time.monotonic() < QUOTE_BATCH_UNTIL.get(key, 0):
+            return QUOTE_BATCH_CACHE.get(key, {})
+        with open(AUTH_PATH, encoding="utf-8") as handle:
+            credentials = json.load(handle)
+        api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+        try:
+            continuous = api.get_quote_list(["KQ.m@" + p for p in requested])
+            deadline = time.time() + 4
+            while time.time() < deadline and not all(
+                    getattr(q, "underlying_symbol", "") for q in continuous):
+                api.wait_update(deadline=time.time() + 0.5)
+            pairs = [(p, q.underlying_symbol) for p, q in zip(requested, continuous)
+                     if contract_product(getattr(q, "underlying_symbol", "")) == p]
+            if not pairs:
+                return {}
+            quotes = api.get_quote_list([code for _, code in pairs])
+            while time.time() < deadline and not any(getattr(q, "datetime", "") for q in quotes):
+                api.wait_update(deadline=time.time() + 0.5)
+            result = {}
+            for (product, code), quote in zip(pairs, quotes):
+                year, month = getattr(quote, "delivery_year", 0), getattr(quote, "delivery_month", 0)
+                if not (2000 <= year <= 2099 and 1 <= month <= 12):
+                    continue
+                fields = snapshot(quote)
+                if not fields:
+                    continue
+                result[product] = dict(fields, code=code,
+                                       month=f"{int(year) % 100:02d}{int(month):02d}")
+            if result:
+                QUOTE_BATCH_CACHE[key] = result
+                QUOTE_BATCH_UNTIL[key] = time.monotonic() + 8
+            return result
+        finally:
+            api.close()
 
 
 def snapshot(quote):
@@ -95,7 +201,7 @@ def option_chain(underlying):
 
 def listed_contracts(product):
     """Query genuine unexpired delivery months, with quotes if available."""
-    if product not in SYMBOLS:
+    if not supported_product(product):
         raise ValueError("unknown product")
     exchange, product_id = product.split(".", 1)
     with open(AUTH_PATH, encoding="utf-8") as handle:
@@ -382,12 +488,31 @@ class Handler(BaseHTTPRequestHandler):
                 symbol = params["symbol"][0]
                 period = int(params["period"][0])
                 count = int(params.get("count", ["500"])[0])
-                if (symbol not in SYMBOLS and contract_product(symbol) not in SYMBOLS) or period not in PERIODS or not 5 <= count <= 500:
+                if (not supported_symbol(symbol)) or period not in PERIODS or not 5 <= count <= 500:
                     raise ValueError("invalid stream")
             except (KeyError, ValueError, IndexError):
                 self.reply(400, {"error": "invalid_stream_parameters"})
                 return
             self.stream_bars(symbol, period, count)
+            return
+        if url.path == "/v1/catalog":
+            try:
+                self.reply(200, product_catalog())
+            except Exception as exc:
+                print("合约目录查询失败:", type(exc).__name__, str(exc)[:120], flush=True)
+                self.reply(503, {"error": "catalog_unavailable"})
+            return
+        if url.path == "/v1/product-quotes":
+            params = parse_qs(url.query)
+            products = params.get("product", [])
+            if not products or len(products) > 48 or any(not supported_product(p) for p in products):
+                self.reply(400, {"error": "invalid_products"})
+                return
+            try:
+                self.reply(200, selected_quotes(products))
+            except Exception as exc:
+                print("按需报价查询失败:", type(exc).__name__, str(exc)[:120], flush=True)
+                self.reply(503, {"error": "quotes_unavailable"})
             return
         if url.path == "/v1/main-contracts":
             try:
@@ -399,7 +524,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/v1/contracts":
             product = parse_qs(url.query).get("product", [""])[0]
-            if product not in SYMBOLS:
+            if not supported_product(product):
                 self.reply(400, {"error": "invalid_product"})
                 return
             try:
@@ -412,7 +537,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/v1/options":
             code = parse_qs(url.query).get("symbol", [""])[0]
-            if contract_product(code) not in SYMBOLS:
+            if not supported_symbol(code):
                 self.reply(400, {"error": "invalid_underlying"})
                 return
             try:
@@ -430,7 +555,7 @@ class Handler(BaseHTTPRequestHandler):
                 before = int(params["before"][0])
                 count = int(params.get("count", ["300"])[0])
                 depth = int(params.get("depth", ["1100"])[0])
-                if ((symbol not in SYMBOLS and contract_product(symbol) not in SYMBOLS)
+                if ((not supported_symbol(symbol))
                         or period not in PERIODS or before <= 0
                         or not 5 <= count <= 300 or not 500 <= depth <= 8964):
                     raise ValueError("invalid history request")
@@ -453,7 +578,7 @@ class Handler(BaseHTTPRequestHandler):
             symbol = params["symbol"][0]
             period = int(params["period"][0])
             count = int(params.get("count", ["100"])[0])
-            if (symbol not in SYMBOLS and contract_product(symbol) not in SYMBOLS) or period not in PERIODS or not 5 <= count <= 500:
+            if (not supported_symbol(symbol)) or period not in PERIODS or not 5 <= count <= 500:
                 raise ValueError("invalid symbol, period or count")
         except (KeyError, ValueError, IndexError) as exc:
             self.reply(400, {"error": str(exc)})
