@@ -109,6 +109,58 @@ class GatewayStreamingTests(unittest.TestCase):
         self.assertEqual(rows[0]["priceTick"], 1)
         self.assertEqual(rows[0]["last"], 5029.)
 
+    def test_catalog_endpoint_returns_dynamic_products(self):
+        results = []
+        handler = SimpleNamespace(
+            path="/v1/catalog", reply=lambda status, payload: results.append((status, payload)))
+        items = [
+            {"id": "DCE.m", "name": "豆粕", "exchange": "DCE"},
+            {"id": "CFFEX.IF", "name": "沪深300股指", "exchange": "CFFEX"}
+        ]
+        with patch.object(gateway, "product_catalog", return_value=items):
+            gateway.Handler.do_GET(handler)
+        self.assertEqual(results, [(200, items)])
+
+    def test_discovered_product_and_symbol_are_validated(self):
+        listed = [{"id": "CFFEX.IF", "name": "股指", "exchange": "CFFEX"}]
+        with patch.object(gateway, "product_catalog", return_value=listed):
+            self.assertTrue(gateway.supported_product("CFFEX.IF"))
+            self.assertTrue(gateway.supported_symbol("CFFEX.IF2612"))
+            self.assertFalse(gateway.supported_symbol("CFFEX.IF2612;rm"))
+            self.assertFalse(gateway.supported_product("INVALID.x"))
+
+    def test_bounded_requested_quotes_rejects_more_than_48_products(self):
+        with self.assertRaises(ValueError):
+            gateway.selected_quotes(["DCE.m" + str(i) for i in range(49)])
+
+    def test_dynamic_catalog_uses_only_listed_exchange_products(self):
+        class FakeAPI:
+            def query_quotes(self, **kwargs):
+                self.options = kwargs
+                return ["DCE.m2701", "CFFEX.IF2612", "SSE.510050"]
+            def get_quote_list(self, symbols):
+                return [
+                    SimpleNamespace(instrument_name=(
+                        "豆粕2701" if symbol.startswith("DCE.") else "沪深300股指2612"))
+                    for symbol in symbols
+                ]
+            def close(self):
+                pass
+        api = FakeAPI()
+        old_cache, old_until = gateway.CATALOG_CACHE, gateway.CATALOG_UNTIL
+        gateway.CATALOG_CACHE, gateway.CATALOG_UNTIL = [], 0
+        try:
+            with patch("builtins.open", return_value=io.StringIO('{"username":"u","password":"p"}')):
+                with patch.object(gateway, "TqApi", return_value=api):
+                    with patch.object(gateway, "TqAuth", return_value="auth"):
+                        result = gateway.product_catalog()
+            self.assertEqual([item["id"] for item in result], ["CFFEX.IF", "DCE.m"])
+            self.assertEqual(result[1]["name"], "豆粕")
+            self.assertEqual(api.options["ins_class"], "FUTURE")
+            self.assertFalse(api.options["expired"])
+        finally:
+            gateway.CATALOG_CACHE, gateway.CATALOG_UNTIL = old_cache, old_until
+
     def test_numeric_snapshot_never_sends_nan(self):
         q = SimpleNamespace(datetime="2026-11-23 10:01:00",
                             last_price=5024.0, pre_settlement=5047.0,
