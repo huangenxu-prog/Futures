@@ -85,7 +85,7 @@ def product_catalog():
 def supported_product(product):
     if product in SYMBOLS:
         return True
-    if not re.fullmatch(r"(CFFEX|SHFE|DCE|CZCE|INE|GFEX)\\.[A-Za-z]+", product or ""):
+    if not re.fullmatch(r"(CFFEX|SHFE|DCE|CZCE|INE|GFEX)\.[A-Za-z]+", product or ""):
         return False
     return any(item["id"] == product for item in product_catalog())
 
