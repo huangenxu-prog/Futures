@@ -121,7 +121,9 @@ struct InstrumentDetailView: View {
                 }
             }
         }
-        .sheet(isPresented: $showOptions) { OptionChainView(code: chartSymbol) }
+        .sheet(isPresented: $showOptions) {
+            OptionChainView(code: chartSymbol, underlyingLast: rawBars.last?.close ?? selectedContract?.last ?? quote?.last)
+        }
         .sheet(isPresented: $showContracts) { ContractListView(instrument: instrument) }
         .onAppear {
             NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true)
@@ -523,18 +525,22 @@ struct InstrumentDetailView: View {
             }.frame(height:height - 20)
         }.padding(.horizontal, 4).padding(.top, 2)
     }
+    private func contractQuote(_ mainValue: Double?, _ otherValue: Double?) -> String {
+        (selectedContract == nil ? mainValue : otherValue)?.formatted() ?? "--"
+    }
+
     private var quoteStrip: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                smallQuote("卖1", quote?.ask?.formatted() ?? "--", MarketPalette.ink)
-                smallQuote("买1", quote?.bid?.formatted() ?? "--", MarketPalette.ink)
-                smallQuote("持仓", quote?.interest?.formatted() ?? "--", MarketPalette.ink)
+                smallQuote("卖1", contractQuote(quote?.ask, selectedContract?.ask), MarketPalette.ink)
+                smallQuote("买1", contractQuote(quote?.bid, selectedContract?.bid), MarketPalette.ink)
+                smallQuote("持仓", contractQuote(quote?.interest, selectedContract?.interest), MarketPalette.ink)
             }
             .frame(height: 31)
             .overlay(alignment: .top) { quoteSeparator }
             HStack(spacing: 12) {
-                smallQuote("成交", quote?.volume?.formatted() ?? "--", MarketPalette.ink)
-                smallQuote("增仓", quote?.interestChange?.formatted() ?? "--", MarketPalette.ink)
+                smallQuote("成交", contractQuote(quote?.volume, selectedContract?.volume), MarketPalette.ink)
+                smallQuote("增仓", selectedContract == nil ? (quote?.interestChange?.formatted() ?? "--") : "--", MarketPalette.ink)
                 smallQuote("幅度", changeText, changeColor)
             }
             .frame(height: 31)
