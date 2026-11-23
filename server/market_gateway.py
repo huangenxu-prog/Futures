@@ -90,6 +90,13 @@ def supported_product(product):
     return any(item["id"] == product for item in product_catalog())
 
 
+def quote_symbol(symbol):
+    """Continuous chart for a product, exact chart for a delivery month."""
+    if re.fullmatch(r"(CFFEX|SHFE|DCE|CZCE|INE|GFEX)\.[A-Za-z]+", symbol or ""):
+        return "KQ.m@" + symbol
+    return symbol
+
+
 def supported_symbol(symbol):
     return symbol in SYMBOLS or supported_product(contract_product(symbol))
 
@@ -243,7 +250,7 @@ def load_bars(symbol, period, count):
     api = None
     try:
         api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
-        serial = api.get_kline_serial("KQ.m@" + symbol if symbol in SYMBOLS else symbol, period, data_length=count)
+        serial = api.get_kline_serial(quote_symbol(symbol), period, data_length=count)
         deadline = time.time() + 15
         while time.time() < deadline:
             api.wait_update(deadline=time.time() + 1)
@@ -420,7 +427,7 @@ class Handler(BaseHTTPRequestHandler):
             with open(AUTH_PATH, encoding="utf-8") as handle:
                 credentials = json.load(handle)
             api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
-            serial = api.get_kline_serial("KQ.m@" + symbol if symbol in SYMBOLS else symbol,
+            serial = api.get_kline_serial(quote_symbol(symbol),
                                         period, data_length=count)
             self.begin_stream()
             previous = None
