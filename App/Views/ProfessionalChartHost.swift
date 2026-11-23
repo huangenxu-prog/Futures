@@ -361,7 +361,8 @@ struct ProfessionalChartHost: View {
             model.setSeries(ChartSeries(candles: combined, interval: interval),
                             scroll: .automatic)
             model.currentPrice = incoming.last?.close
-            model.hasMoreHistory = combined.count >= 300
+            // A shorter first live page still supports older K-line paging.
+            model.hasMoreHistory = historyDepth < 8964
         } else if let last = incoming.last, last != previous.last {
             model.update(chartCandle(last), interval: interval)
             model.currentPrice = last.close

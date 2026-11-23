@@ -49,6 +49,7 @@ struct InstrumentDetailView: View {
     @State private var lastStreamCandleAt: Date?
     @State private var lastStreamCandleKey: String?
     @State private var realtimeRevision = 0
+    @State private var lastCachedCandleAt: Date?
 
     // TqSdk quote datetimes are exchange-local (China Standard Time).
     // Use them only to confirm a quote belongs to the currently open bar.
@@ -143,9 +144,9 @@ struct InstrumentDetailView: View {
             }
             // Start the live feed immediately; do not block it behind a new
             // TqSdk HTTP snapshot, which can take many seconds to initialize.
-            // Recover the full snapshot after a grace period if SSE never yields.
+            // Recover a small first-page snapshot promptly if SSE never yields.
             let initialSnapshot = Task { @MainActor in
-                do { try await Task.sleep(for: .seconds(8)) } catch { return }
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 guard !Task.isCancelled, chartKey == key,
                       lastStreamCandleKey != key else { return }
                 await loadCandles(reset: false)
@@ -191,6 +192,7 @@ struct InstrumentDetailView: View {
         lastStreamCandleAt = nil
         lastStreamCandleKey = nil
         realtimeRevision = 0
+        lastCachedCandleAt = nil
         if let cached = MarketDataService.cached(symbol: symbol, period: period) {
             rawBars = cached
             selectedCandleTime = nil
@@ -221,7 +223,7 @@ struct InstrumentDetailView: View {
         loading = candles.isEmpty
         defer { if !Task.isCancelled { loading = false } }
         do {
-            let bars = try await MarketDataService.fetch(symbol: symbol, period: requestedPeriod, count: 500)
+            let bars = try await MarketDataService.fetch(symbol: symbol, period: requestedPeriod, count: 120)
             try Task.checkCancellation()
             guard symbol == chartSymbol, requestedPeriod == periodSeconds,
                   revisionAtRequest == realtimeRevision else { return }
@@ -310,6 +312,14 @@ struct InstrumentDetailView: View {
         lastStreamCandleAt = Date()
         lastStreamCandleKey = chartKey
         realtimeRevision &+= 1
+        // Save the first authoritative live frame and occasionally refresh it.
+        // Throttling prevents thousands of writes per trading session.
+        let now = Date()
+        if lastCachedCandleAt == nil ||
+           now.timeIntervalSince(lastCachedCandleAt!) >= 30 {
+            MarketDataService.cache(updated, symbol: chartSymbol, period: periodSeconds)
+            lastCachedCandleAt = now
+        }
         showingCachedData = false
         loadError = nil
         loading = false

@@ -38,6 +38,13 @@ enum MarketDataService {
         return directory.appendingPathComponent("qihui_klines_\(safeSymbol)_\(period).json")
     }
 
+    // Persist an authoritative SSE snapshot for an immediate next visit.
+    // Callers throttle writes; never write each market tick to flash storage.
+    static func cache(_ bars: [MarketBar], symbol: String, period: Int) {
+        guard !bars.isEmpty else { return }
+        save(bars, symbol: symbol, period: period)
+    }
+
     static func cached(symbol: String, period: Int) -> [MarketBar]? {
         guard let url = cacheURL(symbol: symbol, period: period),
               let data = try? Data(contentsOf: url),
@@ -215,7 +222,7 @@ enum MarketDataService {
     }
 
     static func streamCandles(
-        symbol: String, period: Int, count: Int = 500,
+        symbol: String, period: Int, count: Int = 200,
         onEvent: @MainActor @escaping (CandlePush) -> Void
     ) async throws {
         let url = try baseURL().appendingPathComponent("v1/stream/klines")
