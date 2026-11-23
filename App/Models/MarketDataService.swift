@@ -120,6 +120,56 @@ enum MarketDataService {
         return try JSONDecoder().decode([String: MainContract].self, from: data)
     }
 
+    struct CandlePush: Decodable {
+        let symbol: String
+        let bars: [MarketBar]?
+        let bar: MarketBar?
+    }
+
+    // Reads real server-sent events. Heartbeats carry no data and are ignored.
+    // Ending the connection throws so the caller can reconnect or fall back to HTTP.
+    private static func events<T: Decodable>(
+        from endpoint: URL,
+        onEvent: @MainActor @escaping (T) -> Void
+    ) async throws {
+        var request = URLRequest(url: endpoint)
+        request.timeoutInterval = 45
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              (http.value(forHTTPHeaderField: "Content-Type") ?? "").hasPrefix("text/event-stream")
+        else { throw MarketDataError.invalidResponse }
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            guard line.hasPrefix("data:") else { continue }
+            let raw = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            guard let data = raw.data(using: .utf8) else { continue }
+            let value = try JSONDecoder().decode(T.self, from: data)
+            await onEvent(value)
+        }
+        throw MarketDataError.invalidResponse
+    }
+
+    static func streamQuotes(
+        onEvent: @MainActor @escaping ([String: MainContract]) -> Void
+    ) async throws {
+        try await events(from: try baseURL().appendingPathComponent("v1/stream/quotes"),
+                         onEvent: onEvent)
+    }
+
+    static func streamCandles(
+        symbol: String, period: Int, count: Int = 500,
+        onEvent: @MainActor @escaping (CandlePush) -> Void
+    ) async throws {
+        let url = try baseURL().appendingPathComponent("v1/stream/klines")
+            .appending(queryItems: [
+                URLQueryItem(name: "symbol", value: symbol),
+                URLQueryItem(name: "period", value: String(period)),
+                URLQueryItem(name: "count", value: String(count))
+            ])
+        try await events(from: url, onEvent: onEvent)
+    }
+
     static func fetch(symbol: String, period: Int, count: Int = 100) async throws -> [MarketBar] {
         let url = try baseURL().appendingPathComponent("v1/klines")
         guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
