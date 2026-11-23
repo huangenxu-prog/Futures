@@ -15,8 +15,8 @@ from urllib.request import urlopen
 
 ROOT = Path("/root/tq_test")
 SCRIPT = ROOT / "server/market_gateway.py"
-VERSION = "53c22e245bf09366dafca05c20d8d5205e989889"
-DIGEST = "4c6aa5470dfbc42e8106f8506c8f544624400d423d0daad60d38b7f6633ce9d0"
+VERSION = "9f45384508a671e1c38416b45a06a458163b84be"
+GIT_BLOB_SHA = "603f628f12875c4ac5c7d80e90b82b1b4451dbc4"
 
 
 def existing():
@@ -60,6 +60,19 @@ def ready(process, base):
     raise RuntimeError("网关健康检查超时")
 
 
+def first_stream_event(base, path):
+    with urlopen(base + path, timeout=35) as response:
+        if not response.headers.get("Content-Type", "").startswith("text/event-stream"):
+            raise ValueError("实时推送接口不是 SSE")
+        for _ in range(120):
+            line = response.readline()
+            if not line:
+                break
+            if line.startswith(b"data: "):
+                return json.loads(line[6:])
+    raise RuntimeError("实时推送未返回行情")
+
+
 def upgrade():
     proc = existing()
     env = dict(os.fsdecode(item).split("=", 1) for item in (proc / "environ").read_bytes().split(b"\0") if item)
@@ -68,8 +81,9 @@ def upgrade():
         raise RuntimeError("原网关健康检查失败")
     with urlopen(f"https://raw.githubusercontent.com/huangenxu-prog/Futures/{VERSION}/server/market_gateway.py", timeout=30) as response:
         source = response.read()
-    if hashlib.sha256(source).hexdigest() != DIGEST:
-        raise ValueError("新版脚本校验失败")
+    blob_hash = hashlib.sha1(b"blob " + str(len(source)).encode() + b"\0" + source).hexdigest()
+    if blob_hash != GIT_BLOB_SHA:
+        raise ValueError("新版脚本 Git 内容校验失败")
     compile(source, str(SCRIPT), "exec")
     backup = SCRIPT.with_name("market_gateway.py.bak." + str(time.time_ns()))
     shutil.copy2(SCRIPT, backup)
@@ -103,6 +117,13 @@ def upgrade():
             bars = get(base, "/v1/klines?" + urlencode(dict(symbol=code, period=900, count=5)))
             if bars.get("symbol") != code or not bars.get("bars"):
                 raise ValueError("白糖具体合约K线验证失败")
+            quote_update = first_stream_event(base, "/v1/stream/quotes")
+            if quote_update.get("CZCE.SR", {}).get("code") != code:
+                raise ValueError("实时行情推送缺少白糖主力")
+            candle_update = first_stream_event(base, "/v1/stream/klines?" + urlencode(dict(symbol=code, period=900, count=5)))
+            if candle_update.get("symbol") != code or not candle_update.get("bars"):
+                raise ValueError("K线实时推送未返回初始K线")
+            print("实时推送检查通过：行情 + K线", flush=True)
             print("正式网关检查通过：白糖" + q["month"], code, q["time"], "最新价", q["last"], "15分钟K线", len(bars["bars"]), "根", flush=True)
         except Exception:
             if process and process.poll() is None:
