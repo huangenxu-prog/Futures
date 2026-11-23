@@ -191,7 +191,6 @@ struct OptionChainView: View {
             .task(id: code) { await load() }
         }
         .tint(MarketPalette.accent)
-        .preferredColorScheme(.light)
     }
 
     private func sideButton(_ title: String, value: Side) -> some View {

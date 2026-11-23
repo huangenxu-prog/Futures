@@ -6,7 +6,7 @@ struct InstrumentRow: View {
 
     private var movementColor: Color {
         let change = contracts[instrument.id]?.change ?? 0
-        return change > 0 ? .red : change < 0 ? .green : .white
+        return MarketPalette.movement(change)
     }
 
     var body: some View {

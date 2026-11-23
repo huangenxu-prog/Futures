@@ -101,6 +101,8 @@ struct IndicatorSettingsView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
+            .scrollContentBackground(.hidden)
+            .background(MarketPalette.background.ignoresSafeArea())
             .navigationTitle("指标参数")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -119,7 +121,6 @@ struct IndicatorSettingsView: View {
             }
         }
         .tint(MarketPalette.accent)
-        .preferredColorScheme(.light)
     }
 
     private func enabledBinding(_ kind: ChartIndicatorKind) -> Binding<Bool> {

@@ -10,6 +10,9 @@ struct WatchlistView: View {
                     InstrumentRow(instrument: instrument)
                 }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(MarketPalette.background.ignoresSafeArea())
             .navigationTitle("自选")
         }
     }

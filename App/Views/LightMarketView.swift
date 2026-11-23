@@ -3,15 +3,36 @@ import SwiftUI
 /// A minimal, light trading terminal shell around the existing TqSdk feed.
 /// The chart, rather than decorative cards or account widgets, remains the focus.
 enum MarketPalette {
-    static let background = Color(red: 0.985, green: 0.989, blue: 0.994)
-    static let surface = Color.white
-    static let ink = Color(red: 0.13, green: 0.17, blue: 0.22)
-    static let muted = Color(red: 0.48, green: 0.52, blue: 0.58)
-    static let divider = Color(red: 0.91, green: 0.93, blue: 0.95)
-    static let accent = Color(red: 0.17, green: 0.42, blue: 0.72)
-    // Domestic futures convention: red = rising, green = falling.
-    static let up = Color(red: 0.83, green: 0.23, blue: 0.29)
-    static let down = Color(red: 0.06, green: 0.57, blue: 0.40)
+    // UIColor dynamic providers follow the explicitly selected SwiftUI
+    // preferredColorScheme AND the device appearance in system mode.
+    // Centralize colors so sheets, lists and chart legends never mix themes.
+    private static func adaptive(light: UInt32, dark: UInt32) -> Color {
+        Color(uiColor: UIColor { traits in
+            let rgb = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(
+                red: CGFloat((rgb >> 16) & 0xFF) / 255,
+                green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                blue: CGFloat(rgb & 0xFF) / 255,
+                alpha: 1
+            )
+        })
+    }
+
+    static let background = adaptive(light: 0xFBFCFE, dark: 0x0F1115)
+    static let surface = adaptive(light: 0xFFFFFF, dark: 0x151922)
+    static let raised = adaptive(light: 0xF2F5F9, dark: 0x1B2130)
+    static let ink = adaptive(light: 0x222B38, dark: 0xF3F5F8)
+    static let muted = adaptive(light: 0x7A8594, dark: 0x9AA4B2)
+    static let weak = adaptive(light: 0x8794A3, dark: 0x6F7A89)
+    static let divider = adaptive(light: 0xE8EDF2, dark: 0x2A3142)
+    static let accent = adaptive(light: 0x2B6BB8, dark: 0x4C8DFF)
+    // Domestic futures convention: red = rising, cyan/green = falling.
+    static let up = adaptive(light: 0xD43B4A, dark: 0xFF5B5B)
+    static let down = adaptive(light: 0x0F9166, dark: 0x23C6C8)
+    static let ema20 = adaptive(light: 0x366EB8, dark: 0x4C8DFF)
+    static let ema50 = adaptive(light: 0xDE812A, dark: 0xF5A623)
+    static let sma = adaptive(light: 0x8657BE, dark: 0xB57CFF)
+    static let wma = adaptive(light: 0x188B6F, dark: 0x4CD6A7)
 
     static func movement(_ change: Double?) -> Color {
         guard let change else { return muted }
@@ -20,7 +41,6 @@ enum MarketPalette {
         return muted
     }
 }
-
 struct LightMarketView: View {
     private enum Scope: String, CaseIterable {
         case favorites = "自选"
@@ -34,6 +54,7 @@ struct LightMarketView: View {
     @State private var scope: Scope = .favorites
     @State private var search = ""
     @State private var editing = false
+    @State private var showingSettings = false
     @State private var selectedCategory = "全部"
     @State private var sortBy = "默认"
     @State private var onDemandQuotes: [String: MarketDataService.MainContract] = [:]
@@ -197,8 +218,10 @@ struct LightMarketView: View {
                 }
             }
         }
-        .preferredColorScheme(.light)
         .tint(MarketPalette.accent)
+        .sheet(isPresented: $showingSettings) {
+            AppearanceSettingsView()
+        }
     }
 
     private var header: some View {
@@ -221,6 +244,17 @@ struct LightMarketView: View {
                     .foregroundStyle(MarketPalette.muted)
             }
             .padding(.bottom, 4)
+            Button {
+                showingSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(MarketPalette.ink)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("设置与外观")
         }
         .padding(.horizontal, 19)
         .padding(.top, 14)

@@ -15,7 +15,7 @@ struct MarketHomeView: View {
     private var instruments: [FuturesInstrument] {
         favorites.ids.compactMap { id in FuturesInstrument.catalog.first { $0.id == id } }
     }
-    private let yellow = Color(red: 1, green: 0.82, blue: 0.02)
+    private let yellow = MarketPalette.ink
     private let pinnedWidth: CGFloat = 106
     private let rowHeight: CGFloat = 34
     private let headerHeight: CGFloat = 36
@@ -75,7 +75,7 @@ struct MarketHomeView: View {
                                                 deleteID = nil
                                             } label: {
                                                 Text("取消")
-                                                    .foregroundStyle(.white)
+                                                    .foregroundStyle(MarketPalette.ink)
                                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                                                     .contentShape(Rectangle())
                                             }
@@ -91,7 +91,7 @@ struct MarketHomeView: View {
                                             .accessibilityLabel("删除自选")
                                         }
                                         .buttonStyle(.plain)
-                                        .background(.black)
+                                        .background(MarketPalette.raised)
                                     }
                                 }
                                 .frame(height: rowHeight)
@@ -124,11 +124,10 @@ struct MarketHomeView: View {
                 }
 
             }
-            .background(Color.black.ignoresSafeArea())
+            .background(MarketPalette.background.ignoresSafeArea())
             .navigationDestination(item: $destination) { InstrumentDetailView(instrument: $0) }
             .toolbar(.hidden, for: .navigationBar)
         }
-        .preferredColorScheme(.dark)
     }
 
     private var pinnedHeader: some View {
@@ -140,7 +139,7 @@ struct MarketHomeView: View {
                 .frame(width: 25)
         }
         .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(.white)
+        .foregroundStyle(MarketPalette.ink)
         .padding(.leading, 0)
         .padding(.trailing, 4)
         .frame(width: pinnedWidth, height: headerHeight)
@@ -156,7 +155,7 @@ struct MarketHomeView: View {
             }
         }
         .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(.white)
+        .foregroundStyle(MarketPalette.ink)
         .frame(width: quoteWidth, height: headerHeight, alignment: .leading)
         .overlay(alignment: .bottom) { rowDivider }
     }
@@ -212,16 +211,16 @@ struct MarketHomeView: View {
     private func quoteColor(_ item: FuturesInstrument, _ column: String) -> Color {
         if column == "最新" || column == "涨幅%" || column == "涨跌额" {
             let change = contracts[item.id]?.change ?? 0
-            if change > 0 { return .red }
-            if change < 0 { return .green }
-            return .white
+            if change > 0 { return MarketPalette.up }
+            if change < 0 { return MarketPalette.down }
+            return MarketPalette.ink
         }
-        return .white.opacity(0.8)
+        return MarketPalette.muted
     }
 
     private var rowDivider: some View {
         Rectangle()
-            .fill(.white.opacity(0.075))
+            .fill(MarketPalette.divider.opacity(0.75))
             .frame(height: 0.5)
     }
 }

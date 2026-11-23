@@ -2,9 +2,9 @@ import SwiftUI
 import Charts
 
 private enum ChartInk {
-    static let up = Color(red: 1, green: 0, blue: 0)
-    static let down = Color(red: 0, green: 252.0 / 255, blue: 252.0 / 255)
-    static let slow = Color(red: 1, green: 1, blue: 0)
+    static let up = MarketPalette.up
+    static let down = MarketPalette.down
+    static let slow = MarketPalette.ema50
 }
 
 struct InstrumentDetailView: View {
@@ -101,7 +101,6 @@ struct InstrumentDetailView: View {
         }
         .background(MarketPalette.surface.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .preferredColorScheme(.light)
         .task(id: chartKey + (scenePhase == .active ? "/active" : "/paused")) {
             guard scenePhase == .active else { return }
             await loadCandles(reset: displayedKey != chartKey)
@@ -248,7 +247,7 @@ struct InstrumentDetailView: View {
                 .lineLimit(1)
             Text(selectedContract?.code ?? quote?.code ?? (instrument.id + " 主连"))
                 .font(.system(size: 10))
-                .foregroundStyle(.gray)
+                .foregroundStyle(MarketPalette.muted)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Spacer(minLength: 1)
@@ -309,16 +308,16 @@ struct InstrumentDetailView: View {
                     RuleMark(x: .value("序号", i), yStart: .value("低", c.low), yEnd: .value("高", c.high))
                         .foregroundStyle(Color.clear)
                     if showIndicators {
-                        LineMark(x:.value("序号",i),y:.value("EMA20",c.ema20),series:.value("均线","EMA20")).foregroundStyle(.white).lineStyle(StrokeStyle(lineWidth:1.4))
+                        LineMark(x:.value("序号",i),y:.value("EMA20",c.ema20),series:.value("均线","EMA20")).foregroundStyle(MarketPalette.ink).lineStyle(StrokeStyle(lineWidth:1.4))
                         LineMark(x:.value("序号",i),y:.value("EMA50",c.ema50),series:.value("均线","EMA50")).foregroundStyle(ChartInk.slow).lineStyle(StrokeStyle(lineWidth:1.4))
                     }
                 }
                 if let index = selectedCandleIndex, candles.indices.contains(index) {
                     RuleMark(x: .value("十字时间", index))
-                        .foregroundStyle(.white.opacity(0.65))
+                        .foregroundStyle(MarketPalette.muted.opacity(0.8))
                         .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
                     RuleMark(y: .value("十字价格", candles[index].close))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(MarketPalette.muted.opacity(0.7))
                         .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
                 }
             }
@@ -329,15 +328,15 @@ struct InstrumentDetailView: View {
                 AxisMarks(values: .automatic(desiredCount: 3)) { value in
                     AxisValueLabel {
                         if let index = value.as(Int.self) {
-                            Text(timeLabel(index)).font(.system(size: 9)).foregroundStyle(.gray)
+                            Text(timeLabel(index)).font(.system(size: 9)).foregroundStyle(MarketPalette.muted)
                         }
                     }
                 }
             }
             .chartYAxis {
                 AxisMarks(position: .trailing) { _ in
-                    AxisValueLabel().foregroundStyle(.white.opacity(0.7))
-                    AxisGridLine().foregroundStyle(.white.opacity(0.075))
+                    AxisValueLabel().foregroundStyle(MarketPalette.muted)
+                    AxisGridLine().foregroundStyle(MarketPalette.divider.opacity(0.7))
                 }
             }
             .frame(height:height - 28)
@@ -433,7 +432,7 @@ struct InstrumentDetailView: View {
                               let open = proxy.position(forY: bar.open),
                               let close = proxy.position(forY: bar.close) else { continue }
                         let top = min(open, close), bottom = max(open, close)
-                        let tint: Color = bar.close == bar.open ? .white : (bar.close > bar.open ? ChartInk.up : ChartInk.down)
+                        let tint: Color = bar.close == bar.open ? MarketPalette.ink : (bar.close > bar.open ? ChartInk.up : ChartInk.down)
                         var lines = Path()
                         lines.move(to: CGPoint(x: x, y: high))
                         lines.addLine(to: CGPoint(x: x, y: top))
@@ -463,7 +462,7 @@ struct InstrumentDetailView: View {
 
     private func selectedCandleInfo(_ candle: DemoCandle, index: Int) -> some View {
         HStack(spacing: 5) {
-            Text(timeLabel(index)).foregroundStyle(.gray)
+            Text(timeLabel(index)).foregroundStyle(MarketPalette.muted)
             Text("开" + candle.open.formatted())
             Text("高" + candle.high.formatted())
             Text("低" + candle.low.formatted())
@@ -508,20 +507,20 @@ struct InstrumentDetailView: View {
 
     private func macdPanel(height: CGFloat) -> some View {
         VStack(alignment:.leading,spacing:3) {
-            HStack { Text("MACD(12,26,9)").foregroundStyle(ChartInk.slow).font(.system(size: 10, weight: .medium)); Spacer(); Text("DIF").foregroundStyle(.white); Text("DEA").foregroundStyle(ChartInk.slow) }.foregroundStyle(.white.opacity(0.65)).font(.system(size: 10))
+            HStack { Text("MACD(12,26,9)").foregroundStyle(ChartInk.slow).font(.system(size: 10, weight: .medium)); Spacer(); Text("DIF").foregroundStyle(MarketPalette.ink); Text("DEA").foregroundStyle(ChartInk.slow) }.foregroundStyle(MarketPalette.muted.opacity(0.8)).font(.system(size: 10))
             GeometryReader { geometry in
                 let barWidth = max(0.5, geometry.size.width / CGFloat(max(1, visibleCount - 1)) * 0.26)
                 Chart {
                     ForEach(window, id: \.self) { i in
                     let c = candles[i]
                         BarMark(x:.value("序号",i),y:.value("MACD",c.hist),width:.fixed(barWidth)).foregroundStyle(c.hist >= 0 ? ChartInk.up : ChartInk.down)
-                        LineMark(x:.value("序号",i),y:.value("DIF",c.dif),series:.value("MACD线","DIF")).foregroundStyle(.white).lineStyle(StrokeStyle(lineWidth:1.2))
+                        LineMark(x:.value("序号",i),y:.value("DIF",c.dif),series:.value("MACD线","DIF")).foregroundStyle(MarketPalette.ink).lineStyle(StrokeStyle(lineWidth:1.2))
                         LineMark(x:.value("序号",i),y:.value("DEA",c.dea),series:.value("MACD线","DEA")).foregroundStyle(ChartInk.slow).lineStyle(StrokeStyle(lineWidth:1.2))
                     }
-                    RuleMark(y:.value("零轴",0)).foregroundStyle(.white.opacity(0.10))
+                    RuleMark(y:.value("零轴",0)).foregroundStyle(MarketPalette.divider)
                     if let index = selectedCandleIndex, candles.indices.contains(index) {
                         RuleMark(x: .value("选中时间", index))
-                            .foregroundStyle(.white.opacity(0.55))
+                            .foregroundStyle(MarketPalette.muted.opacity(0.8))
                             .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
                     }
                 }.chartYScale(domain: macdDomain).chartXScale(domain: visibleDomain).chartXAxis(.hidden).chartYAxis(.hidden)
@@ -558,7 +557,7 @@ struct InstrumentDetailView: View {
 
     private func smallQuote(_ label: String, _ value: String, _ tint: Color) -> some View {
         HStack(spacing: 2) {
-            Text(label).foregroundStyle(.gray)
+            Text(label).foregroundStyle(MarketPalette.muted)
             Spacer(minLength: 1)
             Text(value).foregroundStyle(tint)
         }

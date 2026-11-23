@@ -72,9 +72,16 @@ struct ProfessionalChartHost: View {
         value.grid = MarketPalette.divider.opacity(0.55)
         value.axisLabel = MarketPalette.muted
         value.crosshair = MarketPalette.ink.opacity(0.65)
-        value.indicatorPalette = [.orange, MarketPalette.accent, .orange, MarketPalette.accent]
+        value.line = MarketPalette.accent
+        value.currentPriceLine = MarketPalette.accent.opacity(0.65)
+        value.priceBadgeBackground = MarketPalette.accent
+        value.priceBadgeText = .white
+        value.indicatorPalette = [MarketPalette.sma, MarketPalette.ema20,
+                                  MarketPalette.ema50, MarketPalette.wma]
         value.paneSeparator = MarketPalette.divider
-        value.tooltipBackground = .white.opacity(0.97)
+        value.crosshairLabelBackground = MarketPalette.raised
+        value.crosshairLabelText = MarketPalette.ink
+        value.tooltipBackground = MarketPalette.raised.opacity(0.98)
         value.tooltipText = MarketPalette.ink
         value.legendText = MarketPalette.ink
         value.legendLabel = MarketPalette.muted

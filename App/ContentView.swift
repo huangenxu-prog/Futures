@@ -24,6 +24,7 @@ extension EnvironmentValues {
 
 struct ContentView: View {
     @StateObject private var favorites = Favorites()
+    @AppStorage("qihui.appearance.mode.v1") private var appearanceMode = AppAppearanceMode.dark.rawValue
     @Environment(\.scenePhase) private var scenePhase
     @State private var contracts = savedIdentities()
     @State private var catalog = savedCatalog()
@@ -45,7 +46,7 @@ struct ContentView: View {
     var body: some View {
         // Read-only professional market terminal. No account or order screens.
         LightMarketView()
-            .preferredColorScheme(.light)
+            .preferredColorScheme(AppAppearanceMode(rawValue: appearanceMode)?.colorScheme ?? .dark)
             .environment(\.mainContracts, contracts)
             .environment(\.futuresCatalog, catalog)
             .environmentObject(favorites)

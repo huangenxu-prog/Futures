@@ -63,10 +63,11 @@ struct ContractListView: View {
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                     .refreshable { await load() }
                 }
             }
-            .background(MarketPalette.background)
+            .background(MarketPalette.background.ignoresSafeArea())
             .navigationTitle(instrument.name + " · 交割月份")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -77,7 +78,6 @@ struct ContractListView: View {
             .task { await load() }
         }
         .tint(MarketPalette.accent)
-        .preferredColorScheme(.light)
     }
 
     @MainActor
