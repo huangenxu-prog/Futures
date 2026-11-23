@@ -95,10 +95,39 @@ enum MarketDataService {
         }
     }
 
+    struct ContractQuote: Decodable, Identifiable {
+        let code: String
+        let month: String
+        let last, settlement, bid, ask, volume, interest, priceTick, volumeMultiple: Double?
+        let time: String?
+        var id: String { code }
+
+        var change: Double? {
+            guard let last, let settlement, settlement > 0 else { return nil }
+            return last - settlement
+        }
+        var changePercent: String {
+            guard let change, let settlement else { return "--" }
+            return String(format: "%+.2f%%", change / settlement * 100)
+        }
+    }
+
+    static func listedContracts(for product: String) async throws -> [ContractQuote] {
+        let url = try baseURL().appendingPathComponent("v1/contracts")
+            .appending(queryItems: [URLQueryItem(name: "product", value: product)])
+        let (data, response) = try await URLSession.shared.data(
+            for: URLRequest(url: url, timeoutInterval: 35)
+        )
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw MarketDataError.invalidResponse
+        }
+        return try JSONDecoder().decode([ContractQuote].self, from: data)
+    }
+
     struct OptionQuote: Decodable, Identifiable {
         let code, side: String
         let strike: Double
-        let last, ask, bid: Double?
+        let last, ask, bid, volume, interest: Double?
         var id: String { code }
     }
 
