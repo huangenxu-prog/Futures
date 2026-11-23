@@ -1,6 +1,6 @@
 import Foundation
 
-struct MarketBar: Codable {
+struct MarketBar: Codable, Equatable {
     let time: Int64
     let open: Double
     let high: Double
@@ -168,6 +168,31 @@ enum MarketDataService {
                 URLQueryItem(name: "count", value: String(count))
             ])
         try await events(from: url, onEvent: onEvent)
+    }
+
+    /// Returns candles strictly older than `before`. The server progressively
+    /// widens the TqSdk rolling window; no fabricated historical candles.
+    static func fetchOlder(
+        symbol: String, period: Int, before: Int64,
+        count: Int = 300, depth: Int = 1100
+    ) async throws -> [MarketBar] {
+        let url = try baseURL().appendingPathComponent("v1/history")
+            .appending(queryItems: [
+                URLQueryItem(name: "symbol", value: symbol),
+                URLQueryItem(name: "period", value: String(period)),
+                URLQueryItem(name: "before", value: String(before)),
+                URLQueryItem(name: "count", value: String(count)),
+                URLQueryItem(name: "depth", value: String(depth))
+            ])
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 35
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw MarketDataError.invalidResponse
+        }
+        let result = try JSONDecoder().decode(KlineResponse.self, from: data)
+        guard result.symbol == symbol else { throw MarketDataError.invalidResponse }
+        return result.bars.filter { $0.time < before }.sorted { $0.time < $1.time }
     }
 
     static func fetch(symbol: String, period: Int, count: Int = 100) async throws -> [MarketBar] {
