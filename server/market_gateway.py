@@ -235,12 +235,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
-        self.wfile.write(b": connected\\n\\n")
+        self.wfile.write(b": connected\n\n")
         self.wfile.flush()
 
     def push_event(self, payload):
         data = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        self.wfile.write(b"data: " + data.encode("utf-8") + b"\\n\\n")
+        self.wfile.write(b"data: " + data.encode("utf-8") + b"\n\n")
         self.wfile.flush()
 
     def stream_quotes(self):
@@ -260,7 +260,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.push_event(data)
                     last_version = version
                 else:
-                    self.wfile.write(b": heartbeat\\n\\n")
+                    self.wfile.write(b": heartbeat\n\n")
                     self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
@@ -282,13 +282,14 @@ class Handler(BaseHTTPRequestHandler):
             previous = None
             last_full = 0.0
             last_sent = 0.0
+            pending = False
             last_heartbeat = time.monotonic()
             while True:
                 updated = api.wait_update(deadline=time.time() + 0.3)
                 now = time.monotonic()
                 # Stream a full frame initially and periodically, then lightweight current-bar changes.
-                changed = updated and api.is_changing(serial)
-                if (previous is None or changed or now - last_full >= 60) and now - last_sent >= 0.2:
+                pending = pending or (updated and api.is_changing(serial))
+                if (previous is None or pending or now - last_full >= 60) and now - last_sent >= 0.2:
                     bars = bars_from_serial(serial)
                     if bars:
                         latest = bars[-1]
@@ -298,12 +299,14 @@ class Handler(BaseHTTPRequestHandler):
                         elif latest != previous:
                             self.push_event({"symbol": symbol, "bar": latest})
                         else:
+                            pending = False
                             continue
                         previous = latest
+                        pending = False
                         last_sent = now
                         last_heartbeat = now
                 if now - last_heartbeat >= 12:
-                    self.wfile.write(b": heartbeat\\n\\n")
+                    self.wfile.write(b": heartbeat\n\n")
                     self.wfile.flush()
                     last_heartbeat = now
         except (BrokenPipeError, ConnectionResetError, OSError):
