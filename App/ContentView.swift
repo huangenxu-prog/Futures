@@ -25,19 +25,10 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var detailVisible = false
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Color.black.ignoresSafeArea()
-            Group {
-                switch selectedTab {
-                case 0: MarketHomeView()
-                case 1: SearchView()
-                default: ProfileView()
-                }
-            }
-            .safeAreaPadding(.bottom, detailVisible ? 0 : 88)
-            if !detailVisible { GlassTabBar(selection: $selectedTab) }
-        }
-        .preferredColorScheme(.dark)
+        // A single market list leads to the full professional chart.
+        // Keep the existing quote stream, cache, and other legacy screens intact.
+        LightMarketView()
+            .preferredColorScheme(.light)
         .environment(\.mainContracts, contracts)
         .environmentObject(favorites)
         .task(id: scenePhase) {
