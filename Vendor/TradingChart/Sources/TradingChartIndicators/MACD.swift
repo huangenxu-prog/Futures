@@ -4,7 +4,9 @@ import TradingChartCore
 /// Moving Average Convergence Divergence, in its own pane.
 ///
 /// Computed from close prices by ``IndicatorMath/macd(_:fast:slow:signal:)``: the MACD line is `EMA(fast) - EMA(slow)`,
-/// the signal line is the EMA of the MACD line, and the histogram is their difference. Histogram bars are
+/// the signal line is the EMA of the MACD line, and the histogram uses the
+/// domestic futures convention `2 * (DIFF - DEA)` (rather than the international
+/// convention `DIFF - DEA`). Histogram bars are
 /// `.positive` above zero, `.negative` below zero and `.neutral` at exactly zero.
 /// The output has two lines (`<id>.macd`, `<id>.signal`) and one histogram (`<id>.histogram`) around a `0` baseline.
 /// The signal line uses palette slot 1, so the two lines get different colors when neither has an explicit one.
@@ -46,7 +48,7 @@ public struct MACD: ChartIndicator {
     /// Always `IndicatorPlacement.pane`.
     public var placement: IndicatorPlacement { .pane }
 
-    /// Computes the lines and the histogram over the close prices.
+    /// Computes the lines and domestic doubled MACD histogram over close prices.
     public func calculate(_ input: IndicatorInput) -> IndicatorOutput {
         let result = IndicatorMath.macd(input.values(.close), fast: fast, slow: slow, signal: signal)
         let times = input.candles.map(\.time)
@@ -54,27 +56,32 @@ public struct MACD: ChartIndicator {
         var bars: [HistogramBar] = []
         for (time, value) in zip(times, result.histogram) {
             guard let value else { continue }
-            let tone: HistogramTone = value > 0 ? .positive : (value < 0 ? .negative : .neutral)
-            bars.append(HistogramBar(time: time, value: value, tone: tone))
+            // The library calculates the international 1x histogram.
+            // Chinese commodity futures (e.g. Wenhua) show twice the
+            // difference. Only the display histogram is scaled; both
+            // oscillator lines retain the exact same EMA calculations.
+            let stick = 2 * value
+            let tone: HistogramTone = stick > 0 ? .positive : (stick < 0 ? .negative : .neutral)
+            bars.append(HistogramBar(time: time, value: stick, tone: tone))
         }
 
         return IndicatorOutput(
             lines: [
                 IndicatorLine(
                     id: "\(id).macd",
-                    name: "MACD",
+                    name: "DIFF",
                     values: definedValues(result.macd, times: times),
                     style: macdStyle
                 ),
                 IndicatorLine(
                     id: "\(id).signal",
-                    name: "Signal",
+                    name: "DEA",
                     values: definedValues(result.signal, times: times),
                     style: signalStyle,
                     paletteSlot: 1
                 ),
             ],
-            histograms: [IndicatorHistogram(id: "\(id).histogram", name: "Histogram", bars: bars)]
+            histograms: [IndicatorHistogram(id: "\(id).histogram", name: "MACD柱", bars: bars)]
         )
     }
 }
