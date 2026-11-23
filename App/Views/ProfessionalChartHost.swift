@@ -15,11 +15,14 @@ struct ProfessionalChartHost: View {
     @State private var model: TradingChartModel = {
         var configuration = TradingChartConfiguration()
         configuration.viewport.candleVisibleBars = 52
-        // Previous 6-bar right gap consumed too much chart width on iPhone.
-        // Leave only a small breathing room; the chart engine still adds
-        // enough space if the live-price badge would cover the last candle.
-        configuration.viewport.trailingPaddingBars = 1.25
-        configuration.viewport.maxTrailingPaddingFraction = 0.06
+        // Keep the newest candle immediately before the price axis, like
+        // a dense futures terminal. Preserve a fraction of one bar as breathing room.
+        // With the large live-price badge disabled there is no badge-overhang
+        // requirement forcing several extra bars of blank space.
+        configuration.viewport.trailingPaddingBars = 0.7
+        configuration.viewport.maxTrailingPaddingFraction = 0.04
+        configuration.showsPriceBadge = false
+        configuration.showsCurrentPriceLine = true
         configuration.paneHeight = 110
         configuration.maxLiveBarCount = nil
         configuration.showsLegend = true
@@ -81,10 +84,11 @@ struct ProfessionalChartHost: View {
         value.currentPriceLine = MarketPalette.accent.opacity(0.65)
         value.priceBadgeBackground = MarketPalette.accent
         value.priceBadgeText = .white
-        // Compact the live price marker without removing the useful
-        // tap-to-latest affordance when viewing older candles.
-        value.priceBadgeFont = .system(size: 10, weight: .semibold, design: .monospaced)
-        value.yAxisLabelWidth = 64
+        // The old 64pt dedicated price-label column swallowed too much of
+        // the iPhone chart; 32pt still fits numbers like 5,150 at axis font 9.
+        // The price is already readable in the contract header and quote strip.
+        value.axisFont = .system(size: 9, weight: .medium)
+        value.yAxisLabelWidth = 32
         value.indicatorPalette = [MarketPalette.sma, MarketPalette.ema20,
                                   MarketPalette.ema50, MarketPalette.wma]
         value.paneSeparator = MarketPalette.divider
@@ -105,6 +109,21 @@ struct ProfessionalChartHost: View {
                 .frame(maxHeight: .infinity)
             HStack(spacing: 6) {
                 indicatorToolbar
+                // Replaces the badge's historical-window jump action without
+                // covering the last candle or reserving chart width for it.
+                if !model.isAtLiveEdge {
+                    Button {
+                        model.scrollToLiveEdge()
+                    } label: {
+                        Image(systemName: "arrow.right.to.line.compact")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(MarketPalette.accent)
+                            .frame(width: 28, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("回到最新K线")
+                }
                 drawingMenu
             }
             .padding(.horizontal, 6)
