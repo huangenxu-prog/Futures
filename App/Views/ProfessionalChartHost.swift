@@ -8,9 +8,14 @@ struct ProfessionalChartHost: View {
     let symbol: String
     let period: Int
     let bars: [MarketBar]
-    let showEMA: Bool
-    let showVolume: Bool
     @Binding var selectedCandleTime: Int64?
+
+
+    private static let indicatorCatalog: [any ChartIndicator] = [
+        SMA(period: 20), EMA(period: 20), EMA(period: 50),
+        WMA(period: 20), BollingerBands(period: 20, multiplier: 2),
+        Volume(), MACD(fast: 12, slow: 26, signal: 9), RSI(period: 14)
+    ]
 
     @State private var model: TradingChartModel = {
         var configuration = TradingChartConfiguration()
@@ -19,15 +24,24 @@ struct ProfessionalChartHost: View {
         configuration.maxLiveBarCount = nil
         configuration.showsLegend = true
         configuration.showsHighLowMarkers = true
-        configuration.stylePicker = nil
-        configuration.isDrawingEnabled = false
+        configuration.stylePicker = StylePickerOptions()
+        configuration.isDrawingEnabled = true
         configuration.isCrosshairEnabled = true
         configuration.isZoomEnabled = true
         configuration.historyPrefetchThreshold = .visibleWindows(1)
-        return TradingChartModel(style: .candles, configuration: configuration)
+        // Build defaults before restoring the user's saved preferences.
+        let chart = TradingChartModel(style: .candles, configuration: configuration)
+        chart.indicators = [EMA(period: 20), EMA(period: 50), Volume(), MACD()]
+        configuration.persistence = ChartPersistence(
+            key: "qihui.chart.indicators-and-style",
+            indicatorCatalog: ProfessionalChartHost.indicatorCatalog
+        )
+        chart.configuration = configuration
+        return chart
     }()
 
     @State private var sessionAxis = TradingSessionAxis()
+    @State private var drawingsRestored = false
     @State private var historyDepth = 1100
     @State private var historyTask: Task<Void, Never>?
 
@@ -70,33 +84,79 @@ struct ProfessionalChartHost: View {
     }
 
     var body: some View {
-        TradingChartView(model: model)
-            .tradingChartTheme(theme)
-            .tradingChartTimeFormatter(chartTimeFormatter)
+        VStack(spacing: 0) {
+            TradingChartView(model: model)
+                .frame(maxHeight: .infinity)
+            HStack(spacing: 6) {
+                IndicatorBar(model: model, catalog: Self.indicatorCatalog)
+                drawingMenu
+            }
+            .padding(.horizontal, 6)
             .background(MarketPalette.surface)
-            .onAppear {
-                configureChart()
-                synchronizeBars(previous: [], incoming: bars)
+        }
+        .tradingChartTheme(theme)
+        .tradingChartTimeFormatter(chartTimeFormatter)
+        .background(MarketPalette.surface)
+        .onAppear {
+            configureChart()
+            synchronizeBars(previous: [], incoming: bars)
+        }
+        .onChange(of: bars) { previous, incoming in
+            synchronizeBars(previous: previous, incoming: incoming)
+        }
+        .onDisappear {
+            model.onEvent = nil
+            historyTask?.cancel()
+            historyTask = nil
+            model.activeDrawingTool = nil
+        }
+    }
+
+    private var drawingMenu: some View {
+        Menu {
+            Section("画线工具") {
+                Button("水平线", systemImage: "minus") { choose(.horizontalLine) }
+                Button("趋势线", systemImage: "chart.line.uptrend.xyaxis") { choose(.trendLine) }
+                Button("射线", systemImage: "arrow.up.right") { choose(.ray) }
             }
-            .onChange(of: bars) { previous, incoming in
-                synchronizeBars(previous: previous, incoming: incoming)
+            if model.activeDrawingTool != nil {
+                Button("取消画线", systemImage: "xmark") { model.activeDrawingTool = nil }
             }
-            .onChange(of: showEMA) { _, _ in applyIndicators() }
-            .onChange(of: showVolume) { _, _ in applyIndicators() }
-            .onDisappear {
-                model.onEvent = nil
-                historyTask?.cancel()
-                historyTask = nil
+            if model.selectedDrawingID != nil {
+                Button("删除选中画线", systemImage: "trash", role: .destructive) {
+                    model.deleteSelectedDrawing()
+                }
             }
+            if !model.drawings.isEmpty {
+                Button("清空当前合约画线", systemImage: "trash.slash", role: .destructive) {
+                    model.removeAllDrawings()
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: model.activeDrawingTool == nil ? "pencil.tip" : "pencil.tip.crop.circle.badge.plus")
+                Text("画线")
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(model.activeDrawingTool == nil ? MarketPalette.ink : MarketPalette.accent)
+            .padding(.horizontal, 5)
+            .frame(height: 32)
+        }
+        .accessibilityLabel("图表画线工具")
+    }
+
+    private func choose(_ tool: DrawingKind) {
+        model.activeDrawingTool = model.activeDrawingTool == tool ? nil : tool
     }
 
     @MainActor
     private func configureChart() {
-        applyIndicators()
         model.onEvent = { event in
             switch event {
             case .crosshairChanged(let state):
                 selectedCandleTime = state.flatMap { sessionAxis.actualTime(for: $0.time) }
+            case .drawing:
+                saveDrawings()
             case .approachedHistoryStart:
                 guard historyTask == nil else { return }
                 historyTask = Task { @MainActor in
@@ -110,24 +170,13 @@ struct ProfessionalChartHost: View {
     }
 
     @MainActor
-    private func applyIndicators() {
-        var indicators: [any ChartIndicator] = []
-        if showEMA {
-            indicators.append(EMA(period: 20))
-            indicators.append(EMA(period: 50))
-        }
-        if showVolume {
-            indicators.append(Volume())
-        } else {
-            indicators.append(MACD(fast: 12, slow: 26, signal: 9))
-        }
-        model.indicators = indicators
-    }
-
-    @MainActor
     private func synchronizeBars(previous: [MarketBar], incoming: [MarketBar]) {
         guard !incoming.isEmpty else { return }
         sessionAxis.register(incoming.map(\.time), period: period)
+        if !drawingsRestored {
+            restoreDrawings()
+            drawingsRestored = true
+        }
         let requiresReset = model.series.isEmpty
             || incoming.count < previous.count
             || previous.first?.time != incoming.first?.time
@@ -155,6 +204,46 @@ struct ProfessionalChartHost: View {
                    ?? Date(timeIntervalSince1970: Double(bar.time)),
                open: bar.open, high: bar.high, low: bar.low, close: bar.close,
                volume: Double(bar.volume))
+    }
+
+    // Unlike chart indicator settings, drawing anchors must be stored with real
+    // exchange timestamps. The chart uses synthetic, gap-free X coordinates.
+    private var drawingsStorageKey: String {
+        "qihui.real-time-drawings." + symbol + "." + String(period)
+    }
+
+    @MainActor
+    private func saveDrawings() {
+        let physical: [ChartDrawing] = model.drawings.compactMap { drawing in
+            var copy = drawing
+            let anchors = drawing.anchors.compactMap { anchor -> ChartAnchor? in
+                guard let real = sessionAxis.nearestActual(for: anchor.time) else { return nil }
+                return ChartAnchor(time: Date(timeIntervalSince1970: Double(real)), price: anchor.price)
+            }
+            guard anchors.count == drawing.anchors.count else { return nil }
+            copy.anchors = anchors
+            return copy
+        }
+        if let data = try? JSONEncoder().encode(physical) {
+            UserDefaults.standard.set(data, forKey: drawingsStorageKey)
+        }
+    }
+
+    @MainActor
+    private func restoreDrawings() {
+        guard let data = UserDefaults.standard.data(forKey: drawingsStorageKey),
+              let saved = try? JSONDecoder().decode([ChartDrawing].self, from: data) else { return }
+        model.drawings = saved.compactMap { drawing in
+            var copy = drawing
+            let anchors = drawing.anchors.compactMap { anchor -> ChartAnchor? in
+                let real = Int64(anchor.time.timeIntervalSince1970)
+                guard let mapped = sessionAxis.chartTime(for: real) else { return nil }
+                return ChartAnchor(time: mapped, price: anchor.price)
+            }
+            guard anchors.count == drawing.anchors.count else { return nil }
+            copy.anchors = anchors
+            return copy
+        }
     }
 
     @MainActor
