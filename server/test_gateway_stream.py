@@ -51,6 +51,7 @@ class GatewayStreamingTests(unittest.TestCase):
             self.assertEqual(hub.snapshot("CZCE.MA701", 900, 2), rows)
         self.assertEqual(sdk.call_count, 0)
         self.assertEqual(start.call_count, 2)
+        self.assertEqual(hub.entries[key]["waiters"], 0)
 
     def test_bounded_kline_subscriptions_preserve_active_streams(self):
         hub = gateway.SharedKlineHub(max_series=2)
@@ -58,7 +59,7 @@ class GatewayStreamingTests(unittest.TestCase):
             a = hub.reserve("CZCE.MA701", 900, listener=True)
             b = hub.reserve("CZCE.SR701", 900)
             hub.publish(a, [{"time": 100}])
-            hub.reserve("SHFE.rb2701", 900)
+            c = hub.reserve("SHFE.rb2701", 900, listener=True)
         self.assertIn(a, hub.entries)
         self.assertNotIn(b, hub.entries)
         self.assertNotIn(b, hub.cache)
@@ -67,6 +68,7 @@ class GatewayStreamingTests(unittest.TestCase):
             with self.assertRaises(gateway.KlineCapacityError):
                 hub.reserve("DCE.m2701", 900, listener=True)
         hub.release(a, listener=True)
+        hub.release(c, listener=True)
 
     def test_kline_endpoint_reads_shared_cache_not_new_sdk(self):
         output = []

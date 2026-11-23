@@ -526,10 +526,13 @@ class SharedKlineHub:
                         targets = list(self.entries.keys())
                     for key in targets:
                         if key not in installed:
-                            # Never call the non-thread-safe TqApi from an HTTP
-                            # request thread. All dynamic subscriptions live here.
+                            # Subscribe one new series per loop. Some TqSdk
+                            # versions wait for an initial frame inside this
+                            # call: an entire batch would freeze older streams.
+                            # All non-thread-safe API calls stay on this worker.
                             installed[key] = api.get_kline_serial(
                                 key[0], key[1], data_length=KLINE_DATA_LENGTH)
+                            break
                     updated = api.wait_update(deadline=time.time() + 0.3)
                     for key in targets:
                         serial = installed.get(key)
