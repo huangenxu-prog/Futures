@@ -19,6 +19,7 @@ struct InstrumentDetailView: View {
     @State private var period = "15分"
     @State private var candles: [DemoCandle] = []
     @State private var rawBars: [MarketBar] = []
+    @State private var selectedCandleTime: Int64? = nil
     @State private var loadError: String? = nil
     @State private var loading = false
     @State private var showingCachedData = false
@@ -65,8 +66,7 @@ struct InstrumentDetailView: View {
     var body: some View {
         GeometryReader { geometry in
             let quoteHeight: CGFloat = 62
-            let macdHeight = min(128, geometry.size.height * 0.16)
-            let candleHeight = max(32, geometry.size.height - 43 - quoteHeight - macdHeight - 11)
+            let professionalChartHeight = max(32, geometry.size.height - 43 - quoteHeight - 18 - 11)
             VStack(spacing: 3) {
                 topBar
                 indicatorRow
@@ -78,9 +78,14 @@ struct InstrumentDetailView: View {
                     Spacer()
                     Text(loadError).font(.caption).foregroundStyle(.orange)
                     Spacer()
-                } else if !candles.isEmpty && displayedKey == chartKey {
-                    candleChart(height: candleHeight)
-                    if volumePanel { volumeChart(height: macdHeight) } else { macdPanel(height: macdHeight) }
+                } else if !rawBars.isEmpty && displayedKey == chartKey {
+                    ProfessionalChartHost(
+                        symbol: chartSymbol, period: periodSeconds, bars: rawBars,
+                        showEMA: showIndicators, showVolume: volumePanel,
+                        selectedCandleTime: $selectedCandleTime
+                    )
+                    .id(chartKey)
+                    .frame(height: professionalChartHeight)
                 } else {
                     Spacer()
                 }
@@ -89,10 +94,6 @@ struct InstrumentDetailView: View {
             .padding(.horizontal, 3)
             .padding(.top, 2)
         }
-        .simultaneousGesture(TapGesture().onEnded {
-            selectedCandleIndex = nil
-            crosshairActive = false
-        })
         .background(Color.black.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .preferredColorScheme(.dark)
@@ -134,6 +135,7 @@ struct InstrumentDetailView: View {
         if reset {
             if let cached = MarketDataService.cached(symbol: symbol, period: requestedPeriod) {
                 rawBars = cached
+                selectedCandleTime = nil
                 candles = DemoCandle.from(cached)
                 visibleCount = Double(min(100, candles.count))
                 visibleStart = Double(max(0, candles.count - Int(visibleCount)))
@@ -143,6 +145,7 @@ struct InstrumentDetailView: View {
             } else {
                 candles = []
                 rawBars = []
+                selectedCandleTime = nil
                 selectedCandleIndex = nil
                 crosshairActive = false
                 showingCachedData = false
@@ -282,7 +285,8 @@ struct InstrumentDetailView: View {
     }
     private var indicatorRow: some View {
             HStack(spacing: 5) {
-                if let index = selectedCandleIndex, candles.indices.contains(index) {
+                if let timestamp = selectedCandleTime,
+                   let index = candles.firstIndex(where: { $0.time == timestamp }) {
                     selectedCandleInfo(candles[index], index: index)
                 } else if showIndicators {
                     Text("EMA20").foregroundStyle(.white)
