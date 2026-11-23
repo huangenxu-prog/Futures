@@ -26,8 +26,8 @@ class GatewayStreamingTests(unittest.TestCase):
         self.assertEqual(hub.version, 1)
         hub.publish(dict(first))
         self.assertEqual(hub.version, 1)
-        first["CZCE.SR"]["last"] = 5025.0
-        hub.publish(first)
+        changed = {"CZCE.SR": {**first["CZCE.SR"], "last": 5025.0}}
+        hub.publish(changed)
         self.assertEqual(hub.version, 2)
 
     def test_sse_event_framing_utf8(self):
@@ -36,7 +36,7 @@ class GatewayStreamingTests(unittest.TestCase):
         gateway.Handler.push_event(handler, {"hello": "白糖", "last": 5024})
         data = out.getvalue()
         self.assertTrue(data.startswith(b"data: "))
-        self.assertTrue(data.endswith(b"\\n\\n"))
+        self.assertTrue(data.endswith(b"\n\n"))
         self.assertIn("白糖".encode("utf-8"), data)
 
     def test_code_validation(self):
