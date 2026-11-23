@@ -15,8 +15,8 @@ from urllib.request import urlopen
 
 ROOT = Path("/root/tq_test")
 SCRIPT = ROOT / "server/market_gateway.py"
-VERSION = "8cf7e221d2dd9701b3813efd9e615dcdbd5d0344"
-GIT_BLOB_SHA = "c9bb543259d8cc7b2c1b7349ec17374adc051cad"
+VERSION = "be7700e9a2932805f7ad777fda256baaaabc4396"
+GIT_BLOB_SHA = "2c97ec12fbb36e63051090cef0e7f2cf0ea869d2"
 
 
 def existing():
@@ -130,9 +130,12 @@ def upgrade():
                 raise ValueError("K线后台缓存尚未就绪")
             if cache_status.get("tracked", 0) < 2:
                 raise ValueError("同合约其他周期没有开始后台预热")
+            if cache_status.get("data_length") != 200:
+                raise ValueError("K线订阅数量不是200根")
             if cached_seconds > 2.0:
                 raise ValueError(f"K线缓存响应过慢：{cached_seconds:.2f}秒")
             print(f"白糖K线缓存复用耗时: {cached_seconds:.3f}秒，"
+                  f"单周期 {cache_status['data_length']} 根，"
                   f"已订阅 {cache_status['tracked']} 个周期，"
                   f"待预热 {cache_status.get('prefetch_pending', 0)} 个", flush=True)
             catalog = get(base, "/v1/catalog")
