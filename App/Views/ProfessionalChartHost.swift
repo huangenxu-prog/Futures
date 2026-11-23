@@ -8,6 +8,7 @@ struct ProfessionalChartHost: View {
     let symbol: String
     let period: Int
     let bars: [MarketBar]
+    @Binding var showingIndicatorSettings: Bool
     @Binding var selectedCandleTime: Int64?
 
 
@@ -36,7 +37,6 @@ struct ProfessionalChartHost: View {
     }()
 
     @State private var displaySettings = ChartDisplaySettings.load()
-    @State private var showingIndicatorSettings = false
     @State private var sessionAxis = TradingSessionAxis()
     @State private var drawingsRestored = false
     @State private var historyDepth = 1100
