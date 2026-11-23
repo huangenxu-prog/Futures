@@ -29,27 +29,79 @@ struct LightMarketView: View {
     }
 
     @Environment(\.mainContracts) private var contracts
+    @Environment(\.futuresCatalog) private var catalog
     @EnvironmentObject private var favorites: Favorites
     @State private var scope: Scope = .favorites
     @State private var search = ""
     @State private var editing = false
     @State private var selectedCategory = "全部"
     @State private var sortBy = "默认"
-    private let categories = ["全部", "农产品", "金属", "黑色", "化工", "能源"]
+    @State private var onDemandQuotes: [String: MarketDataService.MainContract] = [:]
+    private let categories = ["全部", "上期所", "大商所", "郑商所", "广期所", "能源中心", "中金所"]
 
-    private func category(of item: FuturesInstrument) -> String {
-        switch item.id {
-        case "SHFE.rb", "DCE.jm": return "黑色"
-        case "SHFE.au", "SHFE.cu", "GFEX.lc": return "金属"
-        case "DCE.m", "DCE.p", "DCE.c", "DCE.y", "CZCE.SR", "CZCE.CF", "CZCE.RM": return "农产品"
-        case "CZCE.MA", "CZCE.TA", "CZCE.SA": return "化工"
-        case "INE.sc": return "能源"
-        default: return "其他"
+    private func exchangeCode(for category: String) -> String? {
+        switch category {
+        case "上期所": return "SHFE"
+        case "大商所": return "DCE"
+        case "郑商所": return "CZCE"
+        case "广期所": return "GFEX"
+        case "能源中心": return "INE"
+        case "中金所": return "CFFEX"
+        default: return nil
+        }
+    }
+
+    private func quote(for id: String) -> MarketDataService.MainContract? {
+        if let live = contracts[id], live.last != nil { return live }
+        return onDemandQuotes[id] ?? contracts[id]
+    }
+
+    private var mergedQuotes: [String: MarketDataService.MainContract] {
+        onDemandQuotes.merging(contracts) { _, current in current.last != nil ? current : onDemandQuotes[current.code] ?? current }
+    }
+
+    private var quoteRequestKey: String {
+        [scope.rawValue, selectedCategory, search,
+         favorites.ids.joined(separator: ","), String(catalog.count)].joined(separator: "|")
+    }
+
+    private var quoteRequestIDs: [String] {
+        let keyword = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        var options = keyword.isEmpty && scope == .favorites
+            ? favorites.ids
+            : catalog.map(\.id)
+        if let exchange = exchangeCode(for: selectedCategory) {
+            let supported = Set(catalog.filter { $0.exchange == exchange }.map(\.id))
+            options = options.filter { supported.contains($0) }
+        }
+        if !keyword.isEmpty {
+            let matching = Set(catalog.filter { item in
+                item.name.localizedCaseInsensitiveContains(keyword) ||
+                    item.id.localizedCaseInsensitiveContains(keyword)
+            }.map(\.id))
+            options = options.filter { matching.contains($0) }
+        }
+        return options
+    }
+
+    @MainActor
+    private func refreshVisibleQuotes() async {
+        let ids = quoteRequestIDs
+        for start in stride(from: 0, to: ids.count, by: 40) {
+            if Task.isCancelled { return }
+            let chunk = Array(ids[start..<min(start + 40, ids.count)])
+            if let received = try? await MarketDataService.selectedProductQuotes(chunk) {
+                onDemandQuotes.merge(received) { _, new in new }
+            }
+            // Sequential requests prevent a full-market subscription burst.
+            if start + 40 < ids.count {
+                try? await Task.sleep(for: .milliseconds(500))
+            }
         }
     }
 
     private func changePercentage(_ item: FuturesInstrument) -> Double? {
-        guard let quote = contracts[item.id], let change = quote.change,
+        guard let quote = quote(for: item.id), let change = quote.change,
               let settlement = quote.settlement, settlement > 0 else { return nil }
         return change / settlement
     }
@@ -57,19 +109,19 @@ struct LightMarketView: View {
     private var instruments: [FuturesInstrument] {
         let keyword = search.trimmingCharacters(in: .whitespacesAndNewlines)
         var base = scope == .favorites && keyword.isEmpty
-            ? favorites.ids.compactMap { id in FuturesInstrument.catalog.first(where: { $0.id == id }) }
-            : FuturesInstrument.catalog
+            ? favorites.ids.compactMap { id in catalog.first(where: { $0.id == id }) }
+            : catalog
         if !keyword.isEmpty {
             base = base.filter { item in
                 item.name.localizedCaseInsensitiveContains(keyword)
                     || item.id.localizedCaseInsensitiveContains(keyword)
                     || item.exchange.localizedCaseInsensitiveContains(keyword)
-                    || (contracts[item.id]?.month.contains(keyword) ?? false)
-                    || (contracts[item.id]?.code.localizedCaseInsensitiveContains(keyword) ?? false)
+                    || (quote(for: item.id)?.month.contains(keyword) ?? false)
+                    || (quote(for: item.id)?.code.localizedCaseInsensitiveContains(keyword) ?? false)
             }
         }
         if selectedCategory != "全部" {
-            base = base.filter { category(of: $0) == selectedCategory }
+            base = base.filter { $0.exchange == exchangeCode(for: selectedCategory) }
         }
         let order = scope == .rankings ? "涨幅" : sortBy
         if order != "默认" {
@@ -97,7 +149,7 @@ struct LightMarketView: View {
     }
 
     private var connectedCount: Int {
-        FuturesInstrument.catalog.filter { contracts[$0.id]?.last != nil }.count
+        catalog.filter { quote(for: $0.id)?.last != nil }.count
     }
 
     var body: some View {
@@ -140,6 +192,12 @@ struct LightMarketView: View {
             }
             .background(MarketPalette.background.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
+            .task(id: quoteRequestKey) {
+                while !Task.isCancelled {
+                    await refreshVisibleQuotes()
+                    do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                }
+            }
         }
         .preferredColorScheme(.light)
         .tint(MarketPalette.accent)
@@ -289,11 +347,15 @@ struct LightMarketView: View {
     }
 
     private func marketRow(_ item: FuturesInstrument) -> some View {
-        let quote = contracts[item.id]
+        let quote = quote(for: item.id)
         let isFavorite = favorites.ids.contains(item.id)
         return HStack(spacing: 8) {
             NavigationLink {
                 InstrumentDetailView(instrument: item)
+                    .environment(\.mainContracts,
+                                 contracts.merging(onDemandQuotes) {
+                                     live, extra in live.last == nil ? extra : live
+                                 })
             } label: {
                 HStack(spacing: 9) {
                     VStack(alignment: .leading, spacing: 5) {
