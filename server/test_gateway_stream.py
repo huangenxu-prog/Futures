@@ -20,6 +20,13 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_live_history_depth_covers_longest_used_ma(self):
+        # User's longest moving average is 120; don't download 500 bars
+        # for every new timeframe. The history endpoint remains separate.
+        self.assertEqual(gateway.KLINE_DATA_LENGTH, 200)
+        self.assertGreaterEqual(gateway.KLINE_DATA_LENGTH, 120)
+        self.assertEqual(gateway.SharedKlineHub().status()["data_length"], 200)
+
     def test_continuous_chart_resolution_for_new_products(self):
         self.assertEqual(gateway.quote_symbol("SHFE.zn"), "KQ.m@SHFE.zn")
         self.assertEqual(gateway.quote_symbol("CFFEX.IF"), "KQ.m@CFFEX.IF")

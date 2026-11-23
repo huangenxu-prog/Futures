@@ -405,7 +405,7 @@ def bars_from_serial(serial):
 # A cold symbol still needs an initial TqSdk subscription. Subsequent HTTP
 # requests and SSE viewers share that subscription and receive cached data.
 KLINE_MAX_SERIES = 24
-KLINE_DATA_LENGTH = 500
+KLINE_DATA_LENGTH = 200
 # Warm sibling timeframes only after the requested chart has real bars.
 # Prewarming is opportunistic: it never evicts a subscribed/active chart.
 KLINE_PREWARM_PERIODS = (60, 300, 900, 1800, 3600, 86400)
@@ -535,7 +535,7 @@ class SharedKlineHub:
     def status(self):
         with self.condition:
             return {"connected": self.connected, "tracked": len(self.entries),
-                    "ready": len(self.cache),
+                    "ready": len(self.cache), "data_length": KLINE_DATA_LENGTH,
                     "prefetch_pending": sum(1 for key, entry in self.entries.items()
                                             if entry.get("prefetch") and key not in self.cache)}
 
