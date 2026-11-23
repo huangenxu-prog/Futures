@@ -406,6 +406,10 @@ def bars_from_serial(serial):
 # requests and SSE viewers share that subscription and receive cached data.
 KLINE_MAX_SERIES = 24
 KLINE_DATA_LENGTH = 500
+# Warm sibling timeframes only after the requested chart has real bars.
+# Prewarming is opportunistic: it never evicts a subscribed/active chart.
+KLINE_PREWARM_PERIODS = (60, 300, 900, 1800, 3600, 86400)
+KLINE_PREWARM_SPACING = 0.8
 
 
 class KlineCapacityError(Exception):
@@ -423,6 +427,22 @@ class SharedKlineHub:
         self.connected = False
         self.error = None
 
+    def _prefetch_siblings_locked(self, key):
+        # Called only with condition locked, after a foreground series
+        # has yielded valid bars. The active chart is always first.
+        symbol, selected_period = key
+        for period in KLINE_PREWARM_PERIODS:
+            sibling = (symbol, period)
+            if sibling == key or sibling in self.entries:
+                continue
+            if len(self.entries) >= self.max_series:
+                break
+            self.entries[sibling] = {
+                "used": time.monotonic(), "listeners": 0, "waiters": 0,
+                "prefetch": True, "warmup_started": False
+            }
+        self.condition.notify_all()
+
     def start(self):
         with self.condition:
             if self.thread is None or not self.thread.is_alive():
@@ -436,7 +456,8 @@ class SharedKlineHub:
                 if len(self.entries) >= self.max_series:
                     # Do not evict a stream that is being watched or a pending
                     # HTTP request. Recycling the SDK drops stale subscriptions.
-                    candidates = [(entry["used"], old) for old, entry in self.entries.items()
+                    candidates = [((not entry.get("prefetch", False), entry["used"]), old)
+                                  for old, entry in self.entries.items()
                                   if not entry["listeners"] and not entry["waiters"]]
                     if not candidates:
                         raise KlineCapacityError("kline_subscription_limit")
@@ -444,9 +465,16 @@ class SharedKlineHub:
                     del self.entries[old_key]
                     self.cache.pop(old_key, None)
                     self.generation += 1
-                self.entries[key] = {"used": time.monotonic(), "listeners": 0, "waiters": 0}
+                self.entries[key] = {
+                    "used": time.monotonic(), "listeners": 0, "waiters": 0,
+                    "prefetch": False, "warmup_started": False
+                }
             entry = self.entries[key]
             entry["used"] = time.monotonic()
+            if listener or waiter:
+                # An explicitly requested period supersedes its speculative
+                # prefetch and must be installed before other cold siblings.
+                entry["prefetch"] = False
             if listener:
                 entry["listeners"] += 1
             if waiter:
@@ -475,6 +503,11 @@ class SharedKlineHub:
             previous, version = self.cache.get(key, (None, 0))
             if bars != previous:
                 self.cache[key] = (list(bars), version + 1)
+                entry = self.entries[key]
+                if (not entry.get("prefetch", False)
+                        and not entry.get("warmup_started", False)):
+                    entry["warmup_started"] = True
+                    self._prefetch_siblings_locked(key)
                 self.condition.notify_all()
 
     def read(self, key, after_version=-1, timeout=10):
@@ -502,7 +535,9 @@ class SharedKlineHub:
     def status(self):
         with self.condition:
             return {"connected": self.connected, "tracked": len(self.entries),
-                    "ready": len(self.cache)}
+                    "ready": len(self.cache),
+                    "prefetch_pending": sum(1 for key, entry in self.entries.items()
+                                            if entry.get("prefetch") and key not in self.cache)}
 
     def run(self):
         while True:
@@ -512,6 +547,7 @@ class SharedKlineHub:
                     credentials = json.load(handle)
                 api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
                 installed = {}
+                last_prefetch_at = 0.0
                 with self.condition:
                     generation = self.generation
                     self.connected = True
@@ -523,16 +559,37 @@ class SharedKlineHub:
                             # The bounded subscription set was evicted. Restart
                             # the SDK session so unsubscribed serials are freed.
                             break
-                        targets = list(self.entries.keys())
+                        targets = sorted(
+                            self.entries,
+                            key=lambda key: (
+                                self.entries[key]["prefetch"],
+                                -self.entries[key]["used"]
+                            )
+                        )
+                        urgent = any(
+                            key not in installed and not self.entries[key]["prefetch"]
+                            for key in targets
+                        )
                     for key in targets:
-                        if key not in installed:
-                            # Subscribe one new series per loop. Some TqSdk
-                            # versions wait for an initial frame inside this
-                            # call: an entire batch would freeze older streams.
-                            # All non-thread-safe API calls stay on this worker.
-                            installed[key] = api.get_kline_serial(
-                                key[0], key[1], data_length=KLINE_DATA_LENGTH)
-                            break
+                        if key in installed:
+                            continue
+                        with self.condition:
+                            if key not in self.entries:
+                                continue
+                            speculative = self.entries[key]["prefetch"]
+                        if speculative:
+                            # Never delay a requested chart behind optional
+                            # subscriptions. Space speculative work out so
+                            # existing live charts can process updates.
+                            if (urgent or
+                                    time.monotonic() - last_prefetch_at < KLINE_PREWARM_SPACING):
+                                continue
+                            last_prefetch_at = time.monotonic()
+                        # One subscription per event-loop pass; all non-thread
+                        # safe TqSdk operations remain on this worker.
+                        installed[key] = api.get_kline_serial(
+                            key[0], key[1], data_length=KLINE_DATA_LENGTH)
+                        break
                     updated = api.wait_update(deadline=time.time() + 0.3)
                     for key in targets:
                         serial = installed.get(key)

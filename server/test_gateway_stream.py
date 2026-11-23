@@ -70,6 +70,50 @@ class GatewayStreamingTests(unittest.TestCase):
         hub.release(a, listener=True)
         hub.release(c, listener=True)
 
+    def test_first_live_bar_prewarms_all_timeframes(self):
+        hub = gateway.SharedKlineHub(max_series=8)
+        with patch.object(hub, "start"):
+            key = hub.reserve("CZCE.MA701", 900, listener=True)
+        self.assertEqual(len(hub.entries), 1)
+        self.assertEqual(hub.status()["prefetch_pending"], 0)
+        hub.publish(key, [{"time": 100, "open": 3000, "high": 3001,
+                          "low": 2999, "close": 3001, "volume": 1}])
+        self.assertEqual({period for sym, period in hub.entries if sym == "CZCE.MA701"},
+                         gateway.PERIODS)
+        self.assertEqual(len(hub.entries), 6)
+        self.assertEqual(hub.status()["prefetch_pending"], 5)
+        hub.publish(key, [{"time": 100, "open": 3000, "high": 3002,
+                          "low": 2999, "close": 3002, "volume": 2}])
+        self.assertEqual(len(hub.entries), 6)
+
+    def test_switching_to_prefetched_timeframe_gains_priority(self):
+        hub = gateway.SharedKlineHub(max_series=8)
+        with patch.object(hub, "start"):
+            active = hub.reserve("CZCE.MA701", 900, listener=True)
+            hub.publish(active, [{"time": 100}])
+            sibling = ("CZCE.MA701", 300)
+            self.assertTrue(hub.entries[sibling]["prefetch"])
+            hub.reserve("CZCE.MA701", 300, listener=True)
+        self.assertFalse(hub.entries[sibling]["prefetch"])
+        hub.publish(sibling, [{"time": 100}])
+        hub.release(active, listener=True)
+        hub.release(sibling, listener=True)
+
+    def test_prefetch_stays_within_budget_and_never_evicts_active(self):
+        hub = gateway.SharedKlineHub(max_series=3)
+        with patch.object(hub, "start"):
+            active = hub.reserve("CZCE.MA701", 900, listener=True)
+            hub.publish(active, [{"time": 100}])
+        self.assertEqual(len(hub.entries), 3)
+        self.assertIn(active, hub.entries)
+        with patch.object(hub, "start"):
+            other = hub.reserve("CZCE.SR701", 900, listener=True)
+        self.assertIn(active, hub.entries)
+        self.assertIn(other, hub.entries)
+        self.assertLessEqual(len(hub.entries), 3)
+        hub.release(active, listener=True)
+        hub.release(other, listener=True)
+
     def test_kline_endpoint_reads_shared_cache_not_new_sdk(self):
         output = []
         handler = SimpleNamespace(
