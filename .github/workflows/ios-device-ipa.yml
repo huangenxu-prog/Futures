@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/ios-device-ipa.yml'
       - 'App/**'
+      - 'Vendor/**'
       - 'scripts/**'
       - 'project.yml'
 
@@ -23,6 +24,11 @@ jobs:
 
       - name: Install XcodeGen
         run: brew install xcodegen
+
+      - name: Verify futures price formatting
+        run: |
+          swiftc App/Models/MarketPricePrecision.swift scripts/MarketPricePrecisionSelfTest.swift -o /tmp/market-price-precision-test
+          /tmp/market-price-precision-test
 
       - name: Generate app icon asset
         run: swift scripts/generate-app-icon.swift

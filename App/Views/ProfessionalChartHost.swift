@@ -8,6 +8,7 @@ struct ProfessionalChartHost: View {
     let symbol: String
     let period: Int
     let bars: [MarketBar]
+    let priceTick: Double?
     @Binding var showingIndicatorSettings: Bool
     @Binding var selectedCandleTime: Int64?
 
@@ -57,6 +58,48 @@ struct ProfessionalChartHost: View {
         ChartInterval(seconds: TimeInterval(period))
     }
 
+    private var priceDigits: Int {
+        MarketPricePrecision.digits(tick: priceTick,
+            observations: Array(bars.suffix(200).flatMap { [$0.open, $0.high, $0.low, $0.close] }))
+    }
+
+    private var chartPriceFormatter: PriceFormatter {
+        let digits = priceDigits
+        return PriceFormatter { value, context in
+            switch context {
+            case .compact:
+                return PriceFormatter.automatic.format(value, context: .compact)
+            case .legend:
+                // Keep EMA/MACD line values informative while trimming
+                // unnecessary .00 from genuine integer futures prices.
+                return MarketPricePrecision.format(value, digits: max(2, digits))
+            case .axis, .badge, .crosshair:
+                return MarketPricePrecision.format(value, digits: digits)
+            }
+        }
+    }
+
+    private var chartStrings: TradingChartStrings {
+        var s = TradingChartStrings.localized(for: Locale(identifier: "zh-Hans"))
+        s.time = "时间"
+        s.open = "开盘"
+        s.high = "最高"
+        s.low = "最低"
+        s.close = "收盘"
+        s.price = "价格"
+        s.change = "涨跌"
+        s.changePercent = "涨跌幅"
+        s.range = "振幅"
+        s.volume = "成交量"
+        s.lineStyle = "折线图"
+        s.areaStyle = "面积图"
+        s.candlesStyle = "K线图"
+        s.chartStyle = "图表类型"
+        s.scrollToLatest = "回到最新K线"
+        s.loadingHistory = "正在加载历史K线"
+        return s
+    }
+
     private var chartTimeFormatter: TimeFormatter {
         // The chart's X values are synthetic, while labels must always reflect
         // the original China futures exchange timestamps.
@@ -100,6 +143,13 @@ struct ProfessionalChartHost: View {
         value.legendLabel = MarketPalette.muted
         value.candleCornerRadius = 0
         value.candleBodyWidthFactor = 0.75
+        value.hollowRisingCandles = true
+        value.hollowCandleFill = MarketPalette.surface
+        // A white doji on the graphite theme; dark ink in optional light mode
+        // keeps the same neutral symbol visible on both backgrounds.
+        value.dojiCandleColor = Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark ? .white : .black
+        })
         return value
     }
 
@@ -131,6 +181,8 @@ struct ProfessionalChartHost: View {
         }
         .tradingChartTheme(theme)
         .tradingChartTimeFormatter(chartTimeFormatter)
+        .tradingChartPriceFormatter(chartPriceFormatter)
+        .tradingChartStrings(chartStrings)
         .background(MarketPalette.surface)
         .onAppear {
             model.indicators = displaySettings.indicators()

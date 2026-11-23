@@ -31,6 +31,7 @@ struct InstrumentDetailView: View {
     @State private var loading = false
     @State private var showingCachedData = false
     @State private var showIndicators = true
+    @State private var currentPriceTick: Double?
     @State private var selectedCandleIndex: Int? = nil
     @State private var crosshairActive = false
     @State private var pinchActive = false
@@ -86,6 +87,7 @@ struct InstrumentDetailView: View {
                 } else if !rawBars.isEmpty && displayedKey == chartKey {
                     ProfessionalChartHost(
                         symbol: chartSymbol, period: periodSeconds, bars: rawBars,
+                        priceTick: selectedContract?.priceTick ?? currentPriceTick,
                         showingIndicatorSettings: $showChartIndicatorSettings,
                         selectedCandleTime: $selectedCandleTime
                     )
@@ -101,6 +103,22 @@ struct InstrumentDetailView: View {
         }
         .background(MarketPalette.surface.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .task(id: chartSymbol) {
+            // Contract metadata, not displayed price magnitude, determines
+            // precision. The main-contract snapshot does not include priceTick,
+            // so request it from the existing listed-contract endpoint.
+            let symbol = chartSymbol
+            currentPriceTick = nil
+            if let direct = selectedContract?.priceTick, direct > 0 {
+                currentPriceTick = direct
+            } else if let listed = try? await MarketDataService.listedContracts(for: instrument.id) {
+                guard !Task.isCancelled, chartSymbol == symbol else { return }
+                if let tick = listed.first(where: { $0.code == symbol })?.priceTick,
+                   tick > 0 {
+                    currentPriceTick = tick
+                }
+            }
+        }
         .task(id: chartKey + (scenePhase == .active ? "/active" : "/paused")) {
             guard scenePhase == .active else { return }
             await loadCandles(reset: displayedKey != chartKey)
