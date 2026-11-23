@@ -16,6 +16,11 @@ struct OptionChainView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var displayVolume = false
+    @State private var side: Side = .both
+
+    private enum Side {
+        case both, call, put
+    }
 
     private struct StrikePair: Identifiable {
         let strike: Double
@@ -33,6 +38,22 @@ struct OptionChainView: View {
                 call: sorted.first { $0.strike == strike && $0.side == "CALL" },
                 put: sorted.first { $0.strike == strike && $0.side == "PUT" }
             )
+        }
+    }
+
+    private var visiblePairs: [StrikePair] {
+        switch side {
+        case .both: return pairedRows
+        case .call: return pairedRows.filter { $0.call != nil }
+        case .put: return pairedRows.filter { $0.put != nil }
+        }
+    }
+
+    private var visibleContractCount: Int {
+        switch side {
+        case .both: return rows.count
+        case .call: return rows.filter { $0.side == "CALL" }.count
+        case .put: return rows.filter { $0.side == "PUT" }.count
         }
     }
 
@@ -81,25 +102,26 @@ struct OptionChainView: View {
                     ContentUnavailableView("暂无挂牌期权", systemImage: "chart.bar.xaxis")
                 } else {
                     VStack(spacing: 0) {
-                        HStack {
-                            Text("看涨 CALL")
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Text("看跌 PUT")
-                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        HStack(spacing: 8) {
+                            sideButton("看涨 CALL", value: .call)
+                            sideButton("全部", value: .both)
+                            sideButton("看跌 PUT", value: .put)
                         }
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(MarketPalette.accent)
                         .padding(.horizontal, 12)
-                        .frame(height: 31)
+                        .padding(.vertical, 5)
 
                         HStack(spacing: 0) {
-                            headerCell(displayVolume ? "成交量" : "买价")
-                            headerCell("最新")
+                            if side != .put {
+                                headerCell(displayVolume ? "成交量" : "买价")
+                                headerCell("最新")
+                            }
                             Text("行权价")
                                 .frame(width: 84)
                                 .foregroundStyle(MarketPalette.ink)
-                            headerCell("最新")
-                            headerCell(displayVolume ? "成交量" : "卖价")
+                            if side != .call {
+                                headerCell("最新")
+                                headerCell(displayVolume ? "成交量" : "卖价")
+                            }
                         }
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(MarketPalette.muted)
@@ -108,10 +130,12 @@ struct OptionChainView: View {
 
                         ScrollView {
                             LazyVStack(spacing: 0) {
-                                ForEach(pairedRows) { pair in
+                                ForEach(visiblePairs) { pair in
                                     HStack(spacing: 0) {
-                                        valueCell(displayVolume ? pair.call?.volume : pair.call?.bid)
-                                        valueCell(pair.call?.last)
+                                        if side != .put {
+                                            valueCell(displayVolume ? pair.call?.volume : pair.call?.bid)
+                                            valueCell(pair.call?.last)
+                                        }
                                         Text(label(pair.strike))
                                             .font(.system(size: 13, weight: .bold, design: .rounded))
                                             .foregroundStyle(MarketPalette.ink)
@@ -119,8 +143,10 @@ struct OptionChainView: View {
                                             .background(underlyingLast.map {
                                                 abs($0 - pair.strike) < max(1, $0 * 0.0025)
                                             } == true ? MarketPalette.accent.opacity(0.08) : .clear)
-                                        valueCell(pair.put?.last)
-                                        valueCell(displayVolume ? pair.put?.volume : pair.put?.ask)
+                                        if side != .call {
+                                            valueCell(pair.put?.last)
+                                            valueCell(displayVolume ? pair.put?.volume : pair.put?.ask)
+                                        }
                                     }
                                     .padding(.horizontal, 8)
                                     .overlay(alignment: .bottom) {
@@ -134,7 +160,7 @@ struct OptionChainView: View {
                                 displayVolume.toggle()
                             }
                             Spacer()
-                            Text("\(rows.count) 个合约 · \(pairedRows.count) 个行权价")
+                            Text("\(visibleContractCount) 个合约 · \(visiblePairs.count) 个行权价")
                                 .foregroundStyle(MarketPalette.muted)
                         }
                         .font(.system(size: 11))
@@ -166,6 +192,22 @@ struct OptionChainView: View {
         }
         .tint(MarketPalette.accent)
         .preferredColorScheme(.light)
+    }
+
+    private func sideButton(_ title: String, value: Side) -> some View {
+        Button {
+            side = value
+        } label: {
+            Text(title)
+                .font(.system(size: 12, weight: side == value ? .semibold : .medium))
+                .foregroundStyle(side == value ? MarketPalette.accent : MarketPalette.muted)
+                .frame(maxWidth: .infinity)
+                .frame(height: 32)
+                .background(side == value ? MarketPalette.accent.opacity(0.10) : MarketPalette.background)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(side == value ? .isSelected : [])
     }
 
     private func headerCell(_ title: String) -> some View {

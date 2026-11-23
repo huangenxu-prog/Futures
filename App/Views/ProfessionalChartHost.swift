@@ -19,7 +19,10 @@ struct ProfessionalChartHost: View {
         configuration.maxLiveBarCount = nil
         configuration.showsLegend = true
         configuration.showsHighLowMarkers = true
-        configuration.stylePicker = StylePickerOptions()
+        configuration.stylePicker = StylePickerOptions(
+            titles: [.line: "折线图", .area: "面积图", .candles: "K线图"],
+            accessibilityLabel: "图表类型"
+        )
         configuration.isDrawingEnabled = true
         configuration.isCrosshairEnabled = true
         configuration.isZoomEnabled = true
@@ -143,6 +146,35 @@ struct ProfessionalChartHost: View {
                             }
                             Button(displaySettings.enabled.contains(kind) ? "隐藏指标" : "显示指标") {
                                 displaySettings = displaySettings.toggle(kind)
+                            }
+                        }
+                    }
+                    ForEach(displaySettings.additionalAverages) { average in
+                        Button {
+                            var updated = displaySettings
+                            updated.toggleAverage(id: average.id)
+                            // Leave invalid combinations for the settings sheet to fix.
+                            if updated.isValid { displaySettings = updated }
+                            else { showingIndicatorSettings = true }
+                        } label: {
+                            Text("\(average.type.rawValue)\(average.period)")
+                                .font(.system(size: 12,
+                                              weight: average.enabled ? .semibold : .regular))
+                                .foregroundStyle(average.enabled ? MarketPalette.accent : MarketPalette.muted)
+                                .padding(.horizontal, 6)
+                                .frame(height: 30)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("设置参数", systemImage: "slider.horizontal.3") {
+                                showingIndicatorSettings = true
+                            }
+                            Button(average.enabled ? "隐藏指标" : "显示指标") {
+                                var updated = displaySettings
+                                updated.toggleAverage(id: average.id)
+                                if updated.isValid { displaySettings = updated }
+                                else { showingIndicatorSettings = true }
                             }
                         }
                     }
