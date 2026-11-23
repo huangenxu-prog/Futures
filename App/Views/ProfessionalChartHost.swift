@@ -14,11 +14,11 @@ struct ProfessionalChartHost: View {
 
     @State private var model: TradingChartModel = {
         var configuration = TradingChartConfiguration()
-        configuration.viewport.candleVisibleBars = 80
-        configuration.paneHeight = 104
+        configuration.viewport.candleVisibleBars = 52
+        configuration.paneHeight = 110
         configuration.maxLiveBarCount = nil
-        configuration.showsLegend = false
-        configuration.showsHighLowMarkers = false
+        configuration.showsLegend = true
+        configuration.showsHighLowMarkers = true
         configuration.stylePicker = nil
         configuration.isDrawingEnabled = false
         configuration.isCrosshairEnabled = true
@@ -53,17 +53,17 @@ struct ProfessionalChartHost: View {
 
     private var theme: TradingChartTheme {
         var value = TradingChartTheme.standard
-        value.bullish = Color.red
-        value.bearish = Color(red: 0, green: 252.0 / 255, blue: 252.0 / 255)
-        value.grid = .white.opacity(0.045)
-        value.axisLabel = .white.opacity(0.62)
-        value.crosshair = .white.opacity(0.78)
-        value.indicatorPalette = [.white, .yellow, .white, .yellow]
-        value.paneSeparator = .white.opacity(0.07)
-        value.tooltipBackground = .black.opacity(0.94)
-        value.tooltipText = .white
-        value.legendText = .white
-        value.legendLabel = .gray
+        value.bullish = MarketPalette.up
+        value.bearish = MarketPalette.down
+        value.grid = MarketPalette.divider.opacity(0.55)
+        value.axisLabel = MarketPalette.muted
+        value.crosshair = MarketPalette.ink.opacity(0.65)
+        value.indicatorPalette = [.orange, MarketPalette.accent, .orange, MarketPalette.accent]
+        value.paneSeparator = MarketPalette.divider
+        value.tooltipBackground = .white.opacity(0.97)
+        value.tooltipText = MarketPalette.ink
+        value.legendText = MarketPalette.ink
+        value.legendLabel = MarketPalette.muted
         value.candleCornerRadius = 0
         value.candleBodyWidthFactor = 0.75
         return value
@@ -73,7 +73,7 @@ struct ProfessionalChartHost: View {
         TradingChartView(model: model)
             .tradingChartTheme(theme)
             .tradingChartTimeFormatter(chartTimeFormatter)
-            .background(Color.black)
+            .background(MarketPalette.surface)
             .onAppear {
                 configureChart()
                 synchronizeBars(previous: [], incoming: bars)
