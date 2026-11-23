@@ -116,10 +116,15 @@ struct ProfessionalChartHost: View {
             || incoming.count > previous.count + 1
 
         if requiresReset {
-            model.setSeries(ChartSeries(candles: incoming.map(chartCandle), interval: interval),
+            // A fresh 500-bar snapshot must not discard older pages that the
+            // user has already scrolled into.
+            let incomingStart = Date(timeIntervalSince1970: TimeInterval(incoming[0].time))
+            let retained = model.series.candles?.filter { $0.time < incomingStart } ?? []
+            let combined = retained + incoming.map(chartCandle)
+            model.setSeries(ChartSeries(candles: combined, interval: interval),
                             scroll: .automatic)
             model.currentPrice = incoming.last?.close
-            model.hasMoreHistory = incoming.count >= 300
+            model.hasMoreHistory = combined.count >= 300
         } else if let last = incoming.last, last != previous.last {
             model.update(chartCandle(last), interval: interval)
             model.currentPrice = last.close
