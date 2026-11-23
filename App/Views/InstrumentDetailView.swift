@@ -12,6 +12,7 @@ struct InstrumentDetailView: View {
     @EnvironmentObject private var favorites: Favorites
     @State private var showOptions = false
     @State private var showContracts = false
+    @State private var showChartIndicatorSettings = false
     let instrument: FuturesInstrument
     let selectedContract: MarketDataService.ContractQuote?
 
@@ -85,6 +86,7 @@ struct InstrumentDetailView: View {
                 } else if !rawBars.isEmpty && displayedKey == chartKey {
                     ProfessionalChartHost(
                         symbol: chartSymbol, period: periodSeconds, bars: rawBars,
+                        showingIndicatorSettings: $showChartIndicatorSettings,
                         selectedCandleTime: $selectedCandleTime
                     )
                     .id(chartKey)
@@ -496,6 +498,7 @@ struct InstrumentDetailView: View {
             }
             Button("查看期权 T 型报价") { showOptions = true }
                 .disabled(selectedContract == nil && quote == nil)
+            Button("指标参数设置") { showChartIndicatorSettings = true }
             Button("选择合约月份") { showContracts = true }
         } label: {
             Image(systemName: "ellipsis").frame(width: 38, height: 24)
