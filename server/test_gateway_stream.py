@@ -20,6 +20,11 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_continuous_chart_resolution_for_new_products(self):
+        self.assertEqual(gateway.quote_symbol("SHFE.zn"), "KQ.m@SHFE.zn")
+        self.assertEqual(gateway.quote_symbol("CFFEX.IF"), "KQ.m@CFFEX.IF")
+        self.assertEqual(gateway.quote_symbol("DCE.m2701"), "DCE.m2701")
+
     def test_quote_publish_is_change_driven(self):
         hub = gateway.LiveQuoteHub()
         first = {"CZCE.SR": {"code": "CZCE.SR701", "month": "2701", "last": 5024.0}}
