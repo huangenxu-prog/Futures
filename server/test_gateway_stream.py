@@ -36,6 +36,53 @@ class GatewayStreamingTests(unittest.TestCase):
         hub.publish(changed)
         self.assertEqual(hub.version, 2)
 
+    def test_shared_kline_snapshot_reuses_worker_cache(self):
+        hub = gateway.SharedKlineHub(max_series=2)
+        # The worker's SDK connection must not be needed on cache hits.
+        with patch.object(hub, "start"):
+            key = hub.reserve("CZCE.MA701", 900)
+        rows = [{"time": 100, "open": 3000, "high": 3001,
+                 "low": 2999, "close": 3001, "volume": 3},
+                {"time": 200, "open": 3001, "high": 3002,
+                 "low": 3000, "close": 3002, "volume": 5}]
+        hub.publish(key, rows)
+        with patch.object(hub, "start") as start, patch.object(gateway, "TqApi") as sdk:
+            self.assertEqual(hub.snapshot("CZCE.MA701", 900, 1), rows[-1:])
+            self.assertEqual(hub.snapshot("CZCE.MA701", 900, 2), rows)
+        self.assertEqual(sdk.call_count, 0)
+        self.assertEqual(start.call_count, 2)
+
+    def test_bounded_kline_subscriptions_preserve_active_streams(self):
+        hub = gateway.SharedKlineHub(max_series=2)
+        with patch.object(hub, "start"):
+            a = hub.reserve("CZCE.MA701", 900, listener=True)
+            b = hub.reserve("CZCE.SR701", 900)
+            hub.publish(a, [{"time": 100}])
+            hub.reserve("SHFE.rb2701", 900)
+        self.assertIn(a, hub.entries)
+        self.assertNotIn(b, hub.entries)
+        self.assertNotIn(b, hub.cache)
+        self.assertEqual(hub.generation, 1)
+        with patch.object(hub, "start"):
+            with self.assertRaises(gateway.KlineCapacityError):
+                hub.reserve("DCE.m2701", 900, listener=True)
+        hub.release(a, listener=True)
+
+    def test_kline_endpoint_reads_shared_cache_not_new_sdk(self):
+        output = []
+        handler = SimpleNamespace(
+            path="/v1/klines?symbol=CZCE.MA701&period=900&count=5",
+            reply=lambda status, payload: output.append((status, payload)))
+        bars = [{"time": i, "open": 1, "high": 1, "low": 1,
+                 "close": 1, "volume": 1} for i in range(5)]
+        with patch.object(gateway.KLINE_HUB, "snapshot", return_value=bars) as cached:
+            with patch.object(gateway, "load_bars") as old_api:
+                gateway.Handler.do_GET(handler)
+        cached.assert_called_once_with("CZCE.MA701", 900, 5)
+        old_api.assert_not_called()
+        self.assertEqual(output[0][0], 200)
+        self.assertEqual(output[0][1]["bars"], bars)
+
     def test_sse_event_framing_utf8(self):
         out = io.BytesIO()
         handler = SimpleNamespace(wfile=out)

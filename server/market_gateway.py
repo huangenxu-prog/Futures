@@ -379,7 +379,7 @@ class LiveQuoteHub:
 
 LIVE_QUOTES = LiveQuoteHub()
 QUOTE_STREAM_SLOTS = threading.BoundedSemaphore(8)
-BAR_STREAM_SLOTS = threading.BoundedSemaphore(3)
+BAR_STREAM_SLOTS = threading.BoundedSemaphore(8)
 
 
 def bars_from_serial(serial):
@@ -397,6 +397,169 @@ def bars_from_serial(serial):
             "volume": int(row.volume) if math.isfinite(float(row.volume)) else 0,
         })
     return bars
+
+
+
+# Shared, bounded live K-line cache. All TqApi methods for this hub run on one
+# dedicated worker thread; HTTP threads only read copied, immutable snapshots.
+# A cold symbol still needs an initial TqSdk subscription. Subsequent HTTP
+# requests and SSE viewers share that subscription and receive cached data.
+KLINE_MAX_SERIES = 24
+KLINE_DATA_LENGTH = 500
+
+
+class KlineCapacityError(Exception):
+    pass
+
+
+class SharedKlineHub:
+    def __init__(self, max_series=KLINE_MAX_SERIES):
+        self.condition = threading.Condition()
+        self.max_series = max_series
+        self.entries = {}  # (sdk_symbol, period): {used, listeners, waiters}
+        self.cache = {}    # key: (list of bars, version)
+        self.generation = 0
+        self.thread = None
+        self.connected = False
+        self.error = None
+
+    def start(self):
+        with self.condition:
+            if self.thread is None or not self.thread.is_alive():
+                self.thread = threading.Thread(target=self.run, name="kline-feed", daemon=True)
+                self.thread.start()
+
+    def reserve(self, symbol, period, *, listener=False, waiter=False):
+        key = (quote_symbol(symbol), period)
+        with self.condition:
+            if key not in self.entries:
+                if len(self.entries) >= self.max_series:
+                    # Do not evict a stream that is being watched or a pending
+                    # HTTP request. Recycling the SDK drops stale subscriptions.
+                    candidates = [(entry["used"], old) for old, entry in self.entries.items()
+                                  if not entry["listeners"] and not entry["waiters"]]
+                    if not candidates:
+                        raise KlineCapacityError("kline_subscription_limit")
+                    old_key = min(candidates)[1]
+                    del self.entries[old_key]
+                    self.cache.pop(old_key, None)
+                    self.generation += 1
+                self.entries[key] = {"used": time.monotonic(), "listeners": 0, "waiters": 0}
+            entry = self.entries[key]
+            entry["used"] = time.monotonic()
+            if listener:
+                entry["listeners"] += 1
+            if waiter:
+                entry["waiters"] += 1
+            self.condition.notify_all()
+        self.start()
+        return key
+
+    def release(self, key, *, listener=False, waiter=False):
+        with self.condition:
+            entry = self.entries.get(key)
+            if entry:
+                if listener:
+                    entry["listeners"] = max(0, entry["listeners"] - 1)
+                if waiter:
+                    entry["waiters"] = max(0, entry["waiters"] - 1)
+                entry["used"] = time.monotonic()
+            self.condition.notify_all()
+
+    def publish(self, key, bars):
+        if not bars:
+            return
+        with self.condition:
+            if key not in self.entries:
+                return
+            previous, version = self.cache.get(key, (None, 0))
+            if bars != previous:
+                self.cache[key] = (list(bars), version + 1)
+                self.condition.notify_all()
+
+    def read(self, key, after_version=-1, timeout=10):
+        deadline = time.monotonic() + timeout
+        with self.condition:
+            while True:
+                bars, version = self.cache.get(key, ([], 0))
+                if bars and version != after_version:
+                    if key in self.entries:
+                        self.entries[key]["used"] = time.monotonic()
+                    return list(bars), version
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or key not in self.entries:
+                    return list(bars), version
+                self.condition.wait(timeout=remaining)
+
+    def snapshot(self, symbol, period, count, timeout=11):
+        key = self.reserve(symbol, period, waiter=True)
+        try:
+            bars, _ = self.read(key, timeout=timeout)
+            return bars[-count:]
+        finally:
+            self.release(key, waiter=True)
+
+    def status(self):
+        with self.condition:
+            return {"connected": self.connected, "tracked": len(self.entries),
+                    "ready": len(self.cache)}
+
+    def run(self):
+        while True:
+            api = None
+            try:
+                with open(AUTH_PATH, encoding="utf-8") as handle:
+                    credentials = json.load(handle)
+                api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+                installed = {}
+                with self.condition:
+                    generation = self.generation
+                    self.connected = True
+                    self.error = None
+                    self.condition.notify_all()
+                while True:
+                    with self.condition:
+                        if generation != self.generation:
+                            # The bounded subscription set was evicted. Restart
+                            # the SDK session so unsubscribed serials are freed.
+                            break
+                        targets = list(self.entries.keys())
+                    for key in targets:
+                        if key not in installed:
+                            # Never call the non-thread-safe TqApi from an HTTP
+                            # request thread. All dynamic subscriptions live here.
+                            installed[key] = api.get_kline_serial(
+                                key[0], key[1], data_length=KLINE_DATA_LENGTH)
+                    updated = api.wait_update(deadline=time.time() + 0.3)
+                    for key in targets:
+                        serial = installed.get(key)
+                        if serial is None:
+                            continue
+                        with self.condition:
+                            has_snapshot = key in self.cache
+                        if not has_snapshot or (updated and api.is_changing(serial)):
+                            bars = bars_from_serial(serial)
+                            if bars:
+                                self.publish(key, bars)
+            except Exception as exc:
+                with self.condition:
+                    self.error = type(exc).__name__ + ": " + str(exc)[:140]
+                    self.connected = False
+                    self.condition.notify_all()
+                print("K线共享连接异常，准备重连:", self.error, flush=True)
+                time.sleep(3)
+            finally:
+                with self.condition:
+                    self.connected = False
+                    self.condition.notify_all()
+                if api is not None:
+                    try:
+                        api.close()
+                    except Exception:
+                        pass
+
+
+KLINE_HUB = SharedKlineHub()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -445,54 +608,44 @@ class Handler(BaseHTTPRequestHandler):
         if not BAR_STREAM_SLOTS.acquire(blocking=False):
             self.reply(503, {"error": "too_many_streams"})
             return
-        api = None
+        key = None
         try:
-            with open(AUTH_PATH, encoding="utf-8") as handle:
-                credentials = json.load(handle)
-            api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
-            serial = api.get_kline_serial(quote_symbol(symbol),
-                                        period, data_length=count)
+            try:
+                key = KLINE_HUB.reserve(symbol, period, listener=True)
+            except KlineCapacityError:
+                self.reply(503, {"error": "kline_subscription_limit"})
+                return
+            # A first-time contract takes time to subscribe. Delay HTTP 200
+            # until an actual full K-line frame exists so the phone can recover
+            # from cold-start / disconnected feeds instead of spinning forever.
+            bars, version = KLINE_HUB.read(key, timeout=11)
+            if not bars:
+                self.reply(503, {"error": "kline_not_ready"})
+                return
             self.begin_stream()
-            previous = None
-            last_full = 0.0
-            last_sent = 0.0
-            pending = False
-            last_heartbeat = time.monotonic()
+            self.push_event({"symbol": symbol, "bars": bars[-count:]})
+            previous = bars[-1]
+            last_full = time.monotonic()
             while True:
-                updated = api.wait_update(deadline=time.time() + 0.3)
+                bars, next_version = KLINE_HUB.read(key, after_version=version, timeout=12)
                 now = time.monotonic()
-                # Stream a full frame initially and periodically, then lightweight current-bar changes.
-                pending = pending or (updated and api.is_changing(serial))
-                if (previous is None or pending or now - last_full >= 60) and now - last_sent >= 0.2:
-                    bars = bars_from_serial(serial)
-                    if bars:
-                        latest = bars[-1]
-                        if previous is None or now - last_full >= 60:
-                            self.push_event({"symbol": symbol, "bars": bars})
-                            last_full = now
-                        elif latest != previous:
-                            self.push_event({"symbol": symbol, "bar": latest})
-                        else:
-                            pending = False
-                            continue
-                        previous = latest
-                        pending = False
-                        last_sent = now
-                        last_heartbeat = now
-                if now - last_heartbeat >= 12:
+                if bars and next_version != version:
+                    latest = bars[-1]
+                    if now - last_full >= 60:
+                        self.push_event({"symbol": symbol, "bars": bars[-count:]})
+                        last_full = now
+                    elif latest != previous:
+                        self.push_event({"symbol": symbol, "bar": latest})
+                    previous = latest
+                    version = next_version
+                else:
                     self.wfile.write(b": heartbeat\n\n")
                     self.wfile.flush()
-                    last_heartbeat = now
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
-        except Exception as exc:
-            print("K线实时流异常:", type(exc).__name__, str(exc)[:180], flush=True)
         finally:
-            if api is not None:
-                try:
-                    api.close()
-                except Exception:
-                    pass
+            if key is not None:
+                KLINE_HUB.release(key, listener=True)
             BAR_STREAM_SLOTS.release()
 
     def reply(self, status, payload):
@@ -507,7 +660,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urlsplit(self.path)
         if url.path == "/health":
-            self.reply(200, {"ok": True, "quote_stream": True, "bar_stream": True})
+            self.reply(200, {"ok": True, "quote_stream": True, "bar_stream": True,
+                             "kline_cache": KLINE_HUB.status()})
             return
         if url.path == "/v1/stream/quotes":
             self.stream_quotes()
@@ -614,13 +768,15 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(400, {"error": str(exc)})
             return
         try:
-            with LOCK:
-                bars = load_bars(symbol, period, count)
+            bars = KLINE_HUB.snapshot(symbol, period, count)
             self.reply(200 if bars else 503, {
                 "symbol": symbol, "period": period, "bars": bars,
                 "error": None if bars else "no_data",
             })
-        except Exception:
+        except KlineCapacityError:
+            self.reply(503, {"error": "kline_subscription_limit"})
+        except Exception as exc:
+            print("K线缓存查询失败:", type(exc).__name__, str(exc)[:120], flush=True)
             self.reply(503, {"error": "market_data_unavailable"})
 
     def log_message(self, format, *args):
@@ -632,4 +788,5 @@ if __name__ == "__main__":
     port = int(os.environ.get("QIHUI_PORT", "8765"))
     print("Qihui read-only gateway listening on %s:%s" % (host, port), flush=True)
     LIVE_QUOTES.start()
+    KLINE_HUB.start()
     ThreadingHTTPServer((host, port), Handler).serve_forever()
