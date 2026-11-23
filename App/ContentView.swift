@@ -13,7 +13,14 @@ extension EnvironmentValues {
 
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @State private var contracts: [String: MarketDataService.MainContract] = [:]
+    @State private var contracts = savedIdentities()
+
+    private static let identityKey = "main-contract-identities"
+
+    private static func savedIdentities() -> [String: MarketDataService.MainContract] {
+        guard let data = UserDefaults.standard.data(forKey: identityKey) else { return [:] }
+        return (try? JSONDecoder().decode([String: MarketDataService.MainContract].self, from: data)) ?? [:]
+    }
     @State private var selectedTab = 0
     @State private var detailVisible = false
     var body: some View {
@@ -32,12 +39,23 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .environment(\.mainContracts, contracts)
         .task(id: scenePhase) {
-            guard scenePhase == .active else { return }
+            guard scenePhase == .active else {
+                contracts = contracts.mapValues(\.identity)
+                return
+            }
             while !Task.isCancelled {
                 let current = try? await MarketDataService.mainContracts()
                 guard !Task.isCancelled else { return }
-                contracts = current ?? [:]
-                do { try await Task.sleep(for: .seconds(300)) } catch { return }
+                if let current {
+                    let identities = current.mapValues(\.identity)
+                    if let data = try? JSONEncoder().encode(identities) {
+                        UserDefaults.standard.set(data, forKey: Self.identityKey)
+                    }
+                    contracts = current
+                } else {
+                    contracts = contracts.mapValues(\.identity)
+                }
+                do { try await Task.sleep(for: .seconds(10)) } catch { return }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .qihuiDetailVisibility)) { event in
@@ -76,13 +94,15 @@ private struct GlassTabBar: View {
 }
 
 private struct SearchView: View {
+    @Environment(\.mainContracts) private var contracts
     @State private var query = ""
     private var filtered: [FuturesInstrument] {
-        let all = FuturesInstrument.samples
+        let all = FuturesInstrument.catalog
         let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if keyword.isEmpty { return Array(all.prefix(4)) }
         return all.filter {
-            $0.name.localizedCaseInsensitiveContains(keyword) ||
+            ($0.name + (contracts[$0.id]?.month ?? "")).localizedCaseInsensitiveContains(keyword) ||
+            (contracts[$0.id]?.code.localizedCaseInsensitiveContains(keyword) ?? false) ||
             $0.id.localizedCaseInsensitiveContains(keyword) ||
             $0.exchange.localizedCaseInsensitiveContains(keyword)
         }

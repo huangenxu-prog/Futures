@@ -5,7 +5,8 @@ struct InstrumentRow: View {
     let instrument: FuturesInstrument
 
     private var movementColor: Color {
-        instrument.isRising ? .red : .green
+        let change = contracts[instrument.id]?.change ?? 0
+        return change > 0 ? .red : change < 0 ? .green : .white
     }
 
     var body: some View {
@@ -20,10 +21,10 @@ struct InstrumentRow: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 5) {
-                Text(instrument.lastPrice.formatted())
+                Text(contracts[instrument.id]?.last?.formatted() ?? "--")
                     .font(.body.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.primary)
-                Text("\(instrument.change >= 0 ? "+" : "")\(instrument.change.formatted())  \(instrument.changePercent, format: .number.precision(.fractionLength(2)))%")
+                Text(contracts[instrument.id]?.changePercent ?? "--")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(movementColor)
             }

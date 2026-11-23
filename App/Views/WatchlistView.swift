@@ -3,7 +3,7 @@ import SwiftUI
 struct WatchlistView: View {
     var body: some View {
         NavigationStack {
-            List(FuturesInstrument.samples) { instrument in
+            List(FuturesInstrument.catalog) { instrument in
                 NavigationLink {
                     InstrumentDetailView(instrument: instrument)
                 } label: {

@@ -10,6 +10,7 @@ private enum ChartInk {
 struct InstrumentDetailView: View {
     @Environment(\.mainContracts) private var contracts
     let instrument: FuturesInstrument
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @State private var period = "15分"
     @State private var candles: [DemoCandle] = []
@@ -27,20 +28,15 @@ struct InstrumentDetailView: View {
     @State private var dragBaseStart: Double? = nil
     private let periods = ["1分","5分","15分","30分","60分","日线"]
     private var latestPrice: Double { candles.last?.close ?? 0 }
-    private var sessionChangePercent: Double? {
-        guard let bar = candles.last, let settlement = bar.preSettlement,
-              settlement.isFinite, settlement > 0 else { return nil }
-        let change = (bar.close / settlement - 1) * 100
-        return change.isFinite ? change : nil
-    }
+    private var quote: MarketDataService.MainContract? { contracts[instrument.id] }
+    private var chartSymbol: String { quote?.code ?? instrument.id }
+    private var chartKey: String { chartSymbol + "/" + period }
+    @State private var displayedKey = ""
     private var changeColor: Color {
-        guard let change = sessionChangePercent else { return .white }
+        let change = quote?.change ?? 0
         return change > 0 ? .red : change < 0 ? .green : .white
     }
-    private var changeText: String {
-        guard let change = sessionChangePercent else { return "--" }
-        return String(format: "%+.2f%%", change)
-    }
+    private var changeText: String { quote?.changePercent ?? "--" }
     private var periodSeconds: Int { ["1分":60,"5分":300,"15分":900,"30分":1800,"60分":3600,"日线":86400][period] ?? 900 }
     private var priceDomain: ClosedRange<Double> {
         let low = candles.map(\.low).min() ?? latestPrice * 0.97
@@ -69,13 +65,13 @@ struct InstrumentDetailView: View {
                     Spacer()
                     Text(loadError).font(.caption).foregroundStyle(.orange)
                     Spacer()
-                } else if !candles.isEmpty {
+                } else if !candles.isEmpty && displayedKey == chartKey {
                     candleChart(height: candleHeight)
                     macdPanel(height: macdHeight)
-                    quoteStrip
                 } else {
                     Spacer()
                 }
+                quoteStrip
             }
             .padding(.horizontal, 3)
             .padding(.top, 2)
@@ -87,7 +83,14 @@ struct InstrumentDetailView: View {
         .background(Color.black.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .preferredColorScheme(.dark)
-        .task(id: period) { await loadCandles() }
+        .task(id: chartKey + (scenePhase == .active ? "/active" : "/paused")) {
+            guard scenePhase == .active else { return }
+            await loadCandles(reset: displayedKey != chartKey)
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                await loadCandles(reset: false)
+            }
+        }
         .onAppear {
             NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true)
         }
@@ -95,30 +98,33 @@ struct InstrumentDetailView: View {
             NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false)
         }
     }
-    @MainActor private func loadCandles() async {
+    @MainActor private func loadCandles(reset: Bool) async {
         let requestedPeriod = periodSeconds
-        let symbol = instrument.id
+        let symbol = chartSymbol
+        displayedKey = chartKey
         // Render persisted data immediately; update it quietly in the background.
-        if let cached = MarketDataService.cached(symbol: symbol, period: requestedPeriod) {
-            candles = DemoCandle.from(cached)
-            visibleCount = Double(min(100, candles.count))
-            visibleStart = Double(max(0, candles.count - Int(visibleCount)))
-            selectedCandleIndex = nil
-            crosshairActive = false
-            showingCachedData = true
-        } else {
-            candles = []
-            selectedCandleIndex = nil
-            crosshairActive = false
-            showingCachedData = false
+        if reset {
+            if let cached = MarketDataService.cached(symbol: symbol, period: requestedPeriod) {
+                candles = DemoCandle.from(cached)
+                visibleCount = Double(min(100, candles.count))
+                visibleStart = Double(max(0, candles.count - Int(visibleCount)))
+                selectedCandleIndex = nil
+                crosshairActive = false
+                showingCachedData = true
+            } else {
+                candles = []
+                selectedCandleIndex = nil
+                crosshairActive = false
+                showingCachedData = false
+            }
         }
         loadError = nil
         loading = candles.isEmpty
-        defer { loading = false }
+        defer { if !Task.isCancelled { loading = false } }
         do {
             let bars = try await MarketDataService.fetch(symbol: symbol, period: requestedPeriod)
             try Task.checkCancellation()
-            guard requestedPeriod == periodSeconds else { return }
+            guard symbol == chartSymbol, requestedPeriod == periodSeconds else { return }
             let wasEmpty = candles.isEmpty
             let wasAtLatest = visibleStart + visibleCount >= Double(candles.count) - 1
             candles = DemoCandle.from(bars)
@@ -133,6 +139,7 @@ struct InstrumentDetailView: View {
         } catch is CancellationError {
             return
         } catch {
+            guard !Task.isCancelled else { return }
             if candles.isEmpty {
                 loadError = error.localizedDescription
             } else {
@@ -150,13 +157,13 @@ struct InstrumentDetailView: View {
             Text(instrument.name + (contracts[instrument.id]?.month ?? ""))
                 .font(.system(size: 14, weight: .semibold))
                 .lineLimit(1)
-            Text(contracts[instrument.id]?.code ?? instrument.id)
+            Text(quote?.code ?? (instrument.id + " 主连"))
                 .font(.system(size: 10))
                 .foregroundStyle(.gray)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Spacer(minLength: 1)
-            Text(candles.last?.close.formatted(.number.precision(.fractionLength(0...2))) ?? "--")
+            Text(quote?.last?.formatted() ?? "--")
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
                 .foregroundStyle(changeColor)
                 .monospacedDigit()
@@ -404,15 +411,15 @@ struct InstrumentDetailView: View {
     private var quoteStrip: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                smallQuote("卖1", "--", .white)
-                smallQuote("买1", "--", .white)
-                smallQuote("持仓", "--", .white)
+                smallQuote("卖1", quote?.ask?.formatted() ?? "--", .white)
+                smallQuote("买1", quote?.bid?.formatted() ?? "--", .white)
+                smallQuote("持仓", quote?.interest?.formatted() ?? "--", .white)
             }
             .frame(height: 31)
             .overlay(alignment: .top) { quoteSeparator }
             HStack(spacing: 12) {
-                smallQuote("成交", "--", .white)
-                smallQuote("增仓", "--", .white)
+                smallQuote("成交", quote?.volume?.formatted() ?? "--", .white)
+                smallQuote("增仓", quote?.interestChange?.formatted() ?? "--", .white)
                 smallQuote("幅度", changeText, changeColor)
             }
             .frame(height: 31)

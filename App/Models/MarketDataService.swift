@@ -11,6 +11,7 @@ struct MarketBar: Codable {
 }
 
 private struct KlineResponse: Decodable {
+    let symbol: String
     let bars: [MarketBar]
 }
 
@@ -67,9 +68,31 @@ enum MarketDataService {
         return base
     }
 
-    struct MainContract: Decodable {
+    struct MainContract: Codable {
         let code: String
         let month: String
+        let last, settlement, bid, ask, volume, interest, previousInterest: Double?
+        let time: String?
+
+        var identity: MainContract {
+            MainContract(code: code, month: month, last: nil, settlement: nil, bid: nil,
+                         ask: nil, volume: nil, interest: nil, previousInterest: nil, time: nil)
+        }
+
+        var change: Double? {
+            guard let last, let settlement, settlement > 0 else { return nil }
+            return last - settlement
+        }
+
+        var changePercent: String {
+            guard let change, let settlement else { return "--" }
+            return String(format: "%+.2f%%", change / settlement * 100)
+        }
+
+        var interestChange: Double? {
+            guard let interest, let previousInterest else { return nil }
+            return interest - previousInterest
+        }
     }
 
     static func mainContracts() async throws -> [String: MainContract] {
@@ -96,7 +119,9 @@ enum MarketDataService {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw MarketDataError.invalidResponse
         }
-        let bars = try JSONDecoder().decode(KlineResponse.self, from: data).bars
+        let responseBars = try JSONDecoder().decode(KlineResponse.self, from: data)
+        guard responseBars.symbol == symbol else { throw MarketDataError.invalidResponse }
+        let bars = responseBars.bars
         guard !bars.isEmpty else { throw MarketDataError.noData }
         let sorted = bars.sorted { $0.time < $1.time }
         save(sorted, symbol: symbol, period: period)

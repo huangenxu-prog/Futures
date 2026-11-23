@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +26,27 @@ contract_cache = {}
 contract_cache_until = 0.0
 
 
+def contract_product(code):
+    match = re.fullmatch(r"([A-Z]+\.[A-Za-z]+)[0-9]{3,4}", code)
+    return match.group(1) if match else None
+
+
+def snapshot(quote):
+    if not quote.datetime:
+        return {}
+    fields = {
+        "last": "last_price", "settlement": "pre_settlement", "bid": "bid_price1",
+        "ask": "ask_price1", "volume": "volume", "interest": "open_interest",
+        "previousInterest": "pre_open_interest",
+    }
+    values = {"time": quote.datetime}
+    for key, field in fields.items():
+        value = getattr(quote, field, None)
+        if value is not None and math.isfinite(value):
+            values[key] = float(value)
+    return values
+
+
 def main_contracts():
     global contract_cache, contract_cache_until
     if time.monotonic() < contract_cache_until:
@@ -36,7 +58,7 @@ def main_contracts():
         products = sorted(SYMBOLS)
         continuous = api.get_quote_list(["KQ.m@" + product for product in products])
         pairs = [(product, q.underlying_symbol) for product, q in zip(products, continuous)
-                 if q.underlying_symbol and q.underlying_symbol.startswith(product)]
+                 if q.underlying_symbol and contract_product(q.underlying_symbol) == product]
         if not pairs:
             raise ValueError("missing contract identifiers")
         quotes = api.get_quote_list([code for _, code in pairs])
@@ -44,9 +66,9 @@ def main_contracts():
         for (product, code), quote in zip(pairs, quotes):
             year, month = quote.delivery_year, quote.delivery_month
             if 2000 <= year <= 2099 and 1 <= month <= 12:
-                result[product] = {"code": code, "month": f"{int(year) % 100:02d}{int(month):02d}"}
+                result[product] = {**snapshot(quote), "code": code, "month": f"{int(year) % 100:02d}{int(month):02d}"}
         contract_cache = result
-        contract_cache_until = time.monotonic() + (300 if len(result) == len(products) else 30)
+        contract_cache_until = time.monotonic() + 10
         return result
     finally:
         api.close()
@@ -58,7 +80,7 @@ def load_bars(symbol, period, count):
     api = None
     try:
         api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
-        serial = api.get_kline_serial("KQ.m@" + symbol, period, data_length=count)
+        serial = api.get_kline_serial("KQ.m@" + symbol if symbol in SYMBOLS else symbol, period, data_length=count)
         deadline = time.time() + 15
         while time.time() < deadline:
             api.wait_update(deadline=time.time() + 1)
@@ -114,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
             symbol = params["symbol"][0]
             period = int(params["period"][0])
             count = int(params.get("count", ["100"])[0])
-            if symbol not in SYMBOLS or period not in PERIODS or not 5 <= count <= 500:
+            if (symbol not in SYMBOLS and contract_product(symbol) not in SYMBOLS) or period not in PERIODS or not 5 <= count <= 500:
                 raise ValueError("invalid symbol, period or count")
         except (KeyError, ValueError, IndexError) as exc:
             self.reply(400, {"error": str(exc)})

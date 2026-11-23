@@ -7,7 +7,7 @@ private struct QuoteColumn {
 
 struct MarketHomeView: View {
     @Environment(\.mainContracts) private var contracts
-    private let instruments = FuturesInstrument.samples
+    private let instruments = FuturesInstrument.catalog
     private let yellow = Color(red: 1, green: 0.82, blue: 0.02)
     private let pinnedWidth: CGFloat = 106
     private let rowHeight: CGFloat = 34
@@ -69,10 +69,7 @@ struct MarketHomeView: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 2)
                 }
-                Text("演示行情 · 非实时数据")
-                    .font(.caption2)
-                    .foregroundStyle(.gray)
-                    .padding(.bottom, 8)
+
             }
             .background(Color.black.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
@@ -146,20 +143,23 @@ struct MarketHomeView: View {
     }
 
     private func quoteValue(_ item: FuturesInstrument, _ column: String) -> String {
+        guard let quote = contracts[item.id] else { return "--" }
         switch column {
-        case "最新": return item.lastPrice.formatted()
-        case "涨幅%": return String(format: "%.2f%%", item.changePercent)
-        case "日增仓": return "--"  // No open-interest source in demo model.
-        case "涨跌额": return item.change.formatted()
-        case "成交量", "持仓量": return "--"
+        case "最新": return quote.last?.formatted() ?? "--"
+        case "涨幅%": return quote.changePercent
+        case "日增仓": return quote.interestChange?.formatted() ?? "--"
+        case "涨跌额": return quote.change?.formatted() ?? "--"
+        case "成交量": return quote.volume?.formatted() ?? "--"
+        case "持仓量": return quote.interest?.formatted() ?? "--"
         default: return "--"
         }
     }
 
     private func quoteColor(_ item: FuturesInstrument, _ column: String) -> Color {
         if column == "最新" || column == "涨幅%" || column == "涨跌额" {
-            if item.change > 0 { return .red }
-            if item.change < 0 { return .green }
+            let change = contracts[item.id]?.change ?? 0
+            if change > 0 { return .red }
+            if change < 0 { return .green }
             return .white
         }
         return .white.opacity(0.8)
