@@ -60,8 +60,31 @@ def product_catalog():
                 raise ValueError("TqSdk returned an empty listed futures catalog")
             names = {}
             sample_codes = list(samples.values())
+            # Contract metadata is preferred over a live quote subscription
+            # when the SDK exposes the symbol-information query.
+            if hasattr(api, "query_symbol_info"):
+                try:
+                    for offset in range(0, len(sample_codes), 48):
+                        frame = api.query_symbol_info(sample_codes[offset:offset + 48])
+                        for item in frame.itertuples(index=False):
+                            code = str(getattr(item, "instrument_id", ""))
+                            exchange = str(getattr(item, "exchange_id", ""))
+                            if "." not in code and exchange in EXCHANGES:
+                                code = exchange + "." + code
+                            product = contract_product(code)
+                            raw = getattr(item, "instrument_name", "")
+                            if product in samples and isinstance(raw, str) and raw.strip():
+                                name = re.sub(r"[0-9]{3,4}$", "", raw).strip()
+                                if name:
+                                    names[product] = name
+                except Exception:
+                    # Metadata is optional; ordinary quote names remain a
+                    # fallback rather than making the entire catalog fail.
+                    pass
             for offset in range(0, len(sample_codes), 48):
                 chunk = sample_codes[offset:offset + 48]
+                if all(contract_product(code) in names for code in chunk):
+                    continue
                 quotes = api.get_quote_list(chunk)
                 for code, quote in zip(chunk, quotes):
                     raw = getattr(quote, "instrument_name", "")
