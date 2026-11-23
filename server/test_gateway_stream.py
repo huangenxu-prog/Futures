@@ -65,6 +65,50 @@ class GatewayStreamingTests(unittest.TestCase):
         gateway.Handler.do_GET(handler)
         self.assertEqual(results[0][0], 400)
 
+    def test_contract_month_endpoint_rejects_unknown_product(self):
+        output = []
+        handler = SimpleNamespace(path="/v1/contracts?product=FAKE.xyz",
+                                  reply=lambda status, payload: output.append((status, payload)))
+        gateway.Handler.do_GET(handler)
+        self.assertEqual(output[0][0], 400)
+
+    def test_contract_month_endpoint_returns_real_codes(self):
+        output = []
+        handler = SimpleNamespace(path="/v1/contracts?product=CZCE.SR",
+                                  reply=lambda status, payload: output.append((status, payload)))
+        expected = [{"code": "CZCE.SR701", "month": "2701", "last": 5029.0}]
+        with patch.object(gateway, "listed_contracts", return_value=expected) as mock:
+            gateway.Handler.do_GET(handler)
+        mock.assert_called_once_with("CZCE.SR")
+        self.assertEqual(output, [(200, expected)])
+
+    def test_contract_discovery_filters_wrong_product(self):
+        quote = SimpleNamespace(
+            datetime="2026-11-23 14:59:59", delivery_year=2027, delivery_month=1,
+            last_price=5029., pre_settlement=5010., bid_price1=5028., ask_price1=5030.,
+            volume=5000, open_interest=12000, pre_open_interest=11900,
+            price_tick=1., volume_multiple=10
+        )
+        class FakeAPI:
+            def query_quotes(self, **kwargs):
+                self.filters = kwargs
+                return ["CZCE.SR701", "DCE.m2701"]
+            def get_quote_list(self, codes):
+                self.codes = codes
+                return [quote]
+            def close(self):
+                pass
+        api = FakeAPI()
+        with patch("builtins.open", return_value=io.StringIO('{"username":"u","password":"p"}')):
+            with patch.object(gateway, "TqApi", return_value=api):
+                with patch.object(gateway, "TqAuth", return_value="auth"):
+                    rows = gateway.listed_contracts("CZCE.SR")
+        self.assertEqual(api.codes, ["CZCE.SR701"])
+        self.assertEqual(api.filters["expired"], False)
+        self.assertEqual(rows[0]["month"], "2701")
+        self.assertEqual(rows[0]["priceTick"], 1)
+        self.assertEqual(rows[0]["last"], 5029.)
+
     def test_numeric_snapshot_never_sends_nan(self):
         q = SimpleNamespace(datetime="2026-11-23 10:01:00",
                             last_price=5024.0, pre_settlement=5047.0,
