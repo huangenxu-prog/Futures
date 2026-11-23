@@ -1,0 +1,94 @@
+import SwiftUI
+
+/// TqSdk's real listed delivery months, not a hard-coded contract calendar.
+struct ContractListView: View {
+    let instrument: FuturesInstrument
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.mainContracts) private var mainQuotes
+    @State private var contracts: [MarketDataService.ContractQuote] = []
+    @State private var isLoading = true
+    @State private var errorText: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView("查询挂牌合约")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let errorText {
+                    VStack(spacing: 12) {
+                        Text(errorText)
+                            .font(.subheadline)
+                            .foregroundStyle(MarketPalette.muted)
+                        Button("重试") { Task { await load() } }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if contracts.isEmpty {
+                    ContentUnavailableView("暂无挂牌合约", systemImage: "list.bullet.rectangle")
+                } else {
+                    List {
+                        ForEach(contracts) { contract in
+                            NavigationLink {
+                                InstrumentDetailView(instrument: instrument, selectedContract: contract)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        HStack(spacing: 6) {
+                                            Text(instrument.name + contract.month)
+                                                .font(.system(size: 16, weight: .semibold))
+                                                .foregroundStyle(MarketPalette.ink)
+                                            if mainQuotes[instrument.id]?.code == contract.code {
+                                                Text("主力")
+                                                    .font(.system(size: 10, weight: .medium))
+                                                    .foregroundStyle(MarketPalette.accent)
+                                            }
+                                        }
+                                        Text(contract.code)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(MarketPalette.muted)
+                                    }
+                                    Spacer(minLength: 5)
+                                    VStack(alignment: .trailing, spacing: 4) {
+                                        Text(contract.last?.formatted() ?? "--")
+                                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                                        Text(contract.changePercent)
+                                            .font(.system(size: 12, design: .rounded))
+                                    }
+                                    .monospacedDigit()
+                                    .foregroundStyle(MarketPalette.movement(contract.change))
+                                }
+                                .padding(.vertical, 6)
+                            }
+                        }
+                    }
+                    .listStyle(.plain)
+                    .refreshable { await load() }
+                }
+            }
+            .background(MarketPalette.background)
+            .navigationTitle(instrument.name + " · 交割月份")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
+            .task { await load() }
+        }
+        .tint(MarketPalette.accent)
+        .preferredColorScheme(.light)
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = contracts.isEmpty
+        defer { isLoading = false }
+        do {
+            contracts = try await MarketDataService.listedContracts(for: instrument.id)
+            errorText = nil
+        } catch {
+            errorText = "合约月份暂不可用，请确认行情网关已升级。"
+        }
+    }
+}
