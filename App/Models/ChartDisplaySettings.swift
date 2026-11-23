@@ -20,7 +20,7 @@ enum ChartIndicatorKind: String, Codable, CaseIterable, Hashable, Identifiable {
 }
 
 struct ChartDisplaySettings: Codable, Equatable {
-    var enabled: Set<ChartIndicatorKind> = [.emaFast, .emaSlow, .volume, .macd]
+    var enabled: Set<ChartIndicatorKind> = [.emaFast, .emaSlow, .macd]
     var sma = 20
     var emaFast = 20
     var emaSlow = 50
