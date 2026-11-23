@@ -15,8 +15,8 @@ from urllib.request import urlopen
 
 ROOT = Path("/root/tq_test")
 SCRIPT = ROOT / "server/market_gateway.py"
-VERSION = "efbd352e487406b1c98cab161a3674a5d6da1d4f"
-GIT_BLOB_SHA = "960dd53836a09386ab5a8c28c24cafea41f4fd07"
+VERSION = "93a2ecae759269458fa69549b7dc42e72bc68de8"
+GIT_BLOB_SHA = "08e0b0dc36ee62138d6604ae06c3d06870b69f33"
 
 
 def existing():
@@ -117,6 +117,13 @@ def upgrade():
             bars = get(base, "/v1/klines?" + urlencode(dict(symbol=code, period=900, count=5)))
             if bars.get("symbol") != code or not bars.get("bars"):
                 raise ValueError("白糖具体合约K线验证失败")
+            catalog = get(base, "/v1/catalog")
+            if not isinstance(catalog, list) or len(catalog) <= 17 or not any(
+                    item.get("exchange") == "CFFEX" for item in catalog):
+                raise ValueError("动态全市场合约目录不完整")
+            latest = get(base, "/v1/product-quotes?product=CZCE.SR")
+            if not isinstance(latest, dict):
+                raise ValueError("按需主力报价接口不可用")
             monthly = get(base, "/v1/contracts?" + urlencode(dict(product="CZCE.SR")))
             if not isinstance(monthly, list) or not any(item.get("code") == code for item in monthly):
                 raise ValueError("白糖挂牌月份查询失败")
@@ -132,7 +139,7 @@ def upgrade():
             )))
             if older.get("symbol") != code or not isinstance(older.get("bars"), list):
                 raise ValueError("K线历史分页接口不可用")
-            print("实时推送检查通过：行情 + K线；挂牌合约月份检查通过", flush=True)
+            print("实时推送检查通过；全市场目录", len(catalog), "个品种；按需报价和挂牌月份检查通过", flush=True)
             print("正式网关检查通过：白糖" + q["month"], code, q["time"], "最新价", q["last"], "15分钟K线", len(bars["bars"]), "根", flush=True)
         except Exception:
             if process and process.poll() is None:
