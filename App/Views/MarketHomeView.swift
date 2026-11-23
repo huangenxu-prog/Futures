@@ -7,7 +7,14 @@ private struct QuoteColumn {
 
 struct MarketHomeView: View {
     @Environment(\.mainContracts) private var contracts
-    private let instruments = FuturesInstrument.catalog
+    @EnvironmentObject private var favorites: Favorites
+    @State private var destination: FuturesInstrument?
+    @State private var deleteID: String?
+    @State private var dragOrigin: Int?
+    @State private var dragging: String?
+    private var instruments: [FuturesInstrument] {
+        favorites.ids.compactMap { id in FuturesInstrument.catalog.first { $0.id == id } }
+    }
     private let yellow = Color(red: 1, green: 0.82, blue: 0.02)
     private let pinnedWidth: CGFloat = 106
     private let rowHeight: CGFloat = 34
@@ -35,12 +42,40 @@ struct MarketHomeView: View {
                         VStack(spacing: 0) {
                             pinnedHeader
                             ForEach(instruments) { item in
-                                NavigationLink {
-                                    InstrumentDetailView(instrument: item)
-                                } label: {
+                                ZStack(alignment: .leading) {
                                     instrumentName(item)
+                                        .opacity(dragging == item.id ? 0.65 : 1)
+                                        .overlay {
+                                            FavoriteNameTouch(open: {
+                                                if deleteID != nil { deleteID = nil } else { destination = item }
+                                            }, reveal: { deleteID = item.id }, drag: { dy, state in
+                                                switch state {
+                                                case .began:
+                                                    deleteID = nil
+                                                    dragging = item.id
+                                                    dragOrigin = favorites.ids.firstIndex(of: item.id)
+                                                case .changed:
+                                                    if let origin = dragOrigin {
+                                                        let target = origin + Int((dy / rowHeight).rounded())
+                                                        favorites.move(item.id, to: min(max(0, target), favorites.ids.count - 1))
+                                                    }
+                                                default:
+                                                    dragging = nil
+                                                    dragOrigin = nil
+                                                }
+                                            })
+                                        }
+                                        .accessibilityAction { destination = item }
+                                        .accessibilityAction(named: "删除自选") { favorites.toggle(item.id) }
+                                    if deleteID == item.id {
+                                        Button("删除自选", role: .destructive) {
+                                            favorites.toggle(item.id)
+                                            deleteID = nil
+                                        }
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                        .background(.black)
+                                    }
                                 }
-                                .buttonStyle(.plain)
                                 .frame(height: rowHeight)
                                 .overlay(alignment: .bottom) { rowDivider }
                             }
@@ -72,6 +107,7 @@ struct MarketHomeView: View {
 
             }
             .background(Color.black.ignoresSafeArea())
+            .navigationDestination(item: $destination) { InstrumentDetailView(instrument: $0) }
             .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)

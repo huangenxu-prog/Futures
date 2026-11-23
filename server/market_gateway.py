@@ -74,6 +74,25 @@ def main_contracts():
         api.close()
 
 
+def option_chain(underlying):
+    with open(AUTH_PATH, encoding="utf-8") as handle:
+        credentials = json.load(handle)
+    api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+    try:
+        codes = list(api.query_options(underlying, expired=False))
+        result = []
+        for start in range(0, len(codes), 64):
+            batch = codes[start:start + 64]
+            for code, quote in zip(batch, api.get_quote_list(batch)):
+                if (quote.underlying_symbol == underlying and math.isfinite(quote.strike_price)
+                        and quote.option_class in ("CALL", "PUT")):
+                    result.append(dict(snapshot(quote), code=code, strike=quote.strike_price,
+                                       side=quote.option_class))
+        return sorted(result, key=lambda row: (row["strike"], row["side"], row["code"]))
+    finally:
+        api.close()
+
+
 def load_bars(symbol, period, count):
     with open(AUTH_PATH, encoding="utf-8") as handle:
         credentials = json.load(handle)
@@ -127,6 +146,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, contracts)
             except Exception:
                 self.reply(503, {"error": "market_data_unavailable"})
+            return
+        if url.path == "/v1/options":
+            code = parse_qs(url.query).get("symbol", [""])[0]
+            if contract_product(code) not in SYMBOLS:
+                self.reply(400, {"error": "invalid_underlying"})
+                return
+            try:
+                with LOCK:
+                    chain = option_chain(code)
+                self.reply(200, chain)
+            except Exception:
+                self.reply(503, {"error": "options_unavailable"})
             return
         if url.path != "/v1/klines":
             self.reply(404, {"error": "not_found"})

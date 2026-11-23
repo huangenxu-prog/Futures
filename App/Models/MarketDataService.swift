@@ -95,6 +95,24 @@ enum MarketDataService {
         }
     }
 
+    struct OptionQuote: Decodable, Identifiable {
+        let code, side: String
+        let strike: Double
+        let last, ask, bid: Double?
+        var id: String { code }
+    }
+
+    static func options(for code: String) async throws -> [OptionQuote] {
+        let url = try baseURL().appendingPathComponent("v1/options")
+            .appending(queryItems: [URLQueryItem(name: "symbol", value: code)])
+        let (data, response) = try await URLSession.shared.data(from: url)
+        if (response as? HTTPURLResponse)?.statusCode == 404 {
+            throw NSError(domain: "Futures", code: 404, userInfo: [NSLocalizedDescriptionKey: "请升级行情网关以查看期权"])
+        }
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw MarketDataError.invalidResponse }
+        return try JSONDecoder().decode([OptionQuote].self, from: data)
+    }
+
     static func mainContracts() async throws -> [String: MainContract] {
         let url = try baseURL().appendingPathComponent("v1/main-contracts")
         let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 25))

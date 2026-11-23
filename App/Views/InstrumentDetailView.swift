@@ -9,6 +9,10 @@ private enum ChartInk {
 
 struct InstrumentDetailView: View {
     @Environment(\.mainContracts) private var contracts
+    @EnvironmentObject private var favorites: Favorites
+    @State private var showTrade = false
+    @State private var showOptions = false
+    @State private var volumePanel = false
     let instrument: FuturesInstrument
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
@@ -38,15 +42,22 @@ struct InstrumentDetailView: View {
     }
     private var changeText: String { quote?.changePercent ?? "--" }
     private var periodSeconds: Int { ["1分":60,"5分":300,"15分":900,"30分":1800,"60分":3600,"日线":86400][period] ?? 900 }
+    private var window: Range<Int> {
+        let lower = min(candles.count, max(0, Int(floor(visibleStart)) - 1))
+        return lower..<max(lower, min(candles.count, Int(ceil(visibleStart + visibleCount)) + 1))
+    }
+    private func maxStart(_ count: Double) -> Double {
+        max(0, Double(candles.count) - count + floor(count / 2))
+    }
     private var priceDomain: ClosedRange<Double> {
-        let low = candles.map(\.low).min() ?? latestPrice * 0.97
-        let high = candles.map(\.high).max() ?? latestPrice * 1.03
+        let low = candles[window].map(\.low).min() ?? latestPrice * 0.97
+        let high = candles[window].map(\.high).max() ?? latestPrice * 1.03
         let padding = max((high - low) * 0.10, latestPrice * 0.002)
         return (low - padding)...(high + padding)
     }
     private var visibleDomain: ClosedRange<Double> { visibleStart...(visibleStart + visibleCount - 1) }
     private var macdDomain: ClosedRange<Double> {
-        let peak = candles.map { max(abs($0.hist), abs($0.dif), abs($0.dea)) }.max() ?? 1
+        let peak = candles[window].map { max(abs($0.hist), abs($0.dif), abs($0.dea)) }.max() ?? 1
         let limit = max(peak * 1.25, latestPrice * 0.0005)
         return -limit...limit
     }
@@ -57,6 +68,7 @@ struct InstrumentDetailView: View {
             let candleHeight = max(32, geometry.size.height - 43 - quoteHeight - macdHeight - 11)
             VStack(spacing: 3) {
                 topBar
+                indicatorRow
                 if loading && candles.isEmpty {
                     Spacer()
                     ProgressView("正在获取行情")
@@ -67,7 +79,7 @@ struct InstrumentDetailView: View {
                     Spacer()
                 } else if !candles.isEmpty && displayedKey == chartKey {
                     candleChart(height: candleHeight)
-                    macdPanel(height: macdHeight)
+                    if volumePanel { volumeChart(height: macdHeight) } else { macdPanel(height: macdHeight) }
                 } else {
                     Spacer()
                 }
@@ -91,6 +103,8 @@ struct InstrumentDetailView: View {
                 await loadCandles(reset: false)
             }
         }
+        .sheet(isPresented: $showTrade) { ProfileView() }
+        .sheet(isPresented: $showOptions) { OptionChainView(code: chartSymbol) }
         .onAppear {
             NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true)
         }
@@ -122,11 +136,14 @@ struct InstrumentDetailView: View {
         loading = candles.isEmpty
         defer { if !Task.isCancelled { loading = false } }
         do {
-            let bars = try await MarketDataService.fetch(symbol: symbol, period: requestedPeriod)
+            let bars = try await MarketDataService.fetch(symbol: symbol, period: requestedPeriod, count: 500)
             try Task.checkCancellation()
             guard symbol == chartSymbol, requestedPeriod == periodSeconds else { return }
             let wasEmpty = candles.isEmpty
             let wasAtLatest = visibleStart + visibleCount >= Double(candles.count) - 1
+            let oldCount = candles.count
+            let anchor = candles.indices.contains(Int(visibleStart)) ? candles[Int(visibleStart)].time : nil
+            let fraction = visibleStart - floor(visibleStart)
             candles = DemoCandle.from(bars)
             showingCachedData = false
             if wasEmpty {
@@ -134,7 +151,9 @@ struct InstrumentDetailView: View {
                 visibleStart = Double(max(0, candles.count - Int(visibleCount)))
                 selectedCandleIndex = nil
             } else if wasAtLatest {
-                visibleStart = max(0, Double(candles.count) - visibleCount)
+                visibleStart = min(maxStart(visibleCount), max(0, visibleStart + Double(candles.count - oldCount)))
+            } else if let anchor, let index = candles.firstIndex(where: { $0.time >= anchor }) {
+                visibleStart = min(maxStart(visibleCount), Double(index) + fraction)
             }
         } catch is CancellationError {
             return
@@ -201,22 +220,26 @@ struct InstrumentDetailView: View {
         formatter.dateFormat = period == "日线" ? "MM/dd" : "MM/dd HH:mm"
         return formatter.string(from: date)
     }
-    private func candleChart(height: CGFloat) -> some View {
-        VStack(alignment:.leading,spacing:6) {
+    private var indicatorRow: some View {
             HStack(spacing: 5) {
                 if let index = selectedCandleIndex, candles.indices.contains(index) {
                     selectedCandleInfo(candles[index], index: index)
                 } else if showIndicators {
                     Text("EMA20").foregroundStyle(.white)
                     Text("EMA50").foregroundStyle(ChartInk.slow)
-                    Spacer(minLength: 0)
                 }
+                Spacer(minLength: 0)
+                actions
             }
             .font(.system(size: 10, weight: .medium))
             .frame(height: 18, alignment: .leading)
             .clipped()
+    }
+    private func candleChart(height: CGFloat) -> some View {
+        VStack(alignment:.leading,spacing:6) {
             Chart {
-                ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
+                ForEach(window, id: \.self) { i in
+                    let c = candles[i]
                     RuleMark(x: .value("序号", i), yStart: .value("低", c.low), yEnd: .value("高", c.high))
                         .foregroundStyle(Color.clear)
                     if showIndicators {
@@ -269,7 +292,7 @@ struct InstrumentDetailView: View {
                             let plotWidth = max(geometry.size.width - 38, 1)
                             let shift = Double(translation / plotWidth) * visibleCount
                             visibleStart = min(max(0, base - shift),
-                                               max(0, Double(candles.count) - visibleCount))
+                                               maxStart(visibleCount))
                         },
                         onCrosshair: { locationX, ended in
                             if ended {
@@ -310,7 +333,7 @@ struct InstrumentDetailView: View {
                             let center = baseStart + (baseCount - 1) / 2
                             visibleCount = nextCount
                             visibleStart = min(max(0, center - (nextCount - 1) / 2),
-                                               max(0, total - nextCount))
+                                               maxStart(nextCount))
                         },
                         onTap: {
                             selectedCandleIndex = nil
@@ -336,7 +359,8 @@ struct InstrumentDetailView: View {
                 Canvas { context, size in
                     let spacing = size.width / CGFloat(max(1, visibleCount - 1))
                     let bodyWidth = max(0.5, spacing * 0.66)
-                    for (index, bar) in candles.enumerated() {
+                    for index in window {
+                        let bar = candles[index]
                         guard let x = proxy.position(forX: index),
                               let high = proxy.position(forY: bar.high),
                               let low = proxy.position(forY: bar.low),
@@ -387,13 +411,49 @@ struct InstrumentDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func volumeChart(height: CGFloat) -> some View {
+        VStack(alignment: .leading) {
+            Text("成交量").font(.caption2)
+            Chart(window, id: \.self) { i in
+                BarMark(x: .value("序号", i), y: .value("成交量", candles[i].volume))
+                    .foregroundStyle(candles[i].close >= candles[i].open ? ChartInk.up : ChartInk.down)
+            }
+            .chartXScale(domain: visibleDomain)
+            .chartXAxis(.hidden)
+            .chartYAxis(.hidden)
+        }
+        .frame(height: height)
+    }
+
+    private var actions: some View {
+        Menu {
+            Button("交易（模拟账户）") { showTrade = true }
+            Button(favorites.ids.contains(instrument.id) ? "移出自选" : "加入自选") {
+                favorites.toggle(instrument.id)
+            }
+            Menu("切换指标") {
+                Toggle("EMA20 / EMA50", isOn: $showIndicators)
+                Picker("副图", selection: $volumePanel) {
+                    Text("MACD").tag(false)
+                    Text("成交量").tag(true)
+                }
+            }
+            Button("切换期权") { showOptions = true }
+                .disabled(quote == nil)
+        } label: {
+            Image(systemName: "ellipsis").frame(width: 38, height: 24)
+        }
+        .accessibilityLabel("合约菜单")
+    }
+
     private func macdPanel(height: CGFloat) -> some View {
         VStack(alignment:.leading,spacing:3) {
             HStack { Text("MACD(12,26,9)").foregroundStyle(ChartInk.slow).font(.system(size: 10, weight: .medium)); Spacer(); Text("DIF").foregroundStyle(.white); Text("DEA").foregroundStyle(ChartInk.slow) }.foregroundStyle(.white.opacity(0.65)).font(.system(size: 10))
             GeometryReader { geometry in
                 let barWidth = max(0.5, geometry.size.width / CGFloat(max(1, visibleCount - 1)) * 0.26)
                 Chart {
-                    ForEach(Array(candles.enumerated()),id:\.offset) { i,c in
+                    ForEach(window, id: \.self) { i in
+                    let c = candles[i]
                         BarMark(x:.value("序号",i),y:.value("MACD",c.hist),width:.fixed(barWidth)).foregroundStyle(c.hist >= 0 ? ChartInk.up : ChartInk.down)
                         LineMark(x:.value("序号",i),y:.value("DIF",c.dif),series:.value("MACD线","DIF")).foregroundStyle(.white).lineStyle(StrokeStyle(lineWidth:1.2))
                         LineMark(x:.value("序号",i),y:.value("DEA",c.dea),series:.value("MACD线","DEA")).foregroundStyle(ChartInk.slow).lineStyle(StrokeStyle(lineWidth:1.2))

@@ -12,6 +12,7 @@ extension EnvironmentValues {
 }
 
 struct ContentView: View {
+    @StateObject private var favorites = Favorites()
     @Environment(\.scenePhase) private var scenePhase
     @State private var contracts = savedIdentities()
 
@@ -38,6 +39,7 @@ struct ContentView: View {
         }
         .preferredColorScheme(.dark)
         .environment(\.mainContracts, contracts)
+        .environmentObject(favorites)
         .task(id: scenePhase) {
             guard scenePhase == .active else {
                 contracts = contracts.mapValues(\.identity)
@@ -157,7 +159,7 @@ private struct SearchView: View {
     }
 }
 
-private struct ProfileView: View {
+struct ProfileView: View {
     private let blue = Color(red:0.28,green:0.55,blue:1.0)
     private let green = Color(red:0.15,green:0.78,blue:0.48)
     private let red = Color(red:0.15,green:0.78,blue:0.48)
