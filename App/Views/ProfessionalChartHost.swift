@@ -15,6 +15,11 @@ struct ProfessionalChartHost: View {
     @State private var model: TradingChartModel = {
         var configuration = TradingChartConfiguration()
         configuration.viewport.candleVisibleBars = 52
+        // Previous 6-bar right gap consumed too much chart width on iPhone.
+        // Leave only a small breathing room; the chart engine still adds
+        // enough space if the live-price badge would cover the last candle.
+        configuration.viewport.trailingPaddingBars = 1.25
+        configuration.viewport.maxTrailingPaddingFraction = 0.06
         configuration.paneHeight = 110
         configuration.maxLiveBarCount = nil
         configuration.showsLegend = true
@@ -76,6 +81,10 @@ struct ProfessionalChartHost: View {
         value.currentPriceLine = MarketPalette.accent.opacity(0.65)
         value.priceBadgeBackground = MarketPalette.accent
         value.priceBadgeText = .white
+        // Compact the live price marker without removing the useful
+        // tap-to-latest affordance when viewing older candles.
+        value.priceBadgeFont = .system(size: 10, weight: .semibold, design: .monospaced)
+        value.yAxisLabelWidth = 64
         value.indicatorPalette = [MarketPalette.sma, MarketPalette.ema20,
                                   MarketPalette.ema50, MarketPalette.wma]
         value.paneSeparator = MarketPalette.divider

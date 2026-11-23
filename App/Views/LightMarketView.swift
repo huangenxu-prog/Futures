@@ -290,7 +290,7 @@ struct LightMarketView: View {
     }
 
     private var scopeSelector: some View {
-        HStack(spacing: 24) {
+        HStack(spacing: 10) {
             ForEach(Scope.allCases, id: \.self) { option in
                 Button {
                     scope = option
@@ -300,6 +300,8 @@ struct LightMarketView: View {
                         Text(option.rawValue)
                             .font(.system(size: 15, weight: scope == option ? .semibold : .regular))
                             .foregroundStyle(scope == option ? MarketPalette.ink : MarketPalette.muted)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         Rectangle()
                             .fill(scope == option ? MarketPalette.accent : .clear)
                             .frame(height: 2)
@@ -307,9 +309,9 @@ struct LightMarketView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Spacer()
+            Spacer(minLength: 4)
             if scope == .favorites && search.isEmpty && sortBy == "默认" && !favorites.ids.isEmpty {
-                Button(editing ? "完成" : "调整") { editing.toggle() }
+                Button(editing ? "完成" : "编辑") { editing.toggle() }
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(MarketPalette.accent)
                     .padding(.bottom, 7)
@@ -417,17 +419,21 @@ struct LightMarketView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Button {
-                favorites.toggle(item.id)
-            } label: {
-                Image(systemName: isFavorite ? "star.fill" : "star")
-                    .font(.system(size: 14))
-                    .foregroundStyle(isFavorite ? MarketPalette.accent : MarketPalette.muted)
-                    .frame(width: 25, height: 43)
-                    .contentShape(Rectangle())
+            // In the normal favorites list the star is redundant. Keep
+            // it visible in catalog/rankings and global search results.
+            if scope != .favorites || !search.isEmpty {
+                Button {
+                    favorites.toggle(item.id)
+                } label: {
+                    Image(systemName: isFavorite ? "star.fill" : "star")
+                        .font(.system(size: 14))
+                        .foregroundStyle(isFavorite ? MarketPalette.accent : MarketPalette.muted)
+                        .frame(width: 25, height: 43)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(isFavorite ? "移出自选" : "加入自选")
             }
-            .buttonStyle(.borderless)
-            .accessibilityLabel(isFavorite ? "移出自选" : "加入自选")
         }
     }
 
