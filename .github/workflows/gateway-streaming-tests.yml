@@ -1,0 +1,18 @@
+name: Gateway Streaming Tests
+
+on:
+  push:
+    paths:
+      - 'server/**'
+      - '.github/workflows/gateway-streaming-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python syntax and offline stream checks
+        run: |
+          python3 -m py_compile server/market_gateway.py server/upgrade_gateway.py
+          python3 -m unittest discover -s server -p 'test_gateway_stream.py' -v
