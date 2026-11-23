@@ -98,7 +98,11 @@ struct ProfessionalChartHost: View {
             indicators.append(EMA(period: 20))
             indicators.append(EMA(period: 50))
         }
-        indicators.append(showVolume ? Volume() : MACD(fast: 12, slow: 26, signal: 9))
+        if showVolume {
+            indicators.append(Volume())
+        } else {
+            indicators.append(MACD(fast: 12, slow: 26, signal: 9))
+        }
         model.indicators = indicators
     }
 
