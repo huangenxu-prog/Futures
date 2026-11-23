@@ -1,6 +1,6 @@
 import Foundation
 
-struct FuturesInstrument: Identifiable, Hashable {
+struct FuturesInstrument: Identifiable, Hashable, Codable {
     let id: String
     let name: String
     let exchange: String
