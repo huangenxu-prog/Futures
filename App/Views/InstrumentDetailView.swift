@@ -469,7 +469,7 @@ struct InstrumentDetailView: View {
         }
         .font(.system(size: 10, design: .rounded))
         .monospacedDigit()
-        .foregroundStyle(.white.opacity(0.85))
+        .foregroundStyle(MarketPalette.ink.opacity(0.88))
         .lineLimit(1)
         .minimumScaleFactor(0.7)
         .frame(maxWidth: .infinity, alignment: .leading)
