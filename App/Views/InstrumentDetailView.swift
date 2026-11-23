@@ -10,9 +10,8 @@ private enum ChartInk {
 struct InstrumentDetailView: View {
     @Environment(\.mainContracts) private var contracts
     @EnvironmentObject private var favorites: Favorites
-    @State private var showTrade = false
     @State private var showOptions = false
-    @State private var volumePanel = false
+    @State private var showContracts = false
     let instrument: FuturesInstrument
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
@@ -81,7 +80,6 @@ struct InstrumentDetailView: View {
                 } else if !rawBars.isEmpty && displayedKey == chartKey {
                     ProfessionalChartHost(
                         symbol: chartSymbol, period: periodSeconds, bars: rawBars,
-                        showEMA: showIndicators, showVolume: volumePanel,
                         selectedCandleTime: $selectedCandleTime
                     )
                     .id(chartKey)
@@ -118,8 +116,8 @@ struct InstrumentDetailView: View {
                 }
             }
         }
-        .sheet(isPresented: $showTrade) { ProfileView() }
         .sheet(isPresented: $showOptions) { OptionChainView(code: chartSymbol) }
+        .sheet(isPresented: $showContracts) { ContractListView(instrument: instrument) }
         .onAppear {
             NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true)
         }
@@ -265,11 +263,7 @@ struct InstrumentDetailView: View {
                     .padding(.horizontal, 7).padding(.vertical, 7)
                     .background(MarketPalette.background, in: Capsule())
             }
-            Button { showIndicators.toggle() } label: {
-                Image(systemName: showIndicators ? "eye" : "eye.slash")
-                    .font(.system(size: 15))
-                    .frame(width: 26, height: 36)
-            }
+
         }
         .foregroundStyle(MarketPalette.ink)
         .padding(.horizontal, 4)
@@ -288,9 +282,8 @@ struct InstrumentDetailView: View {
                 if let timestamp = selectedCandleTime,
                    let index = candles.firstIndex(where: { $0.time == timestamp }) {
                     selectedCandleInfo(candles[index], index: index)
-                } else if showIndicators {
-                    Text("EMA20").foregroundStyle(.orange)
-                    Text("EMA50").foregroundStyle(MarketPalette.accent)
+                } else {
+                    Text("技术分析").foregroundStyle(MarketPalette.muted)
                 }
                 Spacer(minLength: 0)
                 actions
@@ -491,19 +484,12 @@ struct InstrumentDetailView: View {
 
     private var actions: some View {
         Menu {
-            Button("交易（模拟账户）") { showTrade = true }
             Button(favorites.ids.contains(instrument.id) ? "移出自选" : "加入自选") {
                 favorites.toggle(instrument.id)
             }
-            Menu("切换指标") {
-                Toggle("EMA20 / EMA50", isOn: $showIndicators)
-                Picker("副图", selection: $volumePanel) {
-                    Text("MACD").tag(false)
-                    Text("成交量").tag(true)
-                }
-            }
-            Button("切换期权") { showOptions = true }
+            Button("查看期权 T 型报价") { showOptions = true }
                 .disabled(quote == nil)
+            Button("选择合约月份") { showContracts = true }
         } label: {
             Image(systemName: "ellipsis").frame(width: 38, height: 24)
         }
