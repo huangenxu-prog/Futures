@@ -4,6 +4,17 @@ private struct MainContractsKey: EnvironmentKey {
     static let defaultValue: [String: MarketDataService.MainContract] = [:]
 }
 
+private struct FuturesCatalogKey: EnvironmentKey {
+    static let defaultValue: [FuturesInstrument] = FuturesInstrument.catalog
+}
+
+extension EnvironmentValues {
+    var futuresCatalog: [FuturesInstrument] {
+        get { self[FuturesCatalogKey.self] }
+        set { self[FuturesCatalogKey.self] = newValue }
+    }
+}
+
 extension EnvironmentValues {
     var mainContracts: [String: MarketDataService.MainContract] {
         get { self[MainContractsKey.self] }
@@ -15,6 +26,15 @@ struct ContentView: View {
     @StateObject private var favorites = Favorites()
     @Environment(\.scenePhase) private var scenePhase
     @State private var contracts = savedIdentities()
+    @State private var catalog = savedCatalog()
+    private static let catalogKey = "qihui.futures.catalog.cache.v1"
+
+    private static func savedCatalog() -> [FuturesInstrument] {
+        guard let data = UserDefaults.standard.data(forKey: catalogKey),
+              let items = try? JSONDecoder().decode([FuturesInstrument].self, from: data),
+              !items.isEmpty else { return FuturesInstrument.catalog }
+        return items
+    }
 
     private static let identityKey = "main-contract-identities"
 
@@ -27,7 +47,17 @@ struct ContentView: View {
         LightMarketView()
             .preferredColorScheme(.light)
             .environment(\.mainContracts, contracts)
+            .environment(\.futuresCatalog, catalog)
             .environmentObject(favorites)
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            if let loaded = try? await MarketDataService.catalogProducts() {
+                catalog = loaded
+                if let data = try? JSONEncoder().encode(loaded) {
+                    UserDefaults.standard.set(data, forKey: Self.catalogKey)
+                }
+            }
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active else {
                 contracts = contracts.mapValues(\.identity)
