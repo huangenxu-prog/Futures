@@ -15,8 +15,8 @@ from urllib.request import urlopen
 
 ROOT = Path("/root/tq_test")
 SCRIPT = ROOT / "server/market_gateway.py"
-VERSION = "9f45384508a671e1c38416b45a06a458163b84be"
-GIT_BLOB_SHA = "603f628f12875c4ac5c7d80e90b82b1b4451dbc4"
+VERSION = "8e491d81f1edef366a5e503293d68062f0f6f89b"
+GIT_BLOB_SHA = "2272e876f7a4729c0cb9ee77965151872ef9b272"
 
 
 def existing():
@@ -123,6 +123,12 @@ def upgrade():
             candle_update = first_stream_event(base, "/v1/stream/klines?" + urlencode(dict(symbol=code, period=900, count=5)))
             if candle_update.get("symbol") != code or not candle_update.get("bars"):
                 raise ValueError("K线实时推送未返回初始K线")
+            oldest = min(item["time"] for item in candle_update["bars"])
+            older = get(base, "/v1/history?" + urlencode(dict(
+                symbol=code, period=900, before=oldest, count=5, depth=600
+            )))
+            if older.get("symbol") != code or not isinstance(older.get("bars"), list):
+                raise ValueError("K线历史分页接口不可用")
             print("实时推送检查通过：行情 + K线", flush=True)
             print("正式网关检查通过：白糖" + q["month"], code, q["time"], "最新价", q["last"], "15分钟K线", len(bars["bars"]), "根", flush=True)
         except Exception:
