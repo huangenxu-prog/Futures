@@ -46,6 +46,20 @@ struct InstrumentDetailView: View {
     private var chartSymbol: String { selectedContract?.code ?? quote?.code ?? instrument.id }
     private var chartKey: String { chartSymbol + "/" + period }
     @State private var displayedKey = ""
+    @State private var lastStreamCandleAt: Date?
+    @State private var lastStreamCandleKey: String?
+    @State private var realtimeRevision = 0
+
+    // TqSdk quote datetimes are exchange-local (China Standard Time).
+    // Use them only to confirm a quote belongs to the currently open bar.
+    private static let exchangeQuoteTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 8 * 3600)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
     private var displayedChange: Double? { selectedContract?.change ?? quote?.change }
     private var changeColor: Color { MarketPalette.movement(displayedChange) }
     private var changeText: String { selectedContract?.changePercent ?? quote?.changePercent ?? "--" }
@@ -121,11 +135,22 @@ struct InstrumentDetailView: View {
         }
         .task(id: chartKey + (scenePhase == .active ? "/active" : "/paused")) {
             guard scenePhase == .active else { return }
-            await loadCandles(reset: displayedKey != chartKey)
             let symbol = chartSymbol
             let seconds = periodSeconds
-            // Live K-line subscription updates only the most recent bar on each tick.
-            // If the tunnel or legacy gateway cannot stream, preserve 30s HTTP fallback.
+            let key = chartKey
+            if displayedKey != key {
+                prepareCachedCandles(symbol: symbol, period: seconds)
+            }
+            // Start the live feed immediately; do not block it behind a new
+            // TqSdk HTTP snapshot, which can take many seconds to initialize.
+            // Recover the full snapshot after a grace period if SSE never yields.
+            let initialSnapshot = Task { @MainActor in
+                do { try await Task.sleep(for: .seconds(8)) } catch { return }
+                guard !Task.isCancelled, chartKey == key,
+                      lastStreamCandleKey != key else { return }
+                await loadCandles(reset: false)
+            }
+            defer { initialSnapshot.cancel() }
             while !Task.isCancelled {
                 do {
                     try await MarketDataService.streamCandles(symbol: symbol, period: seconds) { event in
@@ -135,10 +160,19 @@ struct InstrumentDetailView: View {
                 } catch is CancellationError {
                     return
                 } catch {
+                    // Stream failure is not proof of stale TqSdk data. Use an
+                    // HTTP snapshot, then retry promptly instead of pausing 30s.
+                    initialSnapshot.cancel()
                     await loadCandles(reset: false)
-                    do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                    do { try await Task.sleep(for: .seconds(3)) } catch { return }
                 }
             }
+        }
+        .onChange(of: quote?.time) { _, _ in
+            // When a separate candle SSE connection stalls, the existing live
+            // main-contract quote can keep the open candle moving. Authoritative
+            // SSE bars always take precedence and replace this provisional close.
+            if let quote { applyLiveQuoteToOpenCandle(quote) }
         }
         .sheet(isPresented: $showOptions) {
             OptionChainView(code: chartSymbol, underlyingLast: rawBars.last?.close ?? selectedContract?.last ?? quote?.last)
@@ -151,37 +185,46 @@ struct InstrumentDetailView: View {
             NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false)
         }
     }
+    @MainActor
+    private func prepareCachedCandles(symbol: String, period: Int) {
+        displayedKey = chartKey
+        lastStreamCandleAt = nil
+        lastStreamCandleKey = nil
+        realtimeRevision = 0
+        if let cached = MarketDataService.cached(symbol: symbol, period: period) {
+            rawBars = cached
+            selectedCandleTime = nil
+            candles = DemoCandle.from(cached)
+            visibleCount = Double(min(100, candles.count))
+            visibleStart = Double(max(0, candles.count - Int(visibleCount)))
+            selectedCandleIndex = nil
+            crosshairActive = false
+            showingCachedData = true
+        } else {
+            candles = []
+            rawBars = []
+            selectedCandleTime = nil
+            selectedCandleIndex = nil
+            crosshairActive = false
+            showingCachedData = false
+        }
+        loadError = nil
+        loading = candles.isEmpty
+    }
+
     @MainActor private func loadCandles(reset: Bool) async {
         let requestedPeriod = periodSeconds
         let symbol = chartSymbol
-        displayedKey = chartKey
-        // Render persisted data immediately; update it quietly in the background.
-        if reset {
-            if let cached = MarketDataService.cached(symbol: symbol, period: requestedPeriod) {
-                rawBars = cached
-                selectedCandleTime = nil
-                candles = DemoCandle.from(cached)
-                visibleCount = Double(min(100, candles.count))
-                visibleStart = Double(max(0, candles.count - Int(visibleCount)))
-                selectedCandleIndex = nil
-                crosshairActive = false
-                showingCachedData = true
-            } else {
-                candles = []
-                rawBars = []
-                selectedCandleTime = nil
-                selectedCandleIndex = nil
-                crosshairActive = false
-                showingCachedData = false
-            }
-        }
+        if reset { prepareCachedCandles(symbol: symbol, period: requestedPeriod) }
+        let revisionAtRequest = realtimeRevision
         loadError = nil
         loading = candles.isEmpty
         defer { if !Task.isCancelled { loading = false } }
         do {
             let bars = try await MarketDataService.fetch(symbol: symbol, period: requestedPeriod, count: 500)
             try Task.checkCancellation()
-            guard symbol == chartSymbol, requestedPeriod == periodSeconds else { return }
+            guard symbol == chartSymbol, requestedPeriod == periodSeconds,
+                  revisionAtRequest == realtimeRevision else { return }
             let wasEmpty = candles.isEmpty
             let wasAtLatest = visibleStart + visibleCount >= Double(candles.count) - 1
             let oldCount = candles.count
@@ -211,6 +254,32 @@ struct InstrumentDetailView: View {
         }
     }
     @MainActor
+    private func applyLiveQuoteToOpenCandle(_ live: MarketDataService.MainContract) {
+        guard selectedContract == nil, live.code == chartSymbol,
+              let price = live.last, price.isFinite, price > 0,
+              let time = live.time, time.count >= 19,
+              let quoteDate = Self.exchangeQuoteTimeFormatter.date(from: String(time.prefix(19))),
+              let last = rawBars.last else { return }
+        // A fresh real K-line event has more complete OHLC and volume data.
+        if let streamTime = lastStreamCandleAt,
+           lastStreamCandleKey == chartKey,
+           Date().timeIntervalSince(streamTime) < 2 { return }
+        let quoteTime = quoteDate.timeIntervalSince1970
+        let first = Double(last.time)
+        guard quoteTime >= first, quoteTime < first + Double(periodSeconds) else { return }
+        let candidate = MarketBar(time: last.time, open: last.open,
+                                  high: max(last.high, price), low: min(last.low, price),
+                                  close: price, preSettlement: last.preSettlement,
+                                  volume: last.volume)
+        guard candidate != last else { return }
+        var next = rawBars
+        next[next.count - 1] = candidate
+        rawBars = next
+        candles = DemoCandle.from(next)
+        realtimeRevision &+= 1
+    }
+
+    @MainActor
     private func applyLiveCandle(_ event: MarketDataService.CandlePush) {
         guard event.symbol == chartSymbol, displayedKey == chartKey else { return }
         let updated: [MarketBar]
@@ -238,6 +307,9 @@ struct InstrumentDetailView: View {
         let fraction = visibleStart - floor(visibleStart)
         rawBars = updated
         candles = DemoCandle.from(updated)
+        lastStreamCandleAt = Date()
+        lastStreamCandleKey = chartKey
+        realtimeRevision &+= 1
         showingCachedData = false
         loadError = nil
         loading = false
