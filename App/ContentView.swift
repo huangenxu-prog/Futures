@@ -45,25 +45,46 @@ struct ContentView: View {
                 contracts = contracts.mapValues(\.identity)
                 return
             }
+            // Fetch one snapshot immediately, then receive individual market
+            // updates as soon as TqSdk pushes them to the gateway.
             while !Task.isCancelled {
-                let current = try? await MarketDataService.mainContracts()
-                guard !Task.isCancelled else { return }
-                if let current {
-                    let identities = current.mapValues(\.identity)
-                    if let data = try? JSONEncoder().encode(identities) {
-                        UserDefaults.standard.set(data, forKey: Self.identityKey)
+                do {
+                    let initial = try await MarketDataService.mainContracts()
+                    try Task.checkCancellation()
+                    applyContracts(initial)
+                    try await MarketDataService.streamQuotes { live in
+                        applyContracts(live)
                     }
-                    contracts = current
-                } else {
-                    contracts = contracts.mapValues(\.identity)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    // Older gateway/offline tunnel: preserve working 10s polling fallback.
+                    if let fallback = try? await MarketDataService.mainContracts() {
+                        applyContracts(fallback)
+                    } else {
+                        contracts = contracts.mapValues(\.identity)
+                    }
+                    do { try await Task.sleep(for: .seconds(10)) } catch { return }
                 }
-                do { try await Task.sleep(for: .seconds(10)) } catch { return }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .qihuiDetailVisibility)) { event in
             detailVisible = (event.object as? Bool) ?? false
         }
     }
+    @MainActor
+    private func applyContracts(_ incoming: [String: MarketDataService.MainContract]) {
+        let oldIDs = contracts.mapValues { $0.code + "/" + $0.month }
+        let newIDs = incoming.mapValues { $0.code + "/" + $0.month }
+        if oldIDs != newIDs {
+            let identities = incoming.mapValues(\.identity)
+            if let data = try? JSONEncoder().encode(identities) {
+                UserDefaults.standard.set(data, forKey: Self.identityKey)
+            }
+        }
+        contracts = incoming
+    }
+
 }
 
 extension Notification.Name {
