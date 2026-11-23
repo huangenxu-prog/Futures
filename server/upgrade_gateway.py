@@ -15,8 +15,8 @@ from urllib.request import urlopen
 
 ROOT = Path("/root/tq_test")
 SCRIPT = ROOT / "server/market_gateway.py"
-VERSION = "93a2ecae759269458fa69549b7dc42e72bc68de8"
-GIT_BLOB_SHA = "08e0b0dc36ee62138d6604ae06c3d06870b69f33"
+VERSION = "56d01e09dffa5155e682a1ae02640f19cfe5aba9"
+GIT_BLOB_SHA = "94882b5a69a5c931b8eff239a23ae6cb4f3ca2fd"
 
 
 def existing():
@@ -114,9 +114,23 @@ def upgrade():
             code = q["code"]
             if not q.get("month") or not q.get("time") or not all(math.isfinite(q[k]) for k in ("last", "settlement")):
                 raise ValueError("白糖报价不完整")
-            bars = get(base, "/v1/klines?" + urlencode(dict(symbol=code, period=900, count=5)))
+            kline_path = "/v1/klines?" + urlencode(dict(symbol=code, period=900, count=5))
+            # First request may need TqSdk backfill. The second must reuse
+            # the persistent subscription and not recreate a market API.
+            bars = get(base, kline_path)
             if bars.get("symbol") != code or not bars.get("bars"):
                 raise ValueError("白糖具体合约K线验证失败")
+            started = time.monotonic()
+            repeated = get(base, kline_path)
+            cached_seconds = time.monotonic() - started
+            if repeated.get("symbol") != code or not repeated.get("bars"):
+                raise ValueError("K线缓存复用校验失败")
+            cache_status = get(base, "/health").get("kline_cache", {})
+            if cache_status.get("ready", 0) < 1:
+                raise ValueError("K线后台缓存尚未就绪")
+            if cached_seconds > 2.0:
+                raise ValueError(f"K线缓存响应过慢：{cached_seconds:.2f}秒")
+            print(f"白糖K线缓存复用耗时: {cached_seconds:.3f}秒", flush=True)
             catalog = get(base, "/v1/catalog")
             if not isinstance(catalog, list) or len(catalog) <= 17 or not any(
                     item.get("exchange") == "CFFEX" for item in catalog):
