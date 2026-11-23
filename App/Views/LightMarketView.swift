@@ -25,6 +25,7 @@ struct LightMarketView: View {
     private enum Scope: String, CaseIterable {
         case favorites = "自选"
         case catalog = "全部品种"
+        case rankings = "行情排行"
     }
 
     @Environment(\.mainContracts) private var contracts
@@ -32,11 +33,34 @@ struct LightMarketView: View {
     @State private var scope: Scope = .favorites
     @State private var search = ""
     @State private var editing = false
+    @State private var selectedCategory = "全部"
+    @State private var sortBy = "默认"
+    private let categories = ["全部", "农产品", "金属", "黑色", "化工", "能源"]
+
+    private func category(of item: FuturesInstrument) -> String {
+        switch item.id {
+        case "SHFE.rb", "DCE.jm": return "黑色"
+        case "SHFE.au", "SHFE.cu", "GFEX.lc": return "金属"
+        case "DCE.m", "DCE.p", "DCE.c", "DCE.y", "CZCE.SR", "CZCE.CF", "CZCE.RM": return "农产品"
+        case "CZCE.MA", "CZCE.TA", "CZCE.SA": return "化工"
+        case "INE.sc": return "能源"
+        default: return "其他"
+        }
+    }
+
+    private func changePercentage(_ item: FuturesInstrument) -> Double? {
+        guard let quote = contracts[item.id], let change = quote.change,
+              let settlement = quote.settlement, settlement > 0 else { return nil }
+        return change / settlement
+    }
 
     private var instruments: [FuturesInstrument] {
         let keyword = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        var base = scope == .favorites && keyword.isEmpty
+            ? favorites.ids.compactMap { id in FuturesInstrument.catalog.first(where: { $0.id == id }) }
+            : FuturesInstrument.catalog
         if !keyword.isEmpty {
-            return FuturesInstrument.catalog.filter { item in
+            base = base.filter { item in
                 item.name.localizedCaseInsensitiveContains(keyword)
                     || item.id.localizedCaseInsensitiveContains(keyword)
                     || item.exchange.localizedCaseInsensitiveContains(keyword)
@@ -44,10 +68,32 @@ struct LightMarketView: View {
                     || (contracts[item.id]?.code.localizedCaseInsensitiveContains(keyword) ?? false)
             }
         }
-        if scope == .catalog { return FuturesInstrument.catalog }
-        return favorites.ids.compactMap { id in
-            FuturesInstrument.catalog.first(where: { $0.id == id })
+        if selectedCategory != "全部" {
+            base = base.filter { category(of: $0) == selectedCategory }
         }
+        let order = scope == .rankings ? "涨幅" : sortBy
+        if order != "默认" {
+            base.sort { lhs, rhs in
+                let left: Double?
+                let right: Double?
+                switch order {
+                case "成交量":
+                    left = contracts[lhs.id]?.volume
+                    right = contracts[rhs.id]?.volume
+                case "日增仓":
+                    left = contracts[lhs.id]?.interestChange
+                    right = contracts[rhs.id]?.interestChange
+                default:
+                    left = changePercentage(lhs)
+                    right = changePercentage(rhs)
+                }
+                if left == nil { return false }
+                if right == nil { return true }
+                if left != right { return left! > right! }
+                return lhs.id < rhs.id
+            }
+        }
+        return base
     }
 
     private var connectedCount: Int {
@@ -60,6 +106,7 @@ struct LightMarketView: View {
                 header
                 searchField
                 scopeSelector
+                categorySelector
                 columnHeadings
 
                 List {
@@ -171,15 +218,55 @@ struct LightMarketView: View {
                 .buttonStyle(.plain)
             }
             Spacer()
-            if scope == .favorites && search.isEmpty && !favorites.ids.isEmpty {
-                Button(editing ? "完成" : "排序") { editing.toggle() }
+            if scope == .favorites && search.isEmpty && sortBy == "默认" && !favorites.ids.isEmpty {
+                Button(editing ? "完成" : "调整") { editing.toggle() }
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(MarketPalette.accent)
                     .padding(.bottom, 7)
             }
+            Menu {
+                Picker("排序", selection: $sortBy) {
+                    Text("默认").tag("默认")
+                    Text("涨幅").tag("涨幅")
+                    Text("成交量").tag("成交量")
+                    Text("日增仓").tag("日增仓")
+                }
+            } label: {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 13))
+                    .foregroundStyle(MarketPalette.muted)
+                    .frame(width: 25, height: 30)
+            }
+            .padding(.bottom, 6)
         }
         .padding(.horizontal, 19)
         .padding(.top, 19)
+    }
+
+    private var categorySelector: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 9) {
+                ForEach(categories, id: \.self) { group in
+                    Button {
+                        selectedCategory = group
+                        editing = false
+                    } label: {
+                        Text(group)
+                            .font(.system(size: 12, weight: selectedCategory == group ? .semibold : .regular))
+                            .foregroundStyle(selectedCategory == group ? MarketPalette.accent : MarketPalette.muted)
+                            .padding(.horizontal, 12)
+                            .frame(height: 28)
+                            .background(selectedCategory == group ? MarketPalette.accent.opacity(0.08) : MarketPalette.surface,
+                                        in: Capsule())
+                            .overlay(Capsule().stroke(MarketPalette.divider, lineWidth: 0.8))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 18)
+        }
+        .padding(.top, 8)
+        .padding(.bottom, 7)
     }
 
     private var columnHeadings: some View {
