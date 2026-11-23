@@ -11,12 +11,6 @@ struct ProfessionalChartHost: View {
     @Binding var selectedCandleTime: Int64?
 
 
-    private static let indicatorCatalog: [any ChartIndicator] = [
-        SMA(period: 20), EMA(period: 20), EMA(period: 50),
-        WMA(period: 20), BollingerBands(period: 20, multiplier: 2),
-        Volume(), MACD(fast: 12, slow: 26, signal: 9), RSI(period: 14)
-    ]
-
     @State private var model: TradingChartModel = {
         var configuration = TradingChartConfiguration()
         configuration.viewport.candleVisibleBars = 52
@@ -31,15 +25,18 @@ struct ProfessionalChartHost: View {
         configuration.historyPrefetchThreshold = .visibleWindows(1)
         // Build defaults before restoring the user's saved preferences.
         let chart = TradingChartModel(style: .candles, configuration: configuration)
-        chart.indicators = [EMA(period: 20), EMA(period: 50), Volume(), MACD()]
+        chart.indicators = ChartDisplaySettings.load().indicators()
         configuration.persistence = ChartPersistence(
             key: "qihui.chart.indicators-and-style",
-            indicatorCatalog: ProfessionalChartHost.indicatorCatalog
+            indicatorCatalog: [],
+            persistsIndicators: false
         )
         chart.configuration = configuration
         return chart
     }()
 
+    @State private var displaySettings = ChartDisplaySettings.load()
+    @State private var showingIndicatorSettings = false
     @State private var sessionAxis = TradingSessionAxis()
     @State private var drawingsRestored = false
     @State private var historyDepth = 1100
@@ -88,7 +85,7 @@ struct ProfessionalChartHost: View {
             TradingChartView(model: model)
                 .frame(maxHeight: .infinity)
             HStack(spacing: 6) {
-                IndicatorBar(model: model, catalog: Self.indicatorCatalog)
+                indicatorToolbar
                 drawingMenu
             }
             .padding(.horizontal, 6)
@@ -98,8 +95,18 @@ struct ProfessionalChartHost: View {
         .tradingChartTimeFormatter(chartTimeFormatter)
         .background(MarketPalette.surface)
         .onAppear {
+            model.indicators = displaySettings.indicators()
             configureChart()
             synchronizeBars(previous: [], incoming: bars)
+        }
+        .onChange(of: displaySettings) { _, current in
+            model.indicators = current.indicators()
+            current.save()
+        }
+        .sheet(isPresented: $showingIndicatorSettings) {
+            IndicatorSettingsView(settings: displaySettings) { updated in
+                displaySettings = updated
+            }
         }
         .onChange(of: bars) { previous, incoming in
             synchronizeBars(previous: previous, incoming: incoming)
@@ -109,6 +116,49 @@ struct ProfessionalChartHost: View {
             historyTask?.cancel()
             historyTask = nil
             model.activeDrawingTool = nil
+        }
+    }
+
+    private var indicatorToolbar: some View {
+        HStack(spacing: 2) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 3) {
+                    ForEach(ChartIndicatorKind.allCases) { kind in
+                        Button {
+                            displaySettings = displaySettings.toggle(kind)
+                        } label: {
+                            Text(displaySettings.label(for: kind))
+                                .font(.system(size: 12,
+                                              weight: displaySettings.enabled.contains(kind) ? .semibold : .regular))
+                                .foregroundStyle(displaySettings.enabled.contains(kind)
+                                                 ? MarketPalette.accent : MarketPalette.muted)
+                                .padding(.horizontal, 6)
+                                .frame(height: 30)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("设置参数", systemImage: "slider.horizontal.3") {
+                                showingIndicatorSettings = true
+                            }
+                            Button(displaySettings.enabled.contains(kind) ? "隐藏指标" : "显示指标") {
+                                displaySettings = displaySettings.toggle(kind)
+                            }
+                        }
+                    }
+                }
+            }
+            Button {
+                showingIndicatorSettings = true
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 14))
+                    .foregroundStyle(MarketPalette.ink)
+                    .frame(width: 34, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("指标参数设置")
         }
     }
 
