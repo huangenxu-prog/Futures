@@ -46,7 +46,7 @@ struct ContentView: View {
     var body: some View {
         // Read-only professional market terminal. No account or order screens.
         LightMarketView()
-            .preferredColorScheme(AppAppearanceMode(rawValue: appearanceMode)?.colorScheme ?? .dark)
+            .preferredColorScheme((AppAppearanceMode(rawValue: appearanceMode) ?? .dark).colorScheme)
             .environment(\.mainContracts, contracts)
             .environment(\.futuresCatalog, catalog)
             .environmentObject(favorites)
