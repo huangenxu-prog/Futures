@@ -33,7 +33,12 @@ struct OptionChainView: View {
                                 Text("最新 " + (option.last?.formatted() ?? "--"))
                             }
                             Text(option.code).foregroundStyle(.secondary)
-                            Text("买1 " + (option.bid?.formatted() ?? "--") + "   卖1 " + (option.ask?.formatted() ?? "--"))
+                            HStack {
+                                Text("买1")
+                                Text(option.bid?.formatted() ?? "--")
+                                Text("卖1")
+                                Text(option.ask?.formatted() ?? "--")
+                            }
                         }
                         .font(.caption.monospacedDigit())
                     }
