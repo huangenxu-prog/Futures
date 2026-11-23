@@ -56,10 +56,6 @@ struct LightMarketView: View {
         return onDemandQuotes[id] ?? contracts[id]
     }
 
-    private var mergedQuotes: [String: MarketDataService.MainContract] {
-        onDemandQuotes.merging(contracts) { _, current in current.last != nil ? current : onDemandQuotes[current.code] ?? current }
-    }
-
     private var quoteRequestKey: String {
         [scope.rawValue, selectedCategory, search,
          favorites.ids.joined(separator: ","), String(catalog.count)].joined(separator: "|")
