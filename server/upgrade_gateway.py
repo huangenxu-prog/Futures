@@ -15,8 +15,8 @@ from urllib.request import urlopen
 
 ROOT = Path("/root/tq_test")
 SCRIPT = ROOT / "server/market_gateway.py"
-VERSION = "56d01e09dffa5155e682a1ae02640f19cfe5aba9"
-GIT_BLOB_SHA = "94882b5a69a5c931b8eff239a23ae6cb4f3ca2fd"
+VERSION = "8cf7e221d2dd9701b3813efd9e615dcdbd5d0344"
+GIT_BLOB_SHA = "c9bb543259d8cc7b2c1b7349ec17374adc051cad"
 
 
 def existing():
@@ -128,9 +128,13 @@ def upgrade():
             cache_status = get(base, "/health").get("kline_cache", {})
             if cache_status.get("ready", 0) < 1:
                 raise ValueError("K线后台缓存尚未就绪")
+            if cache_status.get("tracked", 0) < 2:
+                raise ValueError("同合约其他周期没有开始后台预热")
             if cached_seconds > 2.0:
                 raise ValueError(f"K线缓存响应过慢：{cached_seconds:.2f}秒")
-            print(f"白糖K线缓存复用耗时: {cached_seconds:.3f}秒", flush=True)
+            print(f"白糖K线缓存复用耗时: {cached_seconds:.3f}秒，"
+                  f"已订阅 {cache_status['tracked']} 个周期，"
+                  f"待预热 {cache_status.get('prefetch_pending', 0)} 个", flush=True)
             catalog = get(base, "/v1/catalog")
             if not isinstance(catalog, list) or len(catalog) <= 17 or not any(
                     item.get("exchange") == "CFFEX" for item in catalog):
