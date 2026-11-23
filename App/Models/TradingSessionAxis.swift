@@ -3,7 +3,7 @@ import Foundation
 /// Maps actual exchange bar timestamps to a contiguous synthetic timeline.
 /// Chart gestures/indicators use uniformly spaced slots; labels and the
 /// application continue to use actual exchange timestamps.
-struct TradingSessionAxis {
+struct TradingSessionAxis: Sendable {
     private(set) var actualToVirtual: [Int64: Int64] = [:]
     private(set) var virtualToActual: [Int64: Int64] = [:]
     private(set) var virtualSlots: [Int64] = []
@@ -22,7 +22,7 @@ struct TradingSessionAxis {
             secondsPerBar = step
         }
         let sorted = Array(Set(timestamps)).sorted()
-        guard let earliest = sorted.first, let latest = sorted.last else { return }
+        guard !sorted.isEmpty else { return }
 
         if actualToVirtual.isEmpty {
             let start: Int64 = (1_700_000_000 / step) * step
@@ -65,8 +65,6 @@ struct TradingSessionAxis {
         }
 
         refreshSlots()
-        _ = earliest
-        _ = latest
     }
 
     func chartTime(for actual: Int64) -> Date? {
