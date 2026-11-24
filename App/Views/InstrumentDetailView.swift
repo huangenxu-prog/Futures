@@ -331,6 +331,15 @@ struct InstrumentDetailView: View {
                 .fixedSize()
                 .frame(minWidth: 40, minHeight: 34)
                 .disabled(selectedContract == nil && quote == nil)
+            Button { favorites.toggle(instrument.id) } label: {
+                Image(systemName: favorites.ids.contains(instrument.id) ? "star.fill" : "star")
+                    .font(.system(size: 12))
+                    .foregroundStyle(favorites.ids.contains(instrument.id) ? MarketPalette.accent : MarketPalette.muted)
+                    .frame(width: 23, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(favorites.ids.contains(instrument.id) ? "移出自选" : "加入自选")
         }
         .foregroundStyle(MarketPalette.ink)
         .padding(.horizontal, 7)
@@ -441,11 +450,8 @@ struct InstrumentDetailView: View {
 
     private var actions: some View {
         Menu {
-             Button(favorites.ids.contains(instrument.id) ? "移出自选" : "加入自选") {
-                favorites.toggle(instrument.id)
-            }
-             Button("指标参数设置") { showChartIndicatorSettings = true }
-             Button("周期排序") { showPeriodOrder = true }
+            Button("指标参数设置") { showChartIndicatorSettings = true }
+            Button("周期排序") { showPeriodOrder = true }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 17, weight: .semibold))
