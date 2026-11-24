@@ -286,7 +286,12 @@ struct InstrumentDetailView: View {
         guard event.symbol == chartSymbol, displayedKey == chartKey else { return }
         let updated: [MarketBar]
         if let full = event.bars, !full.isEmpty {
-            updated = full
+            // The new gateway sends only two live bars at startup. Merge
+            // by exchange K-line time so a short frame cannot replace the
+            // phone's existing MA120 history with just two candles.
+            var byTime = Dictionary(uniqueKeysWithValues: rawBars.map { ($0.time, $0) })
+            for bar in full { byTime[bar.time] = bar }
+            updated = Array(byTime.values.sorted { $0.time < $1.time }.suffix(500))
         } else if let bar = event.bar, !rawBars.isEmpty {
             var next = rawBars
             if let index = next.lastIndex(where: { $0.time == bar.time }) {

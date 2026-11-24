@@ -302,8 +302,13 @@ enum MarketDataService {
         guard responseBars.symbol == symbol else { throw MarketDataError.invalidResponse }
         let bars = responseBars.bars
         guard !bars.isEmpty else { throw MarketDataError.noData }
-        let sorted = bars.sorted { $0.time < $1.time }
-        save(sorted, symbol: symbol, period: period)
-        return sorted
+        // Never destroy a previously hydrated phone history with a short
+        // 2-bar HTTP snapshot or a partial first subscription response.
+        var byTime = Dictionary(uniqueKeysWithValues:
+            (cached(symbol: symbol, period: period) ?? []).map { ($0.time, $0) })
+        for bar in bars { byTime[bar.time] = bar }
+        let merged = Array(byTime.values.sorted { $0.time < $1.time }.suffix(500))
+        save(merged, symbol: symbol, period: period)
+        return merged
     }
 }
