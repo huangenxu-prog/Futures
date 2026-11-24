@@ -1,6 +1,23 @@
 import AppKit
 import CoreGraphics
 
+// Prefer the approved checked-in artwork; never overwrite it in CI.
+let output = URL(fileURLWithPath:"App/Assets.xcassets/AppIcon.appiconset")
+let artwork = output.appendingPathComponent("AppIcon.png")
+let json = """
+{"images":[{"filename":"AppIcon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}
+"""
+if FileManager.default.fileExists(atPath:artwork.path) {
+    guard let image = NSBitmapImageRep(contentsOf:artwork), image.pixelsWide == 1024,
+          image.pixelsHigh == 1024, !image.hasAlpha else {
+        fatalError("AppIcon.png must be an opaque RGB 1024x1024 PNG")
+    }
+    try json.write(to:output.appendingPathComponent("Contents.json"),atomically:true,encoding:.utf8)
+    print("Using checked-in approved AppIcon.png")
+    exit(0)
+}
+print("Approved AppIcon.png not present; using legacy generator.")
+
 let size = 1024
 let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
 NSGraphicsContext.saveGraphicsState()
@@ -58,11 +75,7 @@ let textSize=title.size(withAttributes:attrs)
 title.draw(at:NSPoint(x:(CGFloat(size)-textSize.width)/2,y:115),withAttributes:attrs)
 
 NSGraphicsContext.restoreGraphicsState()
-let output = URL(fileURLWithPath:"App/Assets.xcassets/AppIcon.appiconset")
 try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
 let png=rep.representation(using:.png,properties:[:])!
 try png.write(to:output.appendingPathComponent("AppIcon.png"))
-let json = """
-{"images":[{"filename":"AppIcon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}
-"""
 try json.write(to:output.appendingPathComponent("Contents.json"),atomically:true,encoding:.utf8)
