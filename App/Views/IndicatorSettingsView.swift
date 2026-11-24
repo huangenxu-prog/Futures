@@ -6,10 +6,13 @@ struct IndicatorSettingsView: View {
     @State private var draft: ChartDisplaySettings
     @State private var editingFormula: FormulaDefinition?
     @State private var composingFormula: FormulaDefinition?
+    let previewBars: [FormulaBar]
     let onSave: (ChartDisplaySettings) -> Void
 
-    init(settings: ChartDisplaySettings, onSave: @escaping (ChartDisplaySettings) -> Void) {
+    init(settings: ChartDisplaySettings, previewBars: [FormulaBar] = [],
+         onSave: @escaping (ChartDisplaySettings) -> Void) {
         _draft = State(initialValue: settings)
+        self.previewBars = previewBars
         self.onSave = onSave
     }
 
@@ -223,7 +226,7 @@ struct IndicatorSettingsView: View {
             }
         }
         .sheet(item: $composingFormula) { formula in
-            FormulaComposerView(draft:formula) { updated in
+            FormulaComposerView(draft:formula,previewBars:previewBars) { updated in
                 if let i = draft.formulas.firstIndex(where:{$0.id == updated.id}) {
                     draft.formulas[i] = updated
                 } else if draft.formulas.count < 12 {

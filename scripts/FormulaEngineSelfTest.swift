@@ -174,6 +174,14 @@ struct FormulaEngineSelfTest {
         var dmaAverage = AdditionalMovingAverage(type:.dma,period:20)
         dmaAverage.dynamicAlpha = 1.1
         precondition(!dmaAverage.isValid)
+        var previewLine = CompositionLine()
+        previewLine.layers = [CompositionLayer(function:.ema,period:20),CompositionLayer(function:.ema,period:50)]
+        let expression = try previewLine.calculationExpression()
+        let statement = try previewLine.statement(index:1)
+        precondition(statement.hasPrefix("LINE1:"+expression+","))
+        let previewValues = try FormulaProgram("A:"+expression+";").evaluate(bars)
+        let savedValues = try FormulaProgram(statement).evaluate(bars)
+        precondition(previewValues[0].values == savedValues[0].values)
         print("Formula engine: causal state, dynamic references, confirmed segments and previous fixtures passed")
     }
 }

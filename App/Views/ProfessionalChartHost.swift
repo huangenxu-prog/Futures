@@ -212,7 +212,11 @@ struct ProfessionalChartHost: View {
             current.save()
         }
         .sheet(isPresented: $showingIndicatorSettings) {
-            IndicatorSettingsView(settings: displaySettings) { updated in
+            IndicatorSettingsView(settings: displaySettings,
+                previewBars: Array((model.series.candles ?? []).suffix(20_000)).map {
+                    FormulaBar(open:$0.open,high:$0.high,low:$0.low,close:$0.close,
+                               volume:$0.volume,openInterest:$0.openInterest,closeInterest:$0.closeInterest)
+                }) { updated in
                 displaySettings = updated
             }
         }

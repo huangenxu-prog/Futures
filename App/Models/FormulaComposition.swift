@@ -96,12 +96,17 @@ struct CompositionLine: Codable, Equatable, Identifiable, Sendable {
     var width = 2
     var histogram = false
 
-    func statement(index: Int) throws -> String {
+    func calculationExpression() throws -> String {
         guard layers.count <= 6, (1...5).contains(width) else {
             throw FormulaFailure("每条曲线最多6层，线宽1～5")
         }
         var value = try FormulaComposition.expression(source.expression(custom: custom))
         for layer in layers { value = try layer.wrapping(value) }
+        return value
+    }
+
+    func statement(index: Int) throws -> String {
+        let value = try calculationExpression()
         var styles: [String] = []
         if color != .automatic { styles.append(color.rawValue) }
         if histogram { styles.append("COLORSTICK") }
