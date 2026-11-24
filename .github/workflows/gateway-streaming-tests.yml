@@ -20,5 +20,7 @@ jobs:
         run: bash server/test_bootstrap.sh
       - name: Verify IP HTTPS installer
         run: bash server/test_ip_https.sh
+      - name: Verify Alibaba systemd updater
+        run: bash server/test_aliyun_update.sh
       - name: Verify safe gateway updater
         run: bash server/test_gateway_upgrade.sh
