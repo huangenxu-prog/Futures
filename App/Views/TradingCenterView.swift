@@ -23,10 +23,9 @@ struct TradingCenterView:View {
         NavigationStack {
             VStack(spacing:0) {
                 HStack(spacing:8) {
-                    Image(systemName:"shield.lefthalf.filled")
-                    Text("本地模拟 · 不连接交易账户").fontWeight(.semibold)
+                    Text("模拟账户").fontWeight(.semibold)
                     Spacer()
-                    Text("实盘未开通").foregroundStyle(.secondary)
+                    Text("实盘未连接").foregroundStyle(.secondary)
                 }.font(.caption).foregroundStyle(MarketPalette.accent)
                     .padding(12).background(MarketPalette.raised)
                 Picker("交易记录",selection:$tab) {
@@ -47,7 +46,7 @@ struct TradingCenterView:View {
                     if let initialContract { ticket = initialContract }
                     else { picking = true }
                 } label: {
-                    Text(initialContract == nil ? "选择合约 · 模拟下单" : "模拟下单 · "+(initialContract?.name ?? ""))
+                    Text("下单")
                         .fontWeight(.semibold).frame(maxWidth:.infinity).padding(12)
                 }.buttonStyle(.borderedProminent).padding(12)
             }
@@ -65,15 +64,14 @@ struct TradingCenterView:View {
             .confirmationDialog("重置5万元模拟账户？",isPresented:$resetConfirmation,titleVisibility:.visible) {
                 Button("清空全部模拟记录",role:.destructive){ledger = PaperLedger(); persist()}
             }
-            .sheet(isPresented:$picking) {
+            .sheet(isPresented:$picking,onDismiss:{
+                if let pendingTicket {
+                    ticket = pendingTicket; self.pendingTicket = nil
+                }
+            }) {
                 PaperContractPicker(instruments:catalog){ contract in
                     pendingTicket = contract
                     picking = false
-                }
-            }
-            .onChange(of:picking){_,active in
-                if !active,let pendingTicket {
-                    ticket = pendingTicket; self.pendingTicket = nil
                 }
             }
             .sheet(item:ticketBinding) { item in
@@ -81,6 +79,8 @@ struct TradingCenterView:View {
                     try ledger.submit(contract:item.contract,direction:direction,offset:offset,price:price,quantity:quantity)
                     persist(); tab = .orders
                 }
+                .presentationDetents([.height(360),.large])
+                .presentationDragIndicator(.visible)
             }
             .alert("确认模拟成交",isPresented:Binding(get:{fillConfirmation != nil},set:{if !$0 {fillConfirmation = nil}}),presenting:fillConfirmation) { order in
                 Button("按限价模拟成交"){ apply{try ledger.fill(order.id)};fillConfirmation = nil }
@@ -135,10 +135,9 @@ struct TradingCenterView:View {
                 LabeledContent("累计平仓盈亏",value:money(ledger.realized))
                 LabeledContent("模拟手续费",value:money(ledger.fees))
             }
-            Section("模拟规则") {
-                Text("固定保证金15%，每手每边5元，仅为演练假设。不计算实时浮盈亏、逐日结算、涨跌停、排队成交或交易所平今费率。")
+            Section {
+                Text("模拟参数：保证金15%，每手每边5元。未计浮盈亏、逐日结算；成交需手动确认。")
                     .font(.caption).foregroundStyle(.secondary)
-                Text("模拟成交需手动确认。实盘交易入口锁定，未接入任何期货公司。").font(.caption)
             }
         }
     }
@@ -153,12 +152,18 @@ struct TradingCenterView:View {
                         Text(pos.side.title).foregroundStyle(pos.side == .long ? MarketPalette.up : MarketPalette.down)
                     }
                     Text("\(pos.quantity)手 · 均价 \(pos.averagePrice.formatted()) · 可平 \(ledger.closable(symbol:pos.contract.symbol,side:pos.side))手").font(.caption)
-                    Button("模拟平仓"){
+                }.padding(.vertical,3)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
                         preferredDirection = pos.side == .long ? .sell : .buy
                         preferredOffset = .close
                         ticket = pos.contract
-                    }.buttonStyle(.borderless)
-                }.padding(.vertical,3)
+                    }
+                    .accessibilityAction(named:"平仓") {
+                        preferredDirection = pos.side == .long ? .sell : .buy
+                        preferredOffset = .close
+                        ticket = pos.contract
+                    }
             }
         }
     }
@@ -195,105 +200,192 @@ struct TradingCenterView:View {
     }
 }
 
+struct QuickTradeSheet:View {
+    let contract:PaperContract
+    @AppStorage("qihui.paper-ledger.v1") private var saved = Data()
+    @Environment(\.dismiss) private var dismiss
+    private var ledger:PaperLedger? {
+        saved.isEmpty ? PaperLedger() : try? JSONDecoder().decode(PaperLedger.self,from:saved)
+    }
+    var body:some View {
+        if let ledger {
+            PaperOrderTicket(contract:contract,ledger:ledger,preferredDirection:.buy,preferredOffset:.open) { direction,offset,price,quantity in
+                guard var current = self.ledger else {throw PaperFailure("模拟记录读取失败")}
+                try current.submit(contract:contract,direction:direction,offset:offset,price:price,quantity:quantity)
+                saved = try JSONEncoder().encode(current)
+            }
+        } else {
+            VStack(spacing:12) {
+                Text("模拟账户记录读取失败")
+                Button("关闭"){dismiss()}
+            }.padding()
+        }
+    }
+}
+
+/// The same compact order ticket is used from the chart and account center.
+/// Only its submit closure changes when an authorized broker backend is added.
 private struct PaperOrderTicket:View {
     @Environment(\.dismiss) private var dismiss
     @FocusState private var input:String?
     let contract:PaperContract
     let ledger:PaperLedger
     let onSubmit:(PaperDirection,PaperOffset,Double,Int)throws->Void
-    @State private var direction:PaperDirection
-    @State private var offset:PaperOffset
     @State private var price:String
-    @State private var quantity = 1
-    @State private var confirming = false
+    @State private var quantity:String = "1"
+    @State private var pending:TradeIntent?
     @State private var error:String?
+    private let preferredOffset:PaperOffset
+    private let preferredDirection:PaperDirection
+    private struct TradeIntent:Identifiable {
+        let direction:PaperDirection
+        let offset:PaperOffset
+        let price:Double
+        let quantity:Int
+        var id:String { direction.rawValue+offset.rawValue }
+        var title:String { (direction == .buy ? "买" : "卖") + (offset == .open ? "开" : "平") }
+    }
 
     init(contract:PaperContract,ledger:PaperLedger,preferredDirection:PaperDirection,preferredOffset:PaperOffset,onSubmit:@escaping(PaperDirection,PaperOffset,Double,Int)throws->Void) {
         self.contract = contract;self.ledger = ledger;self.onSubmit = onSubmit
-        _direction = State(initialValue:preferredDirection);_offset = State(initialValue:preferredOffset)
-        _price = State(initialValue:contract.last.map{String($0)} ?? "")
+        self.preferredOffset = preferredOffset;self.preferredDirection = preferredDirection
+        _price = State(initialValue:contract.last.flatMap{$0.isFinite && $0 > 0 ? String($0) : nil} ?? "")
     }
     private var numericPrice:Double? {Double(price.trimmingCharacters(in:.whitespacesAndNewlines))}
-    private var side:PaperPositionSide {(offset == .open ? direction == .buy : direction == .sell) ? .long : .short}
-    private var valid:Bool {
-        guard let numericPrice else {return false}
-        var copy = ledger
-        return (try? copy.submit(contract:contract,direction:direction,offset:offset,price:numericPrice,quantity:quantity)) != nil
-    }
+    private var numericQuantity:Int? {Int(quantity.trimmingCharacters(in:.whitespacesAndNewlines))}
+    private var longAvailable:Int {ledger.closable(symbol:contract.symbol,side:.long)}
+    private var shortAvailable:Int {ledger.closable(symbol:contract.symbol,side:.short)}
     var body:some View {
-        NavigationStack {
-            Form {
-                Section("模拟 · 限价委托") {
-                    LabeledContent("合约",value:contract.symbol)
-                    LabeledContent("最小变动价位",value:contract.tick.map{String($0)} ?? "未获取")
-                    LabeledContent("合约乘数",value:contract.multiplier.map{String($0)} ?? "未获取")
-                    Text("以下是进入页面时的行情快照，并非实时交易报价。").font(.caption).foregroundStyle(.secondary)
-                    HStack {
-                        quoteButton("买一",contract.bid)
-                        Spacer()
-                        quoteButton("最新",contract.last)
-                        Spacer()
-                        quoteButton("卖一",contract.ask)
-                    }
+        ScrollView {
+            VStack(spacing:10) {
+                header
+                quotes
+                priceRow
+                quantityRow
+                HStack {
+                    Text("可用 \(ledger.available.formatted(.number.precision(.fractionLength(0))))")
+                    Spacer()
+                    Text("可平 多 \(longAvailable) / 空 \(shortAvailable)")
+                }.font(.caption).monospacedDigit().foregroundStyle(MarketPalette.muted)
+                actionRow
+                if !contract.hasMetadata {
+                    Text("合约参数未就绪，禁止委托").foregroundStyle(.red).font(.caption)
                 }
-                Section("委托参数") {
-                    Picker("方向",selection:$direction){ForEach(PaperDirection.allCases,id:\.self){Text($0.title).tag($0)}}.pickerStyle(.segmented)
-                    Picker("开平",selection:$offset){ForEach(PaperOffset.allCases,id:\.self){Text($0.title).tag($0)}}.pickerStyle(.segmented)
-                    HStack{
-                        Text("限价")
-                        Spacer()
-                        Button {adjust(-1)} label:{Image(systemName:"minus.circle")}.buttonStyle(.borderless)
-                        TextField("价格",text:$price).keyboardType(.decimalPad).focused($input,equals:"price").multilineTextAlignment(.trailing).frame(width:92)
-                        Button {adjust(1)} label:{Image(systemName:"plus.circle")}.buttonStyle(.borderless)
-                    }
-                    Stepper("手数：\(quantity)",value:$quantity,in:1...999)
-                    if offset == .close {LabeledContent("可平手数",value:String(ledger.closable(symbol:contract.symbol,side:side)))}
-                    if let p = numericPrice,let m = contract.multiplier,p.isFinite,p>0,m>0 {
-                        LabeledContent("模拟保证金",value:(offset == .open ? p*m*Double(quantity)*PaperLedger.marginRate : 0).formatted(.number.precision(.fractionLength(2))))
-                    }
-                    LabeledContent("模拟手续费",value:(Double(quantity)*PaperLedger.feePerLot).formatted(.number.precision(.fractionLength(2))))
-                }
-                Section {
-                    if !contract.hasMetadata {Text("缺少有效合约参数或不是具体月份期货，禁止提交。").foregroundStyle(.red).font(.caption)}
-                    Button("提交模拟"+direction.title+offset.title){
-                        hideKeyboard()
-                        guard let numericPrice else {error = "请输入有效价格";return}
-                        var copy = ledger
-                        do {try copy.submit(contract:contract,direction:direction,offset:offset,price:numericPrice,quantity:quantity);confirming = true;error = nil}
-                        catch {self.error = error.localizedDescription}
-                    }.disabled(!contract.hasMetadata)
-                    if let error {Text(error).font(.caption).foregroundStyle(.red)}
-                    Text("不会发往交易所。提交后在委托页面手动确认模拟成交，或撤销。").font(.caption).foregroundStyle(.secondary)
-                }
+                if let error {Text(error).font(.caption).foregroundStyle(.red)}
+            }.padding(.horizontal,16).padding(.top,18).padding(.bottom,12)
+        }
+        .scrollDismissesKeyboard(.immediately)
+        .background(MarketPalette.surface)
+        .safeAreaInset(edge:.bottom) {
+            if input != nil {
+                HStack {Spacer();Button("完成"){hideKeyboard()}.fontWeight(.semibold)}
+                    .padding(.horizontal,16).padding(.vertical,8).background(MarketPalette.raised)
             }
-            .scrollDismissesKeyboard(.immediately)
-            .navigationTitle("模拟下单")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar{
-                ToolbarItem(placement:.cancellationAction){Button("取消"){hideKeyboard();dismiss()}}
-                ToolbarItemGroup(placement:.keyboard){Spacer();Button("完成"){hideKeyboard()}}
+        }
+        .alert("确认模拟委托",isPresented:Binding(get:{pending != nil},set:{if !$0 {pending = nil}}),presenting:pending) { intent in
+            Button("确认 \(intent.title)") {
+                do {try onSubmit(intent.direction,intent.offset,intent.price,intent.quantity);pending = nil;dismiss()}
+                catch {self.error = error.localizedDescription;pending = nil}
             }
-            .confirmationDialog("确认模拟委托",isPresented:$confirming,titleVisibility:.visible){
-                Button("确认模拟委托"){
-                    guard let numericPrice,valid else {error = "委托参数不再有效";return}
-                    do{try onSubmit(direction,offset,numericPrice,quantity);dismiss()}catch{self.error = error.localizedDescription}
-                }
-                Button("取消",role:.cancel){}
-            } message:{Text("\(contract.symbol) · \(direction.title)\(offset.title) · \(quantity)手 @ \(price)。不是真实订单。")}
+            Button("取消",role:.cancel){pending = nil}
+        } message:{intent in
+            Text("\(contract.symbol) · \(intent.title) · \(intent.quantity)手 @ \(intent.price.formatted())")
+        }
+        .tint(MarketPalette.accent)
+    }
+    private var header:some View {
+        HStack {
+            VStack(alignment:.leading,spacing:3) {
+                Text(contract.name).font(.headline)
+                Text(contract.symbol).font(.caption).foregroundStyle(MarketPalette.muted)
+            }
+            Spacer()
+            Text("模拟").font(.caption.weight(.semibold))
+                .padding(.horizontal,8).padding(.vertical,4)
+                .background(MarketPalette.raised,in:Capsule())
+            Button {hideKeyboard();dismiss()} label:{
+                Image(systemName:"xmark.circle.fill").font(.title2).foregroundStyle(MarketPalette.muted)
+            }.buttonStyle(.plain)
         }
     }
+    private var quotes:some View {
+        HStack(spacing:6) {
+            quoteButton("买一",contract.bid,MarketPalette.up)
+            quoteButton("最新",contract.last,MarketPalette.ink)
+            quoteButton("卖一",contract.ask,MarketPalette.down)
+        }
+        .overlay(alignment:.bottomTrailing) {
+            Text("快照").font(.system(size:9)).foregroundStyle(MarketPalette.muted).padding(3)
+        }
+    }
+    private var priceRow:some View {
+        HStack(spacing:10) {
+            Text("限价").font(.subheadline.weight(.medium))
+            Spacer()
+            Button {adjust(-1)} label:{Image(systemName:"minus.circle").font(.title3)}.buttonStyle(.plain)
+            TextField("价格",text:$price).keyboardType(.decimalPad).focused($input,equals:"price")
+                .multilineTextAlignment(.center).monospacedDigit().frame(width:95,height:36)
+                .background(MarketPalette.raised,in:RoundedRectangle(cornerRadius:7))
+            Button {adjust(1)} label:{Image(systemName:"plus.circle").font(.title3)}.buttonStyle(.plain)
+        }
+    }
+    private var quantityRow:some View {
+        HStack(spacing:10) {
+            Text("手数").font(.subheadline.weight(.medium))
+            Spacer()
+            Button {changeQuantity(-1)} label:{Image(systemName:"minus.circle").font(.title3)}.buttonStyle(.plain)
+            TextField("1",text:$quantity).keyboardType(.numberPad).focused($input,equals:"quantity")
+                .multilineTextAlignment(.center).monospacedDigit().frame(width:95,height:36)
+                .background(MarketPalette.raised,in:RoundedRectangle(cornerRadius:7))
+            Button {changeQuantity(1)} label:{Image(systemName:"plus.circle").font(.title3)}.buttonStyle(.plain)
+        }
+    }
+    private var actionRow:some View {
+        HStack(spacing:7) {
+            actionButton(.buy,.open,"买开",MarketPalette.up)
+            actionButton(.sell,.open,"卖开",MarketPalette.down)
+            actionButton(.buy,.close,"买平",MarketPalette.up)
+            actionButton(.sell,.close,"卖平",MarketPalette.down)
+        }
+    }
+    private func actionButton(_ direction:PaperDirection,_ offset:PaperOffset,_ title:String,_ tint:Color)->some View {
+        let eligible = contract.hasMetadata && (offset == .open || (direction == .buy ? shortAvailable : longAvailable)>0)
+        let emphasized = preferredOffset == offset && preferredDirection == direction
+        return Button {prepare(direction,offset)} label:{
+            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                .frame(maxWidth:.infinity).frame(height:42)
+                .background(tint,in:RoundedRectangle(cornerRadius:7))
+                .overlay(RoundedRectangle(cornerRadius:7).strokeBorder(.white.opacity(emphasized ? 0.5 : 0),lineWidth:1))
+        }.buttonStyle(.plain).disabled(!eligible).opacity(eligible ? 1 : 0.35)
+    }
+    private func prepare(_ direction:PaperDirection,_ offset:PaperOffset){
+        hideKeyboard()
+        guard let p = numericPrice,let q = numericQuantity else {error = "价格或手数无效";return}
+        var copy = ledger
+        do {
+            try copy.submit(contract:contract,direction:direction,offset:offset,price:p,quantity:q)
+            error = nil;pending = TradeIntent(direction:direction,offset:offset,price:p,quantity:q)
+        } catch {self.error = error.localizedDescription}
+    }
     private func hideKeyboard(){input = nil;IndicatorKeyboard.dismiss()}
-    private func quoteButton(_ title:String,_ quote:Double?)->some View {
+    private func quoteButton(_ title:String,_ quote:Double?,_ tint:Color)->some View {
         Button{
             if let quote,quote.isFinite,quote>0 {price = String(quote);hideKeyboard()}
         }label:{
-            VStack{Text(title).font(.caption);Text(quote.map{$0.formatted()} ?? "--").monospacedDigit()}
-        }.buttonStyle(.borderless).disabled(quote == nil)
+            VStack(spacing:4){
+                Text(title).font(.caption).foregroundStyle(MarketPalette.muted)
+                Text(quote.map{$0.formatted()} ?? "--").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(tint)
+            }.frame(maxWidth:.infinity).padding(.vertical,7).background(MarketPalette.raised,in:RoundedRectangle(cornerRadius:7))
+        }.buttonStyle(.plain).disabled(quote.map{!$0.isFinite || $0<=0} ?? true)
+    }
+    private func changeQuantity(_ delta:Int){
+        let old = min(999,max(1,numericQuantity ?? 1))
+        quantity = String(min(999,max(1,old+delta)))
     }
     private func adjust(_ delta:Int){
         guard let tick = contract.tick,tick.isFinite,tick>0,let p = numericPrice,p.isFinite else{return}
         let new = ((p/tick).rounded()+Double(delta))*tick
-        if new > 0 {price = String(new)}
+        if new.isFinite && new > 0 {price = String(new)}
     }
 }
 

@@ -58,7 +58,7 @@ struct PaperOrder:Identifiable,Codable,Equatable,Sendable {
     let quantity:Int
     let created:Date
     var status:PaperOrderStatus
-    var actionTitle:String { direction.title+offset.title }
+    var actionTitle:String { (direction == .buy ? "买" : "卖") + (offset == .open ? "开" : "平") }
     var side:PaperPositionSide {
         (offset == .open ? direction == .buy : direction == .sell) ? .long : .short
     }

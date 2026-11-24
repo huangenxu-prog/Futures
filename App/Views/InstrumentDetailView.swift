@@ -6,6 +6,7 @@ struct InstrumentDetailView: View {
     @EnvironmentObject private var favorites: Favorites
     @State private var showOptions = false
     @State private var showingTrade = false
+    @State private var tradeContract: PaperContract?
     @State private var showContracts = false
     @State private var showChartIndicatorSettings = false
     let instrument: FuturesInstrument
@@ -151,13 +152,11 @@ struct InstrumentDetailView: View {
             liveQuote = incoming
         }
         .sheet(isPresented:$showingTrade) {
-            TradingCenterView(initialContract: PaperContract(
-                symbol:chartSymbol, name:instrument.name,
-                tick:selectedContract?.priceTick ?? currentPriceTick,
-                multiplier:selectedContract?.volumeMultiple ?? currentVolumeMultiple,
-                last:rawBars.last?.close ?? selectedContract?.last ?? quote?.last,
-                bid:selectedContract?.bid ?? (selectedContract == nil ? quote?.bid : nil),
-                ask:selectedContract?.ask ?? (selectedContract == nil ? quote?.ask : nil)))
+            if let tradeContract {
+                QuickTradeSheet(contract:tradeContract)
+                    .presentationDetents([.height(360),.large])
+                    .presentationDragIndicator(.visible)
+            }
         }
         .sheet(isPresented: $showOptions) {
             OptionChainView(code: chartSymbol, underlyingLast: rawBars.last?.close ?? selectedContract?.last ?? quote?.last)
@@ -393,9 +392,22 @@ struct InstrumentDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func openTrade() {
+        let snapshot = selectedContract == nil ? quote : nil
+        let chartLast = displayedKey == chartKey ? rawBars.last?.close : nil
+        tradeContract = PaperContract(
+            symbol:chartSymbol,name:instrument.name,
+            tick:selectedContract?.priceTick ?? currentPriceTick,
+            multiplier:selectedContract?.volumeMultiple ?? currentVolumeMultiple,
+            last:selectedContract?.last ?? snapshot?.last ?? chartLast,
+            bid:selectedContract?.bid ?? snapshot?.bid,
+            ask:selectedContract?.ask ?? snapshot?.ask)
+        showingTrade = true
+    }
+
     private var actions: some View {
         Menu {
-            Button("交易",systemImage:"arrow.left.arrow.right") { showingTrade = true }
+            Button("交易",systemImage:"arrow.left.arrow.right") { openTrade() }
             Button(favorites.ids.contains(instrument.id) ? "移出自选" : "加入自选") {
                 favorites.toggle(instrument.id)
             }
