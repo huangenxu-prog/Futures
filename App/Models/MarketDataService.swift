@@ -1,6 +1,6 @@
 import Foundation
 
-struct MarketBar: Codable, Equatable {
+struct MarketBar: Codable, Equatable, Sendable {
     let time: Int64
     let open: Double
     let high: Double
@@ -30,6 +30,7 @@ enum MarketDataError: LocalizedError {
 }
 
 enum MarketDataService {
+    private static let cacheWriter = DispatchQueue(label: "qihui.kline.cache-writer", qos: .utility)
     private static func cacheURL(symbol: String, period: Int) -> URL? {
         guard let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
         let safeSymbol = symbol.unicodeScalars.map {
@@ -54,9 +55,13 @@ enum MarketDataService {
     }
 
     private static func save(_ bars: [MarketBar], symbol: String, period: Int) {
-        guard let url = cacheURL(symbol: symbol, period: period),
-              let data = try? JSONEncoder().encode(bars) else { return }
-        try? data.write(to: url, options: .atomic)
+        guard let url = cacheURL(symbol: symbol, period: period) else { return }
+        // Preserve write ordering; encoding and atomic file replacement must
+        // not block the main-actor SSE callback or the chart render pass.
+        cacheWriter.async {
+            guard let data = try? JSONEncoder().encode(bars) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
     }
 
     // Configure via QIHUI_API_BASE_URL in Info.plist at build time.

@@ -3,9 +3,12 @@ enum KlineCorrectionPolicy {
     static func hasEarlierCorrection<Bar: Equatable>(
         previous: [Bar], incoming: [Bar]
     ) -> Bool {
-        guard previous.count == incoming.count, previous.count > 1 else {
+        guard !previous.isEmpty,
+              incoming.count == previous.count || incoming.count == previous.count + 1 else {
             return false
         }
-        return zip(previous.dropLast(), incoming.dropLast()).contains { $0 != $1 }
+        // If a new candle arrives together with a correction to the former
+        // open candle, that closed candle must also reach the chart model.
+        return zip(previous, incoming.dropLast()).contains { $0 != $1 }
     }
 }

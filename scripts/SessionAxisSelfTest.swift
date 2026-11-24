@@ -26,6 +26,9 @@ struct SessionAxisSelfTest {
         let old = axis.chartTime(for: actual.first!)!
         let latest = axis.chartTime(for: actual.last!)!
         // Live quote updates existing candle without moving it.
+        let previousSlots = axis.virtualSlots
+        axis.register(actual, period: period)
+        precondition(axis.virtualSlots == previousSlots)
         axis.register([actual.last!], period: period)
         precondition(axis.chartTime(for: actual.last!) == latest)
 

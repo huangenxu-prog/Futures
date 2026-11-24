@@ -21,7 +21,9 @@ struct TradingSessionAxis: Sendable {
             virtualSlots.removeAll()
             secondsPerBar = step
         }
-        let sorted = Array(Set(timestamps)).sorted()
+        // Most live frames replace only OHLCV at a known timestamp.
+        // Do not rebuild or sort the axis when every slot already exists.
+        let sorted = Array(Set(timestamps.filter { actualToVirtual[$0] == nil })).sorted()
         guard !sorted.isEmpty else { return }
 
         if actualToVirtual.isEmpty {
