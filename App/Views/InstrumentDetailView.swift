@@ -19,6 +19,7 @@ struct InstrumentDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var period = "15分"
     @State private var rawBars: [MarketBar] = []
+    @State private var chartFeed = DirectChartFeed<[MarketBar]>()
     @State private var liveQuote: MarketDataService.MainContract?
     @State private var quotePreview: MarketBar?
     @State private var selectedCandleTime: Int64? = nil
@@ -74,6 +75,7 @@ struct InstrumentDetailView: View {
                 } else if !rawBars.isEmpty && displayedKey == chartKey {
                     ProfessionalChartHost(
                         symbol: chartSymbol, period: periodSeconds, bars: chartBars,
+                        feed: chartFeed, feedKey: chartKey,
                         priceTick: selectedContract?.priceTick ?? currentPriceTick,
                         showingIndicatorSettings: $showChartIndicatorSettings,
                         selectedCandleTime: $selectedCandleTime
@@ -164,6 +166,7 @@ struct InstrumentDetailView: View {
         mostRecentStreamBar = nil
         lastCachedCandleAt = nil
         rawBars = MarketDataService.cached(symbol: symbol, period: period) ?? []
+        chartFeed.publish(key: chartKey, snapshot: chartBars)
         selectedCandleTime = nil
         loadError = nil
         loading = rawBars.isEmpty
@@ -192,6 +195,7 @@ struct InstrumentDetailView: View {
             guard !merged.isEmpty else { return }
             if rawBars.last != merged.last { quotePreview = nil }
             if rawBars != merged { rawBars = merged }
+            chartFeed.publish(key: requestedKey, snapshot: chartBars)
             MarketDataService.cache(merged, symbol: symbol, period: requestedPeriod)
         } catch is CancellationError {
             return
@@ -220,7 +224,10 @@ struct InstrumentDetailView: View {
                                   low: min(last.low, earlier?.low ?? last.low, price),
                                   close: price, preSettlement: last.preSettlement,
                                   volume: last.volume)
-        if candidate != (quotePreview ?? last) { quotePreview = candidate }
+        if candidate != (quotePreview ?? last) {
+            quotePreview = candidate
+            chartFeed.publish(key: chartKey, snapshot: chartBars)
+        }
     }
 
     @MainActor
@@ -256,6 +263,8 @@ struct InstrumentDetailView: View {
         if rawBars.last != updated.last { quotePreview = nil }
         if rawBars != updated { rawBars = updated }
         KlineDiagnostics.record(event, period: periodSeconds, newest: updated.last, started: applyStarted)
+        // Direct synchronous delivery, independent of SwiftUI body/onChange.
+        chartFeed.publish(key: chartKey, snapshot: chartBars)
         lastStreamCandleKey = chartKey
         // Retain the freshest authoritative bar while the parallel history
         // request is pending; never let a late HTTP result roll it back.

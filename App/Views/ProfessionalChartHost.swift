@@ -8,9 +8,14 @@ struct ProfessionalChartHost: View {
     let symbol: String
     let period: Int
     let bars: [MarketBar]
+    let feed: DirectChartFeed<[MarketBar]>
+    let feedKey: String
     let priceTick: Double?
     @Binding var showingIndicatorSettings: Bool
     @Binding var selectedCandleTime: Int64?
+    var isReplay = false
+    var onReplayApplied: ((MarketBar, Double) -> Void)? = nil
+    @State private var feedOwner = UUID()
 
 
     @State private var model: TradingChartModel = {
@@ -145,6 +150,11 @@ struct ProfessionalChartHost: View {
         value.candleCornerRadius = 0
         value.candleBodyWidthFactor = 0.75
         value.hollowRisingCandles = true
+        #if DEBUG
+        if isReplay && ProcessInfo.processInfo.arguments.contains("-qihui-native-candles") {
+            value.hollowRisingCandles = false
+        }
+        #endif
         value.hollowCandleFill = MarketPalette.surface
         // A white doji on the graphite theme; dark ink in optional light mode
         // keeps the same neutral symbol visible on both backgrounds.
@@ -188,8 +198,10 @@ struct ProfessionalChartHost: View {
         .onAppear {
             model.indicators = displaySettings.indicators()
             configureChart()
-            synchronizeBars(previous: [], incoming: bars)
-            scheduleInitialHistoryIfNeeded()
+            feed.attach(key: feedKey, owner: feedOwner, fallback: bars) { previous, incoming in
+                synchronizeBars(previous: previous ?? [], incoming: incoming)
+                scheduleInitialHistoryIfNeeded(count: incoming.count)
+            }
         }
         .onChange(of: displaySettings) { _, current in
             model.indicators = current.indicators()
@@ -200,11 +212,8 @@ struct ProfessionalChartHost: View {
                 displaySettings = updated
             }
         }
-        .onChange(of: bars) { previous, incoming in
-            synchronizeBars(previous: previous, incoming: incoming)
-            scheduleInitialHistoryIfNeeded()
-        }
         .onDisappear {
+            feed.detach(owner: feedOwner)
             model.onEvent = nil
             historyTask?.cancel()
             historyTask = nil
@@ -330,7 +339,7 @@ struct ProfessionalChartHost: View {
             case .drawing:
                 saveDrawings()
             case .approachedHistoryStart:
-                guard historyTask == nil else { return }
+                guard !isReplay, historyTask == nil else { return }
                 historyTask = Task { @MainActor in
                     await fetchOlderHistory()
                     historyTask = nil
@@ -345,7 +354,13 @@ struct ProfessionalChartHost: View {
     private func synchronizeBars(previous: [MarketBar], incoming: [MarketBar]) {
         guard !incoming.isEmpty else { return }
         let modelStarted = ProcessInfo.processInfo.systemUptime
-        defer { KlineDiagnostics.chartUpdated(symbol: symbol, period: period, newest: incoming.last, started: modelStarted) }
+        defer {
+            KlineDiagnostics.chartUpdated(symbol: symbol, period: period, newest: incoming.last, started: modelStarted)
+            if isReplay, let last = incoming.last,
+               let plotted = model.series.candles?.last, plotted == chartCandle(last) {
+                onReplayApplied?(last, (ProcessInfo.processInfo.systemUptime - modelStarted) * 1000)
+            }
+        }
         sessionAxis.register(incoming.map(\.time), period: period)
         if !drawingsRestored {
             restoreDrawings()
@@ -432,9 +447,9 @@ struct ProfessionalChartHost: View {
     // Once the first page is visible, warm one older page without blocking
     // the SSE stream or requesting the same page twice during a user pan.
     @MainActor
-    private func scheduleInitialHistoryIfNeeded() {
-        guard !didScheduleInitialHistory, historyTask == nil,
-              bars.count >= KlineStartupMerge.initialCount,
+    private func scheduleInitialHistoryIfNeeded(count: Int) {
+        guard !isReplay, !didScheduleInitialHistory, historyTask == nil,
+              count >= KlineStartupMerge.initialCount,
               (model.series.candles?.count ?? 0) < KlineStartupMerge.initialCount + KlineStartupMerge.historyPageCount,
               model.hasMoreHistory else { return }
         didScheduleInitialHistory = true

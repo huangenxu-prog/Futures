@@ -242,7 +242,7 @@ enum MarketDataService {
         // Read actual URLSession data callbacks rather than waiting on the
         // AsyncBytes.lines adapter. The serial delegate can receive subsequent
         // chunks while the main actor is applying a previous event.
-        let (chunks, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+        let (chunks, continuation) = AsyncThrowingStream<SSEReceivedChunk, Error>.makeStream()
         let receiver = SSEChunkReceiver(continuation: continuation)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
@@ -260,10 +260,10 @@ enum MarketDataService {
         let decoder = JSONDecoder()
         for try await chunk in chunks {
             try Task.checkCancellation()
-            for payload in parser.append(chunk) {
+            for payload in parser.append(chunk.data) {
                 try Task.checkCancellation()
-                let epoch = Date().timeIntervalSince1970
-                let uptime = ProcessInfo.processInfo.systemUptime
+                let epoch = chunk.epoch
+                let uptime = chunk.uptime
                 let value = try decoder.decode(T.self, from: payload)
                 await onEvent(stamp?(value, epoch, uptime) ?? value)
             }
@@ -363,10 +363,16 @@ enum MarketDataService {
 
 // Delegate receives raw transport chunks on a private serial operation queue.
 // Finishing the continuation releases a waiting reader on disconnect/error.
-private final class SSEChunkReceiver: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    private let continuation: AsyncThrowingStream<Data, Error>.Continuation
+private struct SSEReceivedChunk: Sendable {
+    let data: Data
+    let epoch: Double
+    let uptime: Double
+}
 
-    init(continuation: AsyncThrowingStream<Data, Error>.Continuation) {
+private final class SSEChunkReceiver: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let continuation: AsyncThrowingStream<SSEReceivedChunk, Error>.Continuation
+
+    init(continuation: AsyncThrowingStream<SSEReceivedChunk, Error>.Continuation) {
         self.continuation = continuation
     }
 
@@ -383,7 +389,8 @@ private final class SSEChunkReceiver: NSObject, URLSessionDataDelegate, @uncheck
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        continuation.yield(data)
+        continuation.yield(SSEReceivedChunk(data: data, epoch: Date().timeIntervalSince1970,
+                                            uptime: ProcessInfo.processInfo.systemUptime))
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {

@@ -25,6 +25,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Verify direct live chart delivery
+        run: |
+          swiftc App/Models/DirectChartFeed.swift scripts/DirectChartFeedSelfTest.swift -o /tmp/direct-chart-feed-test
+          /tmp/direct-chart-feed-test
+
       - name: Verify open candle quote time boundary
         run: |
           swiftc App/Models/OpenCandleQuotePolicy.swift scripts/OpenCandleQuoteSelfTest.swift -o /tmp/open-candle-quote-test
