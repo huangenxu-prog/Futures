@@ -74,6 +74,13 @@ struct PaperPosition:Identifiable,Codable,Equatable,Sendable {
     var averagePrice:Double
     var reservedMargin:Double
     var id:String { contract.symbol+"/"+side.rawValue }
+    func unrealized(at price:Double?) -> Double? {
+        guard let price,price.isFinite,price > 0,
+              let multiplier = contract.multiplier,multiplier.isFinite,multiplier > 0 else {return nil}
+        let change = side == .long ? price-averagePrice : averagePrice-price
+        let result = change*Double(quantity)*multiplier
+        return result.isFinite ? result : nil
+    }
 }
 struct PaperFill:Identifiable,Codable,Equatable,Sendable {
     let id:UUID
@@ -116,6 +123,19 @@ struct PaperLedger:Codable,Equatable,Sendable {
     var available:Double { cash-margin-frozen }
     var realized:Double { fills.reduce(0){$0+$1.realized} }
     var fees:Double { fills.reduce(0){$0+$1.fee} }
+    func unrealized(prices:[String:Double])->Double? {
+        var result = 0.0
+        for position in positions {
+            guard let pnl = position.unrealized(at:prices[position.contract.symbol]) else {return nil}
+            result += pnl
+        }
+        return result.isFinite ? result : nil
+    }
+    func equity(prices:[String:Double])->Double? {
+        guard let pnl = unrealized(prices:prices) else {return nil}
+        let value = cash+pnl
+        return value.isFinite ? value : nil
+    }
 
     static func reserve(_ order:PaperOrder)->Double {
         let fee = Double(order.quantity)*feePerLot

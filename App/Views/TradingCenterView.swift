@@ -1,9 +1,14 @@
 import SwiftUI
+import Combine
 
 /// Local simulation only. Real-trading access cannot be enabled by a toggle.
 struct TradingCenterView:View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.futuresCatalog) private var catalog
+    @State private var marks:[String:Double] = [:]
+    @State private var markReceived:[String:Date] = [:]
+    @State private var markClock = Date()
     var favoriteIDs:[String] = []
     var mainCodes:[String:String] = [:]
     @AppStorage("qihui.paper-ledger.v1") private var saved = Data()
@@ -33,14 +38,13 @@ struct TradingCenterView:View {
                     Text("实盘未连接").foregroundStyle(.secondary)
                 }.font(.caption).foregroundStyle(MarketPalette.accent)
                     .padding(12).background(MarketPalette.raised)
-                Picker("交易记录",selection:$tab) {
-                    ForEach(Tab.allCases,id:\.self){Text($0.rawValue).tag($0)}
-                }.pickerStyle(.segmented).padding(12)
-                HStack {
-                    Text("可用资金").font(.caption).foregroundStyle(MarketPalette.muted)
-                    Spacer()
-                    Text(storageFailed ? "--" : money(ledger.available)).font(.headline.monospacedDigit())
-                }.padding(.horizontal,16).padding(.bottom,8)
+                accountOverview
+                HStack(spacing:6) {
+                    tabButton(.positions)
+                    tabButton(.orders)
+                    tabButton(.fills)
+                    tabButton(.account)
+                }.padding(.horizontal,12).padding(.vertical,8)
                 List {
                     switch tab {
                     case .account: accountSection
@@ -109,6 +113,25 @@ struct TradingCenterView:View {
                 Button("撤单",role:.destructive){apply{try ledger.cancel(order.id)};cancelConfirmation = nil}
                 Button("取消",role:.cancel){cancelConfirmation = nil}
             } message:{ order in Text("\(order.contract.symbol) · \(order.actionTitle)") }
+            .task(id:markTaskKey) {
+                guard scenePhase == .active else {return}
+                marks = [:];markReceived = [:]
+                while !Task.isCancelled {
+                    await refreshMarks()
+                    do {try await Task.sleep(for:.seconds(10))} catch {return}
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for:.qihuiLiveQuotes)) { notification in
+                guard scenePhase == .active,
+                    let quotes = notification.object as? [String:MarketDataService.MainContract] else {return}
+                let symbols = Set(ledger.positions.map{$0.contract.symbol})
+                for q in quotes.values where symbols.contains(q.code) {
+                    if let p = q.last,p.isFinite,p>0 {
+                        marks[q.code] = p;markReceived[q.code] = Date()
+                    }
+                }
+                markClock = Date()
+            }
             .onAppear {
                 guard !restored else {return};restored = true
                 if !saved.isEmpty {
@@ -145,6 +168,85 @@ struct TradingCenterView:View {
     }
     private func money(_ value:Double)->String {value.formatted(.number.precision(.fractionLength(2)))+" 元"}
 
+    private var markTaskKey:String {
+        let symbols = Set(ledger.positions.map{$0.contract.symbol}).sorted().joined(separator:"|")
+        return symbols+(scenePhase == .active ? "/active" : "/paused")
+    }
+    private var currentMarks:[String:Double] {
+        marks.filter { symbol,_ in
+            guard let received = markReceived[symbol] else {return false}
+            return markClock.timeIntervalSince(received) <= 45
+        }
+    }
+    @MainActor private func refreshMarks() async {
+        let symbols = Set(ledger.positions.map{$0.contract.symbol})
+        guard !symbols.isEmpty else {marks = [:];markReceived = [:];return}
+        let products = Set(symbols.map{symbol in
+            String(symbol.dropLast(symbol.reversed().prefix{$0.isNumber}.count))
+        })
+        // Only held products, and exact month match. Never use entry cost
+        // or another month's main-contract quote for valuation.
+        for product in products.sorted() {
+            guard !Task.isCancelled else {return}
+            let started = Date()
+            do {
+                let quotes = try await MarketDataService.listedContracts(for:product)
+                try Task.checkCancellation()
+                for q in quotes where symbols.contains(q.code) {
+                    guard (markReceived[q.code] ?? .distantPast) <= started else {continue}
+                    if let p = q.last,p.isFinite,p>0 {
+                        marks[q.code] = p;markReceived[q.code] = Date()
+                    } else {
+                        marks.removeValue(forKey:q.code);markReceived.removeValue(forKey:q.code)
+                    }
+                }
+            } catch is CancellationError {return} catch {}
+            markClock = Date()
+        }
+    }
+    private func signedMoney(_ value:Double?) -> String {
+        guard let value else {return "--"}
+        return (value > 0 ? "+" : "")+value.formatted(.number.precision(.fractionLength(2)))
+    }
+    private var accountOverview:some View {
+        VStack(alignment:.leading,spacing:10) {
+            Text("账户权益（估算）").font(.caption).foregroundStyle(MarketPalette.muted)
+            Text(storageFailed ? "--" : ledger.equity(prices:currentMarks).map{money($0)} ?? "--")
+                .font(.system(size:28,weight:.semibold,design:.rounded)).monospacedDigit()
+            HStack(alignment:.top,spacing:8) {
+                overviewMetric("可用资金（账面）",storageFailed ? "--" : signedMoney(ledger.available),MarketPalette.ink)
+                overviewMetric("持仓盈亏",storageFailed ? "--" : signedMoney(ledger.unrealized(prices:currentMarks)),MarketPalette.movement(ledger.unrealized(prices:currentMarks)))
+                overviewMetric("保证金（估算）",storageFailed ? "--" : signedMoney(ledger.margin),MarketPalette.ink)
+            }
+            HStack(spacing:12) {
+                Button("入金"){bankTransfer = .deposit}
+                Button("出金"){bankTransfer = .withdraw}
+                Spacer()
+                if !ledger.positions.isEmpty {
+                    Text(ledger.unrealized(prices:currentMarks) == nil ? "部分报价缺失" : "最近行情估值")
+                        .font(.caption2).foregroundStyle(MarketPalette.muted)
+                }
+            }.font(.subheadline.weight(.medium)).buttonStyle(.borderless)
+        }.padding(14).frame(maxWidth:.infinity,alignment:.leading)
+            .background(MarketPalette.surface,in:RoundedRectangle(cornerRadius:12))
+            .padding(.horizontal,12).padding(.top,8)
+    }
+    private func overviewMetric(_ label:String,_ value:String,_ tint:Color)->some View {
+        VStack(alignment:.leading,spacing:5) {
+            Text(label).font(.system(size:10)).foregroundStyle(MarketPalette.muted)
+            Text(value).font(.system(size:15,weight:.semibold,design:.rounded)).monospacedDigit()
+                .foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.65)
+        }.frame(maxWidth:.infinity,alignment:.leading)
+    }
+    private func tabButton(_ value:Tab)->some View {
+        Button{tab = value}label:{
+            Text(value == .account ? "资金明细" : value.rawValue)
+                .font(.subheadline.weight(tab == value ? .semibold : .regular))
+                .foregroundStyle(tab == value ? MarketPalette.accent : MarketPalette.muted)
+                .frame(maxWidth:.infinity).padding(.vertical,7)
+                .background(tab == value ? MarketPalette.raised : Color.clear,in:RoundedRectangle(cornerRadius:7))
+        }.buttonStyle(.plain)
+    }
     private var accountSection:some View {
         Group {
             Section("银期转账") {
@@ -167,6 +269,8 @@ struct TradingCenterView:View {
             Section("模拟资金") {
                 LabeledContent("初始本金",value:money(PaperLedger.initialCapital))
                 LabeledContent("账面资金（不含浮盈亏）",value:money(ledger.cash))
+                LabeledContent("持仓盈亏",value:signedMoney(ledger.unrealized(prices:currentMarks)))
+                LabeledContent("账户权益（估算）",value:ledger.equity(prices:currentMarks).map{money($0)} ?? "--")
                 LabeledContent("可用资金（估算）",value:money(ledger.available))
                 LabeledContent("持仓占用（估算）",value:money(ledger.margin))
                 LabeledContent("委托冻结（估算）",value:money(ledger.frozen))
@@ -174,7 +278,7 @@ struct TradingCenterView:View {
                 LabeledContent("模拟手续费",value:money(ledger.fees))
             }
             Section {
-                Text("模拟参数：保证金15%，每手每边5元。未计浮盈亏、逐日结算；成交需手动确认。")
+                Text("模拟参数：保证金15%，每手每边5元。权益按最近行情估值，可用资金仍按账面资金计算；未做逐日结算。成交需手动确认。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -183,19 +287,7 @@ struct TradingCenterView:View {
         Section("模拟持仓") {
             if ledger.positions.isEmpty {Text("暂无持仓").foregroundStyle(.secondary)}
             ForEach(ledger.positions){pos in
-                VStack(alignment:.leading,spacing:5) {
-                    HStack {
-                        Text(pos.contract.symbol).fontWeight(.semibold)
-                        Spacer()
-                        Text(pos.side.title).foregroundStyle(pos.side == .long ? MarketPalette.up : MarketPalette.down)
-                    }
-                    HStack {
-                        Text("\(pos.quantity)手 · 均价 \(pos.averagePrice.formatted()) · 可平 \(ledger.closable(symbol:pos.contract.symbol,side:pos.side))手").font(.caption)
-                        Spacer(minLength:4)
-                        Text(pos.side == .long ? "平多" : "平空").font(.caption.weight(.semibold)).foregroundStyle(MarketPalette.accent)
-                        Image(systemName:"chevron.right").font(.caption2).foregroundStyle(MarketPalette.muted)
-                    }
-                }.padding(.vertical,3)
+                positionRow(pos).padding(.vertical,3)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         preferredDirection = pos.side == .long ? .sell : .buy
@@ -207,6 +299,31 @@ struct TradingCenterView:View {
                         preferredOffset = .close
                         openClose(pos)
                     }
+            }
+        }
+    }
+    private func positionRow(_ pos:PaperPosition)->some View {
+        let price = currentMarks[pos.contract.symbol]
+        let pnl = pos.unrealized(at:price)
+        return VStack(alignment:.leading,spacing:7) {
+            HStack {
+                Text(pos.contract.name).fontWeight(.semibold)
+                Text(pos.contract.symbol).font(.caption).foregroundStyle(MarketPalette.muted)
+                Spacer(minLength:4)
+                Text(signedMoney(pnl)).font(.headline.monospacedDigit())
+                    .foregroundStyle(MarketPalette.movement(pnl))
+            }
+            HStack {
+                Text("\(pos.side.title) \(pos.quantity)手").foregroundStyle(pos.side == .long ? MarketPalette.up : MarketPalette.down)
+                Text("成本 \(pos.averagePrice.formatted())")
+                Spacer(minLength:4)
+                Text("最新 \(price.map{$0.formatted()} ?? "--")")
+            }.font(.caption).monospacedDigit().lineLimit(1).minimumScaleFactor(0.75)
+            HStack {
+                Text("可平 \(ledger.closable(symbol:pos.contract.symbol,side:pos.side))手").font(.caption).foregroundStyle(MarketPalette.muted)
+                Spacer()
+                Text(pos.side == .long ? "平多" : "平空").font(.caption.weight(.semibold)).foregroundStyle(MarketPalette.accent)
+                Image(systemName:"chevron.right").font(.caption2).foregroundStyle(MarketPalette.muted)
             }
         }
     }
