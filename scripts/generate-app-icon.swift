@@ -8,7 +8,7 @@ let json = """
 {"images":[{"filename":"AppIcon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}
 """
 if FileManager.default.fileExists(atPath:artwork.path) {
-    guard let image = NSBitmapImageRep(contentsOf:artwork), image.pixelsWide == 1024,
+    guard let data = try? Data(contentsOf:artwork), let image = NSBitmapImageRep(data:data), image.pixelsWide == 1024,
           image.pixelsHigh == 1024, !image.hasAlpha else {
         fatalError("AppIcon.png must be an opaque RGB 1024x1024 PNG")
     }
