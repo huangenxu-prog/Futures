@@ -12,6 +12,7 @@ struct ProfessionalChartHost: View {
     let feedKey: String
     let priceTick: Double?
     var contractMultiplier: Double? = nil
+    var previousSettlement: Double? = nil
     @Binding var showingIndicatorSettings: Bool
     @Binding var selectedCandleTime: Int64?
     var isReplay = false
@@ -173,6 +174,11 @@ struct ProfessionalChartHost: View {
             }
             TradingChartView(model: model)
                 .frame(maxHeight: .infinity)
+            if displaySettings.enabled.contains(.intraday), !isReplay {
+                IntradayPane(symbol:symbol,previousSettlement:previousSettlement)
+                    .frame(height:120)
+                    .id(symbol)
+            }
             HStack(spacing: 6) {
                 indicatorToolbar
                 // Replaces the badge's historical-window jump action without
@@ -347,6 +353,13 @@ struct ProfessionalChartHost: View {
                 Button("水平线", systemImage: "minus") { choose(.horizontalLine) }
                 Button("趋势线", systemImage: "chart.line.uptrend.xyaxis") { choose(.trendLine) }
                 Button("射线", systemImage: "arrow.up.right") { choose(.ray) }
+                Button("水平射线",systemImage:"arrow.right") { choose(.horizontalRay) }
+                Button("垂直线",systemImage:"line.diagonal") { choose(.verticalLine) }
+                Button("矩形区域",systemImage:"rectangle") { choose(.rectangle) }
+                Button("平行通道（三点）",systemImage:"line.3.horizontal") { choose(.parallelChannel) }
+                Button("黄金分割",systemImage:"ruler") { choose(.fibonacci) }
+                Button("价格测量",systemImage:"arrow.up.and.down") { choose(.priceMeasure) }
+                Button("时间测量",systemImage:"arrow.left.and.right") { choose(.timeMeasure) }
             }
             if model.activeDrawingTool != nil {
                 Button("取消画线", systemImage: "xmark") { model.activeDrawingTool = nil }

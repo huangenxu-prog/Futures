@@ -2,7 +2,7 @@ import Foundation
 import TradingChart
 
 enum ChartIndicatorKind: String, Codable, CaseIterable, Hashable, Identifiable {
-    case sma, emaFast, emaSlow, wma, boll, volume, macd, rsi, kdj, atr, sar, opi, chan, hunt
+    case sma, emaFast, emaSlow, wma, boll, volume, macd, rsi, kdj, atr, sar, opi, chan, hunt, intraday
     var id: String { rawValue }
 
     var title: String {
@@ -21,6 +21,7 @@ enum ChartIndicatorKind: String, Codable, CaseIterable, Hashable, Identifiable {
         case .opi: return "OPI"
         case .chan: return "缠论"
         case .hunt: return "猎杀"
+        case .intraday: return "分时"
         }
     }
 }
@@ -158,6 +159,7 @@ struct ChartDisplaySettings: Codable, Equatable {
         case .opi: return "OPI"
         case .chan: return "缠论"
         case .hunt: return "猎杀"
+        case .intraday: return "分时"
         }
     }
 
@@ -231,6 +233,7 @@ struct ChartDisplaySettings: Codable, Equatable {
             case .opi: result.append(QihuiOpenInterest())
             case .chan: result.append(QihuiChanStructure())
             case .hunt: result.append(QihuiHuntPreview(showStructure:!enabled.contains(.chan)))
+            case .intraday: break // Independent minute-series pane, not a main-period indicator.
             }
         }
         for average in additionalAverages where average.enabled {

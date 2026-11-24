@@ -77,6 +77,7 @@ struct InstrumentDetailView: View {
                         feed: chartFeed, feedKey: chartKey,
                         priceTick: selectedContract?.priceTick ?? currentPriceTick,
                         contractMultiplier: selectedContract?.volumeMultiple ?? currentVolumeMultiple,
+                        previousSettlement: selectedContract == nil ? quote?.settlement : selectedContract?.settlement,
                         showingIndicatorSettings: $showChartIndicatorSettings,
                         selectedCandleTime: $selectedCandleTime
                     )

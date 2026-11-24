@@ -137,6 +137,8 @@ struct IndicatorSettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("其他指标") {
+                    Toggle("显示分时",isOn:enabledBinding(.intraday))
+                    Text("独立显示最近交易日分钟走势，不随主图缩放。关闭停止额外行情请求。").font(.caption).foregroundStyle(.secondary)
                     Toggle("显示 OPI 持仓量", isOn: enabledBinding(.opi))
                     Text("使用每根K线的实际期末持仓量。旧缓存未包含持仓量时不绘制缺失数据。")
                         .font(.caption).foregroundStyle(.secondary)

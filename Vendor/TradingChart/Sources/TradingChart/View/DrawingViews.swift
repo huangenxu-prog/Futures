@@ -26,7 +26,8 @@ struct DrawingsOverlay: View {
                 pendingAnchors: editor.pendingAnchors,
                 registry: model.drawingTools,
                 domain: model.drawingDomain(),
-                transform: model.drawingTransform(plot: plot)
+                transform: model.drawingTransform(plot: plot),
+                interval: model.series.interval
             )
             let theme = theme
             Canvas { context, _ in
@@ -48,6 +49,7 @@ struct DrawingsOverlay: View {
 
     private static func draw(_ stroke: DrawingStroke, theme: TradingChartTheme, in context: inout GraphicsContext) {
         let color = color(of: stroke.style, theme: theme)
+        if let rect = stroke.fillRect, !rect.isEmpty { context.fill(Path(rect),with:.color(color.opacity(0.10))) }
         if !stroke.lines.isEmpty {
             var path = Path()
             for line in stroke.lines {
@@ -73,6 +75,9 @@ struct DrawingsOverlay: View {
                     dash: stroke.style.dash.map { CGFloat($0) }
                 )
             )
+        }
+        for label in stroke.labels {
+            context.draw(Text(label.text).font(.system(size:10,weight:.medium)).foregroundColor(color),at:label.point,anchor:.trailing)
         }
         for point in stroke.handles {
             drawHandle(at: point, core: color, theme: theme, in: &context)

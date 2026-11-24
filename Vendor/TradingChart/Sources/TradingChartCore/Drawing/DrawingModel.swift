@@ -25,6 +25,13 @@ public struct DrawingKind: RawRepresentable, Hashable, Sendable, Codable, Expres
     public static let trendLine = DrawingKind(rawValue: "trendLine")
     /// A line from the first anchor through the second one to the edge of the chart.
     public static let ray = DrawingKind(rawValue: "ray")
+    public static let verticalLine: DrawingKind = "verticalLine"
+    public static let rectangle: DrawingKind = "rectangle"
+    public static let horizontalRay: DrawingKind = "horizontalRay"
+    public static let parallelChannel: DrawingKind = "parallelChannel"
+    public static let fibonacci: DrawingKind = "fibonacci"
+    public static let priceMeasure: DrawingKind = "priceMeasure"
+    public static let timeMeasure: DrawingKind = "timeMeasure"
 
     /// Creates a kind from its name.
     public init(rawValue: String) {

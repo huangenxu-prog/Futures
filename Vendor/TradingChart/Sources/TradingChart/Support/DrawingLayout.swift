@@ -18,6 +18,14 @@ struct DrawingStroke: Equatable {
     var isSelected: Bool
     /// The anchors that are inside the plot (selected drawings only).
     var handles: [CGPoint]
+    var fillRect: CGRect? = nil
+    var labels: [DrawingLabel] = []
+}
+
+@available(iOS 17.0, *)
+struct DrawingLabel: Equatable {
+    let point: CGPoint
+    let text: String
 }
 
 /// Everything the canvas draws for the drawings, in screen coordinates.
@@ -48,7 +56,8 @@ enum DrawingLayout {
         pendingAnchors: [ChartAnchor],
         registry: DrawingToolRegistry,
         domain: ChartDomain,
-        transform: ChartTransform
+        transform: ChartTransform,
+        interval: ChartInterval
     ) -> DrawingFrame {
         let visible = transform.timeRange
         let margin = visible.upperBound.timeIntervalSince(visible.lowerBound) * windowMargin
@@ -69,8 +78,47 @@ enum DrawingLayout {
             let handles = isSelected
                 ? drawing.anchors.map(transform.point(for:)).filter { reach.contains($0) }
                 : []
-            guard !lines.isEmpty || !handles.isEmpty else { continue }
-            strokes.append(DrawingStroke(id: drawing.id, lines: lines, style: drawing.style, isSelected: isSelected, handles: handles))
+            var stroke = DrawingStroke(id:drawing.id,lines:lines,style:drawing.style,isSelected:isSelected,handles:handles)
+            if drawing.anchors.count >= 2 {
+                let a = drawing.anchors[0], b = drawing.anchors[1]
+                if drawing.kind == .rectangle {
+                    let lo = max(min(a.time,b.time),visible.lowerBound), hi = min(max(a.time,b.time),visible.upperBound)
+                    let low = max(min(a.price,b.price),transform.priceRange.lowerBound)
+                    let high = min(max(a.price,b.price),transform.priceRange.upperBound)
+                    if lo <= hi,low <= high {
+                        let x = transform.x(for:lo), y = transform.y(for:high)
+                        stroke.fillRect = CGRect(x:x,y:y,width:max(0,transform.x(for:hi)-x),height:max(0,transform.y(for:low)-y))
+                    }
+                }
+                if drawing.kind == .fibonacci {
+                    let end = min(max(a.time,b.time),visible.upperBound)
+                    if visible.contains(end) {
+                        for ratio in ExtendedDrawingTool.fibRatios {
+                            let price = b.price+(a.price-b.price)*ratio
+                            if transform.priceRange.contains(price) {
+                                let point = CGPoint(x:transform.x(for:end)-4,y:transform.y(for:price))
+                                stroke.labels.append(DrawingLabel(point:point,text:String(format:"%.1f%%",ratio*100)))
+                            }
+                        }
+                    }
+                }
+                if drawing.kind == .priceMeasure || drawing.kind == .timeMeasure {
+                    let delta = b.price-a.price
+                    let bars = abs(b.time.timeIntervalSince(a.time))/interval.seconds
+                    let text: String
+                    if drawing.kind == .priceMeasure {
+                        text = a.price != 0 ? String(format:"%+.4g (%+.2f%%)",delta,delta/abs(a.price)*100) : String(format:"%+.4g",delta)
+                    } else {
+                        text = String(format:"%.0f 根K线",bars)
+                    }
+                    let p = transform.point(for:b)
+                    if reach.contains(p) {
+                        let x = max(transform.plotRect.minX+50,min(transform.plotRect.maxX-4,p.x))
+                        stroke.labels.append(DrawingLabel(point:CGPoint(x:x,y:max(12,p.y-8)),text:text))
+                    }
+                }
+            }
+            if !stroke.lines.isEmpty || !stroke.handles.isEmpty || stroke.fillRect != nil || !stroke.labels.isEmpty { strokes.append(stroke) }
         }
         let pending = pendingAnchors.map(transform.point(for:)).filter { reach.contains($0) }
         return DrawingFrame(strokes: strokes, pending: pending)
