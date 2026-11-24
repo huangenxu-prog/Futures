@@ -15,8 +15,8 @@ from urllib.request import urlopen
 
 ROOT = Path("/root/tq_test")
 SCRIPT = ROOT / "server/market_gateway.py"
-VERSION = "ae2dfcc49d1d06ed079410cca36869bc2644c439"
-GIT_BLOB_SHA = "d91b39b03a2c125b1ca116319b8301e2fbb775fd"
+VERSION = "05f405b3e88adcaa8af0c01e0f73579c458b6c70"
+GIT_BLOB_SHA = "9e82fc63c7b4bd2b7b8f9f49b29610156ba1b55d"
 
 
 def existing():
@@ -159,6 +159,14 @@ def upgrade():
                     or len(saved.get("bars", [])) < 120):
                 raise ValueError("VPS历史文件内容不完整")
             print("VPS历史缓存验证通过，白糖15分钟", len(saved["bars"]), "根", flush=True)
+            # A watchlist history warm hint may queue six background
+            # downloads, but must not allocate six real-time subscriptions.
+            live_before = get(base, "/health")["kline_cache"]["tracked"]
+            warm = get(base, "/v1/cache/warm?" + urlencode(dict(symbol=code)))
+            live_after = get(base, "/health")["kline_cache"]["tracked"]
+            if warm.get("accepted") != 1 or live_after != live_before:
+                raise ValueError("自选历史预热占用了实时订阅或未被接受")
+            print("自选预热检查通过：只补历史，不占实时连接", flush=True)
             catalog = get(base, "/v1/catalog")
             if not isinstance(catalog, list) or len(catalog) <= 17 or not any(
                     item.get("exchange") == "CFFEX" for item in catalog):
