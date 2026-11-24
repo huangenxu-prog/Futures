@@ -134,11 +134,13 @@ enum MarketDataService {
         let code: String
         let month: String
         let last, settlement, bid, ask, volume, interest, previousInterest: Double?
+        let bidVolume, askVolume: Double?
         let time: String?
 
         var identity: MainContract {
             MainContract(code: code, month: month, last: nil, settlement: nil, bid: nil,
-                         ask: nil, volume: nil, interest: nil, previousInterest: nil, time: nil)
+                         ask: nil, volume: nil, interest: nil, previousInterest: nil,
+                         bidVolume: nil, askVolume: nil, time: nil)
         }
 
         var change: Double? {
@@ -161,6 +163,7 @@ enum MarketDataService {
         let code: String
         let month: String
         let last, settlement, bid, ask, volume, interest, priceTick, volumeMultiple: Double?
+        let bidVolume, askVolume: Double?
         let time: String?
         var id: String { code }
 

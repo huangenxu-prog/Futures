@@ -310,19 +310,23 @@ struct InstrumentDetailView: View {
             .minimumScaleFactor(0.7)
             Spacer(minLength: 4)
             VStack(spacing: 4) {
-                smallQuote("卖1", contractQuote(quote?.ask, selectedContract?.ask), MarketPalette.ink)
-                smallQuote("买1", contractQuote(quote?.bid, selectedContract?.bid), MarketPalette.ink)
+                bookQuote("卖1", price: contractQuote(quote?.ask, selectedContract?.ask),
+                          quantity: selectedContract == nil ? quote?.askVolume : selectedContract?.askVolume)
+                bookQuote("买1", price: contractQuote(quote?.bid, selectedContract?.bid),
+                          quantity: selectedContract == nil ? quote?.bidVolume : selectedContract?.bidVolume)
             }
-            .frame(width: 99)
+            .frame(width: 132)
         }
         .padding(.horizontal, 10)
         .frame(minHeight: 45)
     }
 
     private var marketStatistics: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 4) {
             smallQuote("成交", CompactMarketQuantity.format(selectedContract == nil ? quote?.volume : selectedContract?.volume), MarketPalette.ink)
+            Spacer(minLength: 3)
             smallQuote("持仓", CompactMarketQuantity.format(selectedContract == nil ? quote?.interest : selectedContract?.interest), MarketPalette.ink)
+            Spacer(minLength: 3)
             smallQuote("增仓", selectedContract == nil ? (quote?.interestChange?.formatted() ?? "--") : "--", MarketPalette.ink)
         }
         .padding(.horizontal, 10)
@@ -404,16 +408,37 @@ struct InstrumentDetailView: View {
     }
 
     private func smallQuote(_ label: String, _ value: String, _ tint: Color) -> some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 4) {
             Text(label).foregroundStyle(MarketPalette.muted)
-            Spacer(minLength: 1)
             Text(value).foregroundStyle(tint)
         }
         .font(.system(size: 11, weight: .medium, design: .rounded))
         .monospacedDigit()
         .lineLimit(1)
         .minimumScaleFactor(0.65)
-        .frame(maxWidth: .infinity)
+    }
+
+    private func bookQuote(_ label: String, price: String, quantity: Double?) -> some View {
+        let size = quantity.flatMap { value in
+            value.isFinite && value >= 0
+                ? value.formatted(.number.precision(.fractionLength(0))) : nil
+        } ?? "--"
+        return HStack(spacing: 4) {
+            Text(label)
+                .foregroundStyle(MarketPalette.muted)
+                .fixedSize()
+            Text(price)
+                .foregroundStyle(MarketPalette.ink)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            Text(size + (size == "--" ? "" : "手"))
+                .foregroundStyle(MarketPalette.muted)
+                .frame(width: 43, alignment: .trailing)
+        }
+        .font(.system(size: 11, weight: .medium, design: .rounded))
+        .monospacedDigit()
+        .lineLimit(1)
+        .minimumScaleFactor(0.6)
+        .accessibilityElement(children: .combine)
     }
 
 }

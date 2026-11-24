@@ -57,6 +57,22 @@ class GatewayStreamingTests(unittest.TestCase):
         self.assertIsNone(hub.timing_for(key, 2))
         self.assertIsNone(hub.timing_for(key, 1))
 
+    def test_snapshot_includes_actual_top_of_book_sizes(self):
+        quote = SimpleNamespace(datetime="2026-11-24 14:36:34.000000",
+                                bid_price1=5113, ask_price1=5114,
+                                bid_volume1=83, ask_volume1=126)
+        values = gateway.snapshot(quote)
+        self.assertEqual(values["bid"], 5113)
+        self.assertEqual(values["ask"], 5114)
+        self.assertEqual(values["bidVolume"], 83)
+        self.assertEqual(values["askVolume"], 126)
+        quote.bid_volume1 = 0
+        quote.ask_volume1 = float("nan")
+        values = gateway.snapshot(quote)
+        self.assertEqual(values["bidVolume"], 0)
+        self.assertNotIn("askVolume", values)
+        self.assertNotIn("bidVolume", gateway.snapshot(SimpleNamespace(datetime="2026-11-24 14:36:34")))
+
     def test_quote_publish_is_change_driven(self):
         hub = gateway.LiveQuoteHub()
         first = {"CZCE.SR": {"code": "CZCE.SR701", "month": "2701", "last": 5024.0}}
