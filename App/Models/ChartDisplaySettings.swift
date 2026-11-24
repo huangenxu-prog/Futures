@@ -25,20 +25,6 @@ enum ChartIndicatorKind: String, Codable, CaseIterable, Hashable, Identifiable {
     }
 }
 
-enum MovingAverageType: String, Codable, CaseIterable, Identifiable {
-    case sma = "SMA"
-    case ema = "EMA"
-    case wma = "WMA"
-    var id: String { rawValue }
-}
-
-struct AdditionalMovingAverage: Codable, Equatable, Identifiable {
-    var id = UUID()
-    var type: MovingAverageType = .ema
-    var period: Int = 100
-    var enabled = true
-}
-
 struct ChartDisplaySettings: Codable, Equatable {
     // Keep the original four moving averages and their saved visibility intact.
     var enabled: Set<ChartIndicatorKind> = [.emaFast, .emaSlow, .macd]
@@ -112,7 +98,7 @@ struct ChartDisplaySettings: Codable, Equatable {
         if enabled.contains(.emaFast) { keys.append("EMA:\(emaFast)") }
         if enabled.contains(.emaSlow) { keys.append("EMA:\(emaSlow)") }
         if enabled.contains(.wma) { keys.append("WMA:\(wma)") }
-        keys += additionalAverages.filter(\.enabled).map { "\($0.type.rawValue):\($0.period)" }
+        keys += additionalAverages.filter(\.enabled).map(\.key)
         return keys
     }
 
@@ -125,7 +111,7 @@ struct ChartDisplaySettings: Codable, Equatable {
         let periods = [sma, emaFast, emaSlow, wma, bollPeriod, volumeMA,
                        macdFast, macdSlow, macdSignal, rsi, kdjPeriod, kdjK, kdjD, atrPeriod]
         return periods.allSatisfy { (2...500).contains($0) }
-            && additionalAverages.allSatisfy { (2...500).contains($0.period) }
+            && additionalAverages.allSatisfy(\.isValid)
             && Set(additionalAverages.map(\.id)).count == additionalAverages.count
             && formulas.count <= 12 && Set(formulas.map(\.id)).count == formulas.count
             && !hasDuplicateAverages
@@ -191,7 +177,13 @@ struct ChartDisplaySettings: Codable, Equatable {
         switch type {
         case .sma: offset = 0
         case .ema: offset = 4
-        case .wma: offset = 8
+        case .wma, .ema2: offset = 8
+        case .hma: offset = 1
+        case .dema: offset = 2
+        case .tema: offset = 3
+        case .smoothSMA: offset = 5
+        case .dma: offset = 6
+        case .wilder: offset = 7
         }
         return ChartColor(hex: colors[(period * 7 + offset) % colors.count])!
     }
@@ -202,6 +194,22 @@ struct ChartDisplaySettings: Codable, Equatable {
         case .sma: return SMA(period: period, style: style)
         case .ema: return EMA(period: period, style: style)
         case .wma: return WMA(period: period, style: style)
+        default:
+            // The legacy fixed slots only use the three native types.
+            // Extended rows are routed through the overload below.
+            return SMA(period: period, style: style)
+        }
+    }
+
+    private static func movingAverage(_ average: AdditionalMovingAverage) -> (any ChartIndicator)? {
+        switch average.type {
+        case .sma,.ema,.wma:
+            return movingAverage(type:average.type,period:average.period)
+        default:
+            guard let expression = try? average.expression(),
+                  let program = try? FormulaProgram("A:"+expression+";") else { return nil }
+            let style = IndicatorLineStyle(color:averageColor(type:average.type,period:average.type == .dma ? 20 : average.period),width:1.7)
+            return QihuiExtendedMovingAverage(average:average,program:program,style:style)
         }
     }
 
@@ -226,7 +234,7 @@ struct ChartDisplaySettings: Codable, Equatable {
             }
         }
         for average in additionalAverages where average.enabled {
-            result.append(Self.movingAverage(type: average.type, period: average.period))
+            if let indicator = Self.movingAverage(average) { result.append(indicator) }
         }
         for formula in formulas where formula.enabled {
             if let program = try? FormulaProgram(formula.source) {

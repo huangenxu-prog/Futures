@@ -151,6 +151,29 @@ struct FormulaEngineSelfTest {
             do { _ = try FormulaProgram(bad); preconditionFailure("accepted \(bad)") }
             catch is FormulaFailure {}
         }
+        precondition(MovingAverageType.allCases.count == 10)
+        let legacyAverage = """
+        {"id":"00000000-0000-0000-0000-000000000001","type":"SMA","period":20,"enabled":true}
+        """
+        let simple = try JSONDecoder().decode(AdditionalMovingAverage.self,from:Data(legacyAverage.utf8))
+        precondition(simple.type == .sma && simple.label == "MA20" && simple.key == "SMA:20")
+        for type in MovingAverageType.allCases {
+            var average = AdditionalMovingAverage(type:type,period:4)
+            average.smoothingWeight = 2
+            average.dynamicAlpha = 0.5
+            let source = try average.expression()
+            let values = try FormulaProgram("A:"+source+";").evaluate(bars)
+            precondition(values.count == 1 && values[0].values.count == bars.count)
+            let restoredAverage = try JSONDecoder().decode(AdditionalMovingAverage.self,from:JSONEncoder().encode(average))
+            precondition(restoredAverage == average)
+        }
+        precondition(AdditionalMovingAverage(type:.ema2,period:20).key == AdditionalMovingAverage(type:.wma,period:20).key)
+        var weighted = AdditionalMovingAverage(type:.smoothSMA,period:3)
+        weighted.smoothingWeight = 4
+        precondition(!weighted.isValid)
+        var dmaAverage = AdditionalMovingAverage(type:.dma,period:20)
+        dmaAverage.dynamicAlpha = 1.1
+        precondition(!dmaAverage.isValid)
         print("Formula engine: causal state, dynamic references, confirmed segments and previous fixtures passed")
     }
 }

@@ -32,7 +32,7 @@ jobs:
 
       - name: Verify sandboxed formula engine
         run: |
-          swiftc -O App/Models/FormulaEngine.swift App/Models/FormulaComposition.swift scripts/FormulaEngineSelfTest.swift -o /tmp/formula-engine
+          swiftc -O App/Models/FormulaEngine.swift App/Models/FormulaComposition.swift App/Models/MovingAverageConfiguration.swift scripts/FormulaEngineSelfTest.swift -o /tmp/formula-engine
           /tmp/formula-engine
 
       - name: Verify futures indicator calculations

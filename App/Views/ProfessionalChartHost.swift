@@ -279,7 +279,7 @@ struct ProfessionalChartHost: View {
                             if updated.isValid { displaySettings = updated }
                             else { showingIndicatorSettings = true }
                         } label: {
-                            Text("\(average.type.rawValue)\(average.period)")
+                            Text(average.label)
                                 .font(.system(size: 12,
                                               weight: average.enabled ? .semibold : .regular))
                                 .foregroundStyle(average.enabled ? MarketPalette.accent : MarketPalette.muted)

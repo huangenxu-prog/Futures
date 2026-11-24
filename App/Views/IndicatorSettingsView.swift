@@ -17,43 +17,67 @@ struct IndicatorSettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    averageRow("SMA", kind: .sma, value: $draft.sma)
+                    averageRow("MA", kind: .sma, value: $draft.sma)
                     averageRow("EMA 1", kind: .emaFast, value: $draft.emaFast)
                     averageRow("EMA 2", kind: .emaSlow, value: $draft.emaSlow)
                     averageRow("WMA", kind: .wma, value: $draft.wma)
                 } header: {
                     Text("基础均线")
                 } footer: {
-                    Text("开关控制是否显示，右侧填写周期。例如 EMA 1 设 20、EMA 2 设 50，可同时显示 EMA20 和 EMA50。")
+                    Text("原 SMA 简单均线现标为 MA，计算及设置不变。EMA 1/2 是两个普通 EMA 槽位，与函数 EMA2 不同。")
                 }
 
                 Section {
                     ForEach($draft.additionalAverages) { $average in
-                        HStack(spacing: 10) {
-                            Toggle("启用", isOn: $average.enabled)
-                                .labelsHidden()
-                                .accessibilityLabel("显示 \(average.type.rawValue)\(average.period)")
-                            Picker("类型", selection: $average.type) {
-                                ForEach(MovingAverageType.allCases) { type in
-                                    Text(type.rawValue).tag(type)
+                        VStack(alignment:.leading,spacing:8) {
+                            HStack(spacing:8) {
+                                Toggle("启用", isOn: $average.enabled)
+                                    .labelsHidden()
+                                    .accessibilityLabel("显示 \(average.label)")
+                                Spacer(minLength:0)
+                                Picker("类型", selection: $average.type) {
+                                    ForEach(MovingAverageType.allCases) { type in
+                                        Text(type.title).tag(type)
+                                    }
                                 }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .fixedSize(horizontal:true,vertical:false)
+                                if average.type == .dma {
+                                    TextField("权重",value:$average.dynamicAlpha,format:.number)
+                                        .keyboardType(.decimalPad)
+                                        .multilineTextAlignment(.trailing)
+                                        .frame(width:64)
+                                        .accessibilityLabel("DMA 权重")
+                                } else {
+                                    TextField("周期", value: $average.period, format: .number)
+                                        .keyboardType(.numberPad)
+                                        .multilineTextAlignment(.trailing)
+                                        .frame(width:52)
+                                        .accessibilityLabel("均线周期")
+                                }
+                                Button {
+                                    let id = average.id
+                                    draft.additionalAverages.removeAll { $0.id == id }
+                                } label: {
+                                    Image(systemName:"minus.circle").foregroundStyle(.red)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("删除均线")
                             }
-                            .labelsHidden()
-                            .frame(width: 88)
-                            TextField("周期", value: $average.period, format: .number)
-                                .keyboardType(.numberPad)
-                                .multilineTextAlignment(.trailing)
-                                .frame(width: 58)
-                                .accessibilityLabel("均线周期")
-                            Button {
-                                let id = average.id
-                                draft.additionalAverages.removeAll { $0.id == id }
-                            } label: {
-                                Image(systemName: "minus.circle")
-                                    .foregroundStyle(.red)
+                            if average.type == .smoothSMA {
+                                HStack {
+                                    Text("平滑权重 M").font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    TextField("M",value:$average.smoothingWeight,format:.number)
+                                        .keyboardType(.numberPad)
+                                        .multilineTextAlignment(.trailing)
+                                        .frame(width:58)
+                                }
+                            } else if average.type == .dma {
+                                Text("固定权重 0～1；动态权重表达式请用组合指标。")
+                                    .font(.caption2).foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("删除均线")
                         }
                     }
                     Button {
@@ -64,7 +88,7 @@ struct IndicatorSettingsView: View {
                 } header: {
                     Text("自定义均线")
                 } footer: {
-                    Text("可以添加多条 SMA、EMA、WMA，分别设置周期、显示状态和删除；同一类型、同一周期不能重复显示。")
+                    Text("可添加全部10种均线。MA 是简单均线，SMA 另需平滑权重 M；DMA 使用固定权重，EMA2 与 WMA 等价。相同算法与参数不能重复启用。")
                 }
 
                 Section("布林带 BOLL") {
@@ -162,7 +186,7 @@ struct IndicatorSettingsView: View {
                         Text("同类型、同周期的均线不能重复启用，请关闭或调整其中一条。")
                             .foregroundStyle(.red)
                     } else if !draft.isValid {
-                        Text("周期 2～500；MACD 快线小于慢线；BOLL 倍数 0.1～10；SAR 加速因子大于0且不超过最大值，最大值不超过1。")
+                        Text("周期2～500，SMA 权重1～N，DMA 权重0～1；MACD 快线小于慢线，BOLL 倍数0.1～10，SAR 加速因子大于0且不超过最大值，最大值不超过1。")
                             .foregroundStyle(.red)
                     } else {
                         Text("保存后立即重新计算指标，设置保存在当前设备上。")
