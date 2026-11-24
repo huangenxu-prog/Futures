@@ -341,6 +341,28 @@ enum MarketDataService {
         return result.bars.filter { $0.time < before }.sorted { $0.time < $1.time }
     }
 
+    /// Read-only backtest history, separate from the live chart cache.
+    /// The gateway accepts at most 500 recent bars and 300 per older page.
+    static func backtestHistory(symbol: String, period: Int, count: Int) async throws -> [MarketBar] {
+        let wanted = min(6000,max(50,count))
+        let recent = try await fetch(symbol:symbol,period:period,count:min(500,wanted),mergeCached:false)
+        var indexed: [Int64:MarketBar] = [:]
+        for bar in recent { indexed[bar.time] = bar }
+        var cursor = indexed.keys.min()
+        var pages = 0
+        while indexed.count < wanted, let before = cursor, pages < 24 {
+            try Task.checkCancellation()
+            let older = try await fetchOlder(symbol:symbol,period:period,before:before,
+                count:min(300,max(5,wanted-indexed.count)),depth:min(8964,max(1200,wanted+300)))
+            let valid = older.filter { $0.time < before }
+            guard let next = valid.map(\.time).min(), next < before else { break }
+            for bar in valid { indexed[bar.time] = bar }
+            cursor = next
+            pages += 1
+        }
+        return Array(indexed.values.sorted { $0.time < $1.time }.suffix(wanted))
+    }
+
     static func fetch(symbol: String, period: Int, count: Int = 100, mergeCached: Bool = true) async throws -> [MarketBar] {
         let url = try baseURL().appendingPathComponent("v1/klines")
         guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else {

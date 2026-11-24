@@ -10,10 +10,22 @@ struct StrategySelfTest {
         let result = try FuturesBacktest.run(bars:bars,signals:[BacktestSignal(long:true),.init(),.init(),.init()],p:p)
         precondition(result.trades.count == 1)
         precondition(result.trades[0].entryIndex == 1 && result.trades[0].exitIndex == 2)
+        // 50 yuan net budget, 4 yuan fees: four ticks risk, then
+        // a five-tick gross target to achieve at least 1R net.
         precondition(result.final == 50_046 && result.winRate == 1)
         let both = [bars[0],bar(101,110,90,101),bars[2],bars[3]]
         let adverse = try FuturesBacktest.run(bars:both,signals:[.init(long:true),.init(),.init(),.init()],p:p)
-        precondition(adverse.ambiguous == 1 && adverse.final == 49_946)
+        precondition(adverse.ambiguous == 1 && adverse.final == 49_956)
+        var protect = p
+        protect.targetR = 0
+        protect.breakEvenAfterProfit = true
+        let protectBars = [bars[0],bar(101,105,100,104),bar(104,105,100,101),bars[3]]
+        let protected = try FuturesBacktest.run(bars:protectBars,signals:[.init(long:true),.init(),.init(),.init()],p:protect)
+        precondition(protected.trades.count == 1)
+        precondition(protected.trades[0].reason == "盈利回撤归零")
+        precondition(protected.final == 50_006)
+        let expensiveStop = try FuturesBacktest.run(bars:bars,signals:[.init(long:true,stopPrice:96),.init(),.init(),.init()],p:p)
+        precondition(expensiveStop.rejected == 1 && expensiveStop.trades.isEmpty)
         let signals = try FuturesBacktest.formulaSignals("LONG:C>O; EXIT:C<O;",bars:bars)
         precondition(!signals[0].long && signals[1].long)
         let line = try FormulaProgram("A:EMA(C,2);")

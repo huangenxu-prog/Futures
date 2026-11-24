@@ -7,6 +7,7 @@ struct StrategyBacktestView: View {
     let period: Int
     let formulas: [FormulaDefinition]
     let priceTick: Double?
+    var contractMultiplier: Double? = nil
     @State private var source = "LONG:CROSS(EMA(C,20),EMA(C,50));\nSHORT:CROSS(EMA(C,50),EMA(C,20));"
     @State private var hunt = false
     @State private var multiPeriod = true
@@ -18,6 +19,8 @@ struct StrategyBacktestView: View {
     @State private var slip = 1
     @State private var risk = 1000.0
     @State private var target = 2.0
+    @State private var protectProfit = true
+    @State private var historyCount = 1200
     @State private var running = false
     @State private var result: BacktestResult?
     @State private var error: String?
@@ -59,6 +62,12 @@ struct StrategyBacktestView: View {
                 }
                 Section("模拟账户") {
                     LabeledContent("初始本金","¥50,000")
+                    Picker("目标历史长度",selection:$historyCount) {
+                        Text("500根").tag(500)
+                        Text("1200根").tag(1200)
+                        Text("3000根").tag(3000)
+                        Text("6000根").tag(6000)
+                    }
                     numberField("合约乘数",text:$multiplier)
                     numberField("最小变动价位",text:$tick)
                     numberField("保证金比例（%）",text:$margin)
@@ -66,7 +75,7 @@ struct StrategyBacktestView: View {
                     Stepper("固定手数 \(lots)",value:$lots,in:1...100)
                     Stepper("单边滑点 \(slip) 跳",value:$slip,in:0...20)
                     HStack {
-                        Text("单笔价格风险上限（元）")
+                        Text("计划净亏损上限（元）")
                         Spacer()
                         TextField("风险",value:$risk,format:.number).keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing).frame(width:100)
@@ -77,7 +86,8 @@ struct StrategyBacktestView: View {
                         TextField("倍数",value:$target,format:.number).keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing).frame(width:90)
                     }
-                    Text("需填写真实合约参数。当前采用固定每手费用、固定保证金率，不模拟交易所逐日结算、涨跌停无法成交、阶梯费率或期权。跳空、费用及滑点可使实际亏损超过风险上限。")
+                    Toggle("盈利回撤归零离场",isOn:$protectProfit)
+                    Text("净风险和止盈倍数包含设定手续费及滑点。收盘确认有净浮盈后，下根K线启用保本止损；同根内先盈后亏顺序无法由OHLC确定。跳空、涨跌停或实际成本可能导致更大亏损。固定每手费用、固定保证金率，不模拟逐日结算、阶梯费率或期权。")
                         .font(.caption)
                 }
                 Section {
@@ -93,7 +103,8 @@ struct StrategyBacktestView: View {
                         LabeledContent("收益率",((result.final/result.initial)-1).formatted(.percent.precision(.fractionLength(2))))
                         LabeledContent("胜率",result.winRate.map{$0.formatted(.percent.precision(.fractionLength(1)))} ?? "无成交")
                         LabeledContent("交易次数",String(result.trades.count))
-                        LabeledContent("盈利 / 亏损","\(result.wins) / \(result.losses)")
+                        LabeledContent("盈利 / 亏损 / 保本","\(result.wins) / \(result.losses) / \(result.breakevens)")
+                        LabeledContent("盈利因子",result.profitFactor.map{$0.formatted(.number.precision(.fractionLength(2)))} ?? "—")
                         LabeledContent("最大回撤",result.maxDrawdown.formatted(.percent.precision(.fractionLength(2))))
                         LabeledContent("拒绝入场",String(result.rejected))
                         LabeledContent("同根止盈止损冲突",String(result.ambiguous))
@@ -119,7 +130,10 @@ struct StrategyBacktestView: View {
             .navigationTitle("指标回测")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement:.cancellationAction) { Button("关闭"){ dismiss() } } }
-            .onAppear { if let priceTick, priceTick > 0 { tick = String(priceTick) } }
+            .onAppear {
+                if tick.isEmpty, let priceTick, priceTick > 0 { tick = String(priceTick) }
+                if multiplier.isEmpty, let contractMultiplier, contractMultiplier > 0 { multiplier = String(contractMultiplier) }
+            }
             .onDisappear { task?.cancel() }
         }
     }
@@ -136,8 +150,11 @@ struct StrategyBacktestView: View {
         guard let m = Double(multiplier), let t = Double(tick),let g = Double(margin),let c = Double(fee) else {
             error = "请填写合约乘数、最小价位、保证金比例和单边手续费。"; return
         }
-        let p = BacktestParameters(multiplier:m,tick:t,marginRate:g/100,feePerSide:c,
+        var parameters = BacktestParameters(multiplier:m,tick:t,marginRate:g/100,feePerSide:c,
                                    slippageTicks:slip,lots:lots,stopRisk:risk,targetR:target)
+        parameters.breakEvenAfterProfit = protectProfit
+        let p = parameters
+        let requested = historyCount
         guard p.valid else { error = "回测参数无效"; return }
         let code = source, useHunt = hunt, useMulti = hunt && multiPeriod
         let executionPeriod = useMulti ? 300 : period
@@ -145,7 +162,7 @@ struct StrategyBacktestView: View {
         task = Task {
             defer { running = false }
             do {
-                let history = try await MarketDataService.fetch(symbol:symbol,period:executionPeriod,count:1200,mergeCached:false)
+                let history = try await MarketDataService.backtestHistory(symbol:symbol,period:executionPeriod,count:requested)
                 // Exclude newest bar conservatively, including when market
                 // is closed, to avoid accidental unfinished-bar signals.
                 let closed = Array(history.dropLast())
@@ -161,8 +178,8 @@ struct StrategyBacktestView: View {
                     }
                 }
                 if useMulti {
-                    thirty = timed(try await MarketDataService.fetch(symbol:symbol,period:1800,count:1200,mergeCached:false))
-                    hour = timed(try await MarketDataService.fetch(symbol:symbol,period:3600,count:1200,mergeCached:false))
+                    thirty = timed(try await MarketDataService.backtestHistory(symbol:symbol,period:1800,count:max(1200,requested/6+600)))
+                    hour = timed(try await MarketDataService.backtestHistory(symbol:symbol,period:3600,count:max(1200,requested/12+600)))
                     guard thirty.count >= 12,hour.count >= 12 else { throw FormulaFailure("多周期历史不足") }
                 }
                 let thirtyBars = thirty, hourBars = hour
@@ -176,7 +193,7 @@ struct StrategyBacktestView: View {
                             let filtered = MultiPeriodHunt.calculate(five:five,thirty:thirtyBars,hour:hourBars)
                             guard filtered.covered > 0 else { throw FormulaFailure("三周期历史没有足够的共同覆盖") }
                             candidates = filtered.signals
-                            researchNote = " · 多周期覆盖(filtered.covered)根，扫回候选(filtered.candidates)个，方向过滤通过(filtered.accepted)个"
+                            researchNote = " · 多周期覆盖\(filtered.covered)根，扫回候选\(filtered.candidates)个，方向过滤通过\(filtered.accepted)个"
                         } else { candidates = HuntSignals.calculate(bars) }
                         signals = candidates.map { s in
                             guard let s else { return BacktestSignal() }
@@ -195,7 +212,7 @@ struct StrategyBacktestView: View {
                 formatter.timeZone = TimeZone(identifier:"Asia/Shanghai")
                 formatter.dateFormat = "yyyy-MM-dd HH:mm"
                 if let first = closed.first, let last = closed.last {
-                    coverage = "\(closed.count) 根已完成K线（保守排除最后一根） · \(formatter.string(from:Date(timeIntervalSince1970:Double(first.time)))) 至 \(formatter.string(from:Date(timeIntervalSince1970:Double(last.time))))。样本内结果，不代表未来收益。\(researchNote)"
+                    coverage = "目标\(requested)根，实际取得\(history.count)根，\(closed.count) 根用于回测（保守排除最后一根） · \(formatter.string(from:Date(timeIntervalSince1970:Double(first.time)))) 至 \(formatter.string(from:Date(timeIntervalSince1970:Double(last.time))))。样本内结果，不代表未来收益。\(researchNote)"
                 }
             } catch is CancellationError {} catch { self.error = error.localizedDescription }
         }

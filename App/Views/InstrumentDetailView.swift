@@ -27,6 +27,7 @@ struct InstrumentDetailView: View {
     @State private var loadError: String? = nil
     @State private var loading = false
     @State private var currentPriceTick: Double?
+    @State private var currentVolumeMultiple: Double?
     private static let defaultPeriods = ["1分","5分","15分","30分","60分","日线"]
     private var periods: [String] {
         var result: [String] = []
@@ -75,6 +76,7 @@ struct InstrumentDetailView: View {
                         symbol: chartSymbol, period: periodSeconds, bars: rawBars,
                         feed: chartFeed, feedKey: chartKey,
                         priceTick: selectedContract?.priceTick ?? currentPriceTick,
+                        contractMultiplier: selectedContract?.volumeMultiple ?? currentVolumeMultiple,
                         showingIndicatorSettings: $showChartIndicatorSettings,
                         selectedCandleTime: $selectedCandleTime
                     )
@@ -93,14 +95,15 @@ struct InstrumentDetailView: View {
             // precision. The main-contract snapshot does not include priceTick,
             // so request it from the existing listed-contract endpoint.
             let symbol = chartSymbol
-            currentPriceTick = nil
-            if let direct = selectedContract?.priceTick, direct > 0 {
-                currentPriceTick = direct
-            } else if let listed = try? await MarketDataService.listedContracts(for: instrument.id) {
-                guard !Task.isCancelled, chartSymbol == symbol else { return }
-                if let tick = listed.first(where: { $0.code == symbol })?.priceTick,
-                   tick > 0 {
-                    currentPriceTick = tick
+            currentPriceTick = selectedContract?.priceTick
+            currentVolumeMultiple = selectedContract?.volumeMultiple
+            if (currentPriceTick ?? 0) <= 0 || (currentVolumeMultiple ?? 0) <= 0 {
+                if let listed = try? await MarketDataService.listedContracts(for: instrument.id) {
+                    guard !Task.isCancelled, chartSymbol == symbol else { return }
+                    if let contract = listed.first(where: { $0.code == symbol }) {
+                        if let tick = contract.priceTick,tick > 0 { currentPriceTick = tick }
+                        if let multiple = contract.volumeMultiple,multiple > 0 { currentVolumeMultiple = multiple }
+                    }
                 }
             }
         }

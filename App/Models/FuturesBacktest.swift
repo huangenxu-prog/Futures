@@ -10,6 +10,7 @@ struct BacktestParameters: Sendable {
     var lots: Int
     var stopRisk: Double
     var targetR: Double
+    var breakEvenAfterProfit = false
     var valid: Bool {
         [initial,multiplier,tick,marginRate,feePerSide,stopRisk,targetR].allSatisfy(\.isFinite)
         && initial > 0 && multiplier > 0 && tick > 0 && marginRate > 0 && marginRate <= 1
@@ -44,13 +45,21 @@ struct BacktestResult: Sendable {
     let marginCalls: Int
     var wins: Int { trades.filter { $0.net > 0 }.count }
     var losses: Int { trades.filter { $0.net < 0 }.count }
+    var breakevens: Int { trades.count-wins-losses }
+    var profitFactor: Double? {
+        let profit = trades.reduce(0.0) { $0+max(0,$1.net) }
+        let loss = trades.reduce(0.0) { $0+max(0,-$1.net) }
+        return loss > 0 ? profit/loss : nil
+    }
     var winRate: Double? { trades.isEmpty ? nil : Double(wins)/Double(trades.count) }
 }
 
 enum FuturesBacktest {
     private struct Position {
         let side, index: Int
-        let entry, stop, target: Double
+        let entry, target: Double
+        var stop: Double
+        var breakEvenArmed = false
     }
 
     static func formulaSignals(_ source: String, bars: [FormulaBar]) throws -> [BacktestSignal] {
@@ -73,7 +82,7 @@ enum FuturesBacktest {
         let unit = p.multiplier * Double(p.lots)
         let cost = p.feePerSide * Double(p.lots)
         let slip = Double(p.slippageTicks)*p.tick
-        let riskDistance = p.stopRisk/unit
+        let riskDistance = (p.stopRisk-2*cost)/unit-slip
         guard unit.isFinite,cost.isFinite,slip.isFinite,riskDistance.isFinite,riskDistance > 0 else {
             throw FormulaFailure("回测参数超出计算范围")
         }
@@ -82,9 +91,15 @@ enum FuturesBacktest {
         var position: Position?
         var rejected = 0, ambiguous = 0, marginCalls = 0
 
+        func tickRound(_ price:Double,up:Bool) -> Double {
+            let ticks = price/p.tick
+            return (up ? ceil(ticks-1e-9) : floor(ticks+1e-9))*p.tick
+        }
+
         func close(_ pos:Position,_ price:Double,_ i:Int,_ reason:String) {
             let fill = price-Double(pos.side)*slip
-            let net = (fill-pos.entry)*Double(pos.side)*unit-2*cost
+            let rawNet = (fill-pos.entry)*Double(pos.side)*unit-2*cost
+            let net = abs(rawNet) < 1e-7 ? 0 : rawNet
             cash += net
             trades.append(BacktestTrade(id:trades.count,side:pos.side,entryIndex:pos.index,
                 exitIndex:i,entry:pos.entry,exit:fill,net:net,reason:reason))
@@ -100,7 +115,7 @@ enum FuturesBacktest {
                 var exitedAtOpen = false
                 if let pos = position {
                     let gapStop = pos.side > 0 ? bar.open <= pos.stop : bar.open >= pos.stop
-                    if gapStop { close(pos,bar.open,i,"跳空止损"); exitedAtOpen = true }
+                    if gapStop { close(pos,bar.open,i,pos.breakEvenArmed ? "跳空保本止损" : "跳空止损"); exitedAtOpen = true }
                     else if signal.exit || (pos.side > 0 ? signal.short : signal.long) {
                         close(pos,bar.open,i,"信号平仓"); exitedAtOpen = true
                     }
@@ -110,14 +125,20 @@ enum FuturesBacktest {
                     else if signal.long || signal.short {
                         let side = signal.long ? 1 : -1
                         let entry = bar.open + Double(side)*slip
-                        let stop = signal.stopPrice ?? (entry-Double(side)*riskDistance)
+                        let intended = signal.stopPrice ?? (entry-Double(side)*riskDistance)
+                        // Structural stops round outward; a default budget stop
+                        // rounds inward, to the nearest exchange-valid tick.
+                        let stop = tickRound(intended,up:signal.stopPrice == nil ? side > 0 : side < 0)
                         let risk = (entry-stop)*Double(side)
+                        let netRisk = (risk+slip)*unit+2*cost
                         let margin = abs(entry)*unit*p.marginRate
                         // No adding, no partial margin financing, no entry
                         // with a structural stop farther than the risk cap.
-                        if risk > 0 && risk*unit <= p.stopRisk+1e-8 && cash >= margin+2*cost && cash > 0 {
-                            position = Position(side:side,index:i,entry:entry,stop:stop,
-                                target:entry+Double(side)*risk*p.targetR)
+                        if risk > 0 && netRisk <= p.stopRisk+1e-8 && cash >= margin+2*cost && cash > 0 {
+                            // Net target includes both fees and adverse exit slippage.
+                            let distance = (netRisk*p.targetR+2*cost)/unit+slip
+                            let target = tickRound(entry+Double(side)*distance,up:side > 0)
+                            position = Position(side:side,index:i,entry:entry,target:target,stop:stop)
                         } else { rejected += 1 }
                     }
                 }
@@ -129,7 +150,7 @@ enum FuturesBacktest {
                 // OHLC does not reveal intrabar order; assume stop first.
                 if hitStop {
                     let price = pos.side > 0 ? min(bar.open,pos.stop) : max(bar.open,pos.stop)
-                    close(pos,price,i,"止损")
+                    close(pos,price,i,pos.breakEvenArmed ? "盈利回撤归零" : "止损")
                 } else if hitTarget {
                     // No favorable gap fill beyond the specified target.
                     close(pos,pos.target,i,"止盈")
@@ -140,6 +161,17 @@ enum FuturesBacktest {
                         close(pos,bar.close,i,"模拟保证金不足")
                     } else if i == bars.count-1 {
                         close(pos,bar.close,i,"样本结束平仓")
+                    } else if p.breakEvenAfterProfit && !pos.breakEvenArmed {
+                        // At a confirmed close, arm the net breakeven stop
+                        // for the NEXT bar. Do not infer intrabar sequencing.
+                        let breakEven = tickRound(pos.entry+Double(pos.side)*(2*cost/unit+slip),up:pos.side > 0)
+                        let profitable = (bar.close-breakEven)*Double(pos.side) > 0
+                        if profitable {
+                            var armed = pos
+                            armed.stop = pos.side > 0 ? max(pos.stop,breakEven) : min(pos.stop,breakEven)
+                            armed.breakEvenArmed = true
+                            position = armed
+                        }
                     }
                 }
             }

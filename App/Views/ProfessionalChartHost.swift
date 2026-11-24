@@ -11,6 +11,7 @@ struct ProfessionalChartHost: View {
     let feed: DirectChartFeed<[MarketBar]>
     let feedKey: String
     let priceTick: Double?
+    var contractMultiplier: Double? = nil
     @Binding var showingIndicatorSettings: Bool
     @Binding var selectedCandleTime: Int64?
     var isReplay = false
@@ -216,7 +217,7 @@ struct ProfessionalChartHost: View {
             }
         }
         .sheet(isPresented:$showingBacktest) {
-            StrategyBacktestView(symbol:symbol,period:period,formulas:displaySettings.formulas,priceTick:priceTick)
+            StrategyBacktestView(symbol:symbol,period:period,formulas:displaySettings.formulas,priceTick:priceTick,contractMultiplier:contractMultiplier)
         }
         .onDisappear {
             feed.detach(owner: feedOwner)
