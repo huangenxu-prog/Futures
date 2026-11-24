@@ -16,3 +16,5 @@ jobs:
         run: |
           python3 -m py_compile server/market_gateway.py server/upgrade_gateway.py server/diagnose_kline.py
           python3 -m unittest discover -s server -p 'test_gateway_stream.py' -v
+      - name: Verify Ubuntu 24.04 bootstrap
+        run: bash server/test_bootstrap.sh
