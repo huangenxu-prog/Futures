@@ -15,8 +15,8 @@ from urllib.request import urlopen
 
 ROOT = Path("/root/tq_test")
 SCRIPT = ROOT / "server/market_gateway.py"
-VERSION = "be7700e9a2932805f7ad777fda256baaaabc4396"
-GIT_BLOB_SHA = "2c97ec12fbb36e63051090cef0e7f2cf0ea869d2"
+VERSION = "ae2dfcc49d1d06ed079410cca36869bc2644c439"
+GIT_BLOB_SHA = "d91b39b03a2c125b1ca116319b8301e2fbb775fd"
 
 
 def existing():
@@ -128,16 +128,37 @@ def upgrade():
             cache_status = get(base, "/health").get("kline_cache", {})
             if cache_status.get("ready", 0) < 1:
                 raise ValueError("K线后台缓存尚未就绪")
-            if cache_status.get("tracked", 0) < 2:
-                raise ValueError("同合约其他周期没有开始后台预热")
-            if cache_status.get("data_length") != 200:
-                raise ValueError("K线订阅数量不是200根")
+            if cache_status.get("tracked", 0) < 1:
+                raise ValueError("没有激活实时K线订阅")
+            if (cache_status.get("data_length") != 2
+                    or cache_status.get("history_length") != 200
+                    or not cache_status.get("disk_enabled")):
+                raise ValueError("2根实时K线/200根历史文件缓存未启用")
             if cached_seconds > 2.0:
                 raise ValueError(f"K线缓存响应过慢：{cached_seconds:.2f}秒")
             print(f"白糖K线缓存复用耗时: {cached_seconds:.3f}秒，"
-                  f"单周期 {cache_status['data_length']} 根，"
-                  f"已订阅 {cache_status['tracked']} 个周期，"
-                  f"待预热 {cache_status.get('prefetch_pending', 0)} 个", flush=True)
+                  f"实时订阅 {cache_status['data_length']} 根，"
+                  f"历史回补 {cache_status['history_length']} 根，"
+                  f"后台待补 {cache_status.get('pending_history', 0)} 组", flush=True)
+            # An initial live 2-bar frame is not enough for MA120. Wait for
+            # genuine 200-bar TqSdk history to arrive and persist on disk.
+            deadline = time.monotonic() + 40
+            while time.monotonic() < deadline:
+                hydrated = get(base, kline_path.replace("count=5", "count=200"))
+                if len(hydrated.get("bars", [])) >= 120:
+                    break
+                time.sleep(0.75)
+            else:
+                raise ValueError("历史回补没有生成至少120根真实K线")
+            folder = Path(env.get("QIHUI_KLINE_CACHE_DIR", "/root/tq_test/cache/klines"))
+            cached_file = folder / (code.replace("@", "_") + "_900.json")
+            if not cached_file.is_file():
+                raise ValueError("历史K线没有写入VPS本地文件")
+            saved = json.loads(cached_file.read_text(encoding="utf-8"))
+            if (saved.get("symbol") != code or saved.get("period") != 900
+                    or len(saved.get("bars", [])) < 120):
+                raise ValueError("VPS历史文件内容不完整")
+            print("VPS历史缓存验证通过，白糖15分钟", len(saved["bars"]), "根", flush=True)
             catalog = get(base, "/v1/catalog")
             if not isinstance(catalog, list) or len(catalog) <= 17 or not any(
                     item.get("exchange") == "CFFEX" for item in catalog):
