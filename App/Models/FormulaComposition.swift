@@ -89,6 +89,8 @@ struct CompositionLayer: Codable, Equatable, Identifiable, Sendable {
 
 struct CompositionLine: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
+    // Optional for old saved compositions; blank keeps the original LINE<n> name.
+    var name: String? = nil
     var source: CompositionSource = .close
     var custom = "(3*C+H+L+O)/6"
     var layers = [CompositionLayer()]
@@ -105,13 +107,22 @@ struct CompositionLine: Codable, Equatable, Identifiable, Sendable {
         return value
     }
 
+    func outputName(index: Int) -> String {
+        let trimmed = (name ?? "").trimmingCharacters(in:.whitespacesAndNewlines)
+        return trimmed.isEmpty ? "LINE\(index)" : trimmed.uppercased()
+    }
+
     func statement(index: Int) throws -> String {
+        let name = outputName(index:index)
+        guard name.count <= 24, FormulaIdentifier.valid(name) else {
+            throw FormulaFailure("曲线名称需为1～24个汉字、英文字母、数字或下划线，不能以数字开头或包含空格")
+        }
         let value = try calculationExpression()
         var styles: [String] = []
         if color != .automatic { styles.append(color.rawValue) }
         if histogram { styles.append("COLORSTICK") }
         else { styles.append("LINETHICK\(width)") }
-        return "LINE\(index):\(value),\(styles.joined(separator: ","));"
+        return "\(name):\(value),\(styles.joined(separator: ","));"
     }
 }
 

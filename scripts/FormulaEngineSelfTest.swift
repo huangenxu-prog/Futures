@@ -182,6 +182,34 @@ struct FormulaEngineSelfTest {
         let previewValues = try FormulaProgram("A:"+expression+";").evaluate(bars)
         let savedValues = try FormulaProgram(statement).evaluate(bars)
         precondition(previewValues[0].values == savedValues[0].values)
+        var namedLine = previewLine
+        namedLine.name = "趋势线"
+        var namedSecond = CompositionLine()
+        namedSecond.name = "fast20"
+        let namedComposition = FormulaComposition(lines:[namedLine,namedSecond])
+        let namedSource = try namedComposition.validatedSource()
+        precondition(namedSource.hasPrefix("趋势线:") && namedSource.contains("FAST20:"))
+        let namedOutputs = try FormulaProgram(namedSource).evaluate(bars)
+        precondition(namedOutputs[0].name == "趋势线" && namedOutputs[1].name == "FAST20")
+        precondition(namedOutputs[0].values == savedValues[0].values)
+        let namedRestored = try JSONDecoder().decode(FormulaComposition.self,from:JSONEncoder().encode(namedComposition))
+        precondition(namedRestored == namedComposition)
+        let oldLine = try JSONDecoder().decode(CompositionLine.self,from:JSONEncoder().encode(previewLine))
+        precondition(oldLine.name == nil && oldLine.outputName(index:2) == "LINE2")
+        for badName in ["C","2趋势","快 线","A;B","AND","快线:","😀"] {
+            var bad = namedLine
+            bad.name = badName
+            do {
+                _ = try FormulaComposition(lines:[bad]).validatedSource()
+                preconditionFailure("accepted invalid curve name \(badName)")
+            } catch is FormulaFailure {}
+        }
+        do {
+            _ = try FormulaComposition(lines:[namedLine,namedLine]).validatedSource()
+            preconditionFailure("accepted duplicate curve names")
+        } catch is FormulaFailure {}
+        let references = try FormulaProgram("快线:EMA(C,2); 慢线:EMA(快线,3);").evaluate(bars)
+        precondition(references.count == 2 && references[1].name == "慢线")
         print("Formula engine: causal state, dynamic references, confirmed segments and previous fixtures passed")
     }
 }

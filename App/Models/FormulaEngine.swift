@@ -28,6 +28,24 @@ struct FormulaDefinition: Codable, Equatable, Identifiable, Sendable {
     var composition: FormulaComposition? = nil
 }
 
+/// Only ASCII letters/underscore and Han ideographs are allowed to start
+/// a variable. ASCII digits are allowed subsequently. No punctuation,
+/// spaces, invisible controls or executable constructs are introduced.
+enum FormulaIdentifier {
+    static func isStart(_ c:Character) -> Bool {
+        if c.isASCII { return c.isLetter || c == "_" }
+        guard c.unicodeScalars.count == 1,let scalar = c.unicodeScalars.first else { return false }
+        let v = scalar.value
+        return (0x3400...0x4DBF).contains(v) || (0x4E00...0x9FFF).contains(v)
+            || (0x20000...0x2FA1F).contains(v) || (0x30000...0x323AF).contains(v)
+    }
+    static func isPart(_ c:Character) -> Bool { isStart(c) || (c.isASCII && c.isNumber) }
+    static func valid(_ name:String) -> Bool {
+        guard let first = name.first,isStart(first),name.allSatisfy(isPart) else { return false }
+        return name.uppercased() != "AND" && name.uppercased() != "OR"
+    }
+}
+
 private enum FormulaToken: Equatable {
     case name(String), number(Double), symbol(String), text(String), end
 }
@@ -487,10 +505,9 @@ private struct FormulaParser {
                 guard i < chars.count else { throw FormulaFailure("文字引号未闭合") }
                 result.append(.text(String(chars[start..<i])))
                 i += 1
-            } else if c.isASCII && (c.isLetter || c == "_") {
+            } else if FormulaIdentifier.isStart(c) {
                 let start = i; i += 1
-                while i < chars.count, chars[i].isASCII &&
-                    (chars[i].isLetter || chars[i].isNumber || chars[i] == "_") { i += 1 }
+                while i < chars.count, FormulaIdentifier.isPart(chars[i]) { i += 1 }
                 let word = String(chars[start..<i]).uppercased()
                 result.append(word == "AND" || word == "OR" ? .symbol(word) : .name(word))
             } else if c.isASCII && (c.isNumber || c == ".") {

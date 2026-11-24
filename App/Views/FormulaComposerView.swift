@@ -53,7 +53,7 @@ struct FormulaComposerView: View {
                     }
                     .disabled(composition.lines.count >= 8)
                 } footer: {
-                    Text("继续计算：使用上一道计算的结果。新增曲线：独立计算另一条曲线。")
+                    Text("点击曲线名称即可改名，支持中文。继续计算使用上一道计算结果；新增曲线则独立计算。")
                 }
                 Section("效果预览") {
                     previewContent
@@ -126,7 +126,7 @@ struct FormulaComposerView: View {
                     HStack(spacing:6) {
                         Circle().fill(previewColor(composition.lines[item.offset].color,index:item.offset))
                             .frame(width:8,height:8)
-                        Text("曲线 \(item.offset+1)").font(.caption)
+                        Text(item.element.name).font(.caption)
                         Spacer()
                         Text(item.element.values.last.flatMap{$0}.map{
                             $0.formatted(.number.precision(.fractionLength(0...4)))
@@ -199,7 +199,14 @@ private struct CompositionLineEditor: View {
             HStack {
                 Circle().fill(previewColor(line.color,index:number-1))
                     .frame(width:9,height:9)
-                Text("曲线 \(number)").font(.headline)
+                TextField("LINE\(number)",text:Binding(
+                    get:{ line.name ?? "" },
+                    set:{ line.name = $0.isEmpty ? nil : $0 }
+                ))
+                .font(.headline)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .accessibilityLabel("曲线 \(number) 名称")
                 Spacer()
                 Button {
                     withAnimation(.easeInOut(duration:0.18)) { showingStyle.toggle() }
@@ -290,7 +297,7 @@ private struct CompositionLineEditor: View {
             .foregroundStyle(MarketPalette.accent)
             .disabled(line.layers.count >= 6)
             Divider()
-            Text((try? line.calculationExpression()) ?? "请检查计算参数")
+            Text((try? line.calculationExpression()).map { "\(line.outputName(index:number)):\($0)" } ?? "请检查计算参数")
                 .font(.system(size:12,design:.monospaced))
                 .foregroundStyle(previewColor(line.color,index:number-1))
                 .textSelection(.enabled)
