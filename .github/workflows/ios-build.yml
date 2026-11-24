@@ -27,6 +27,11 @@ jobs:
           swiftc App/Models/TradingSessionAxis.swift scripts/SessionAxisSelfTest.swift -o /tmp/trading-session-axis-test
           /tmp/trading-session-axis-test
 
+      - name: Verify sandboxed formula engine
+        run: |
+          swiftc -O App/Models/FormulaEngine.swift scripts/FormulaEngineSelfTest.swift -o /tmp/formula-engine
+          /tmp/formula-engine
+
       - name: Verify futures indicator calculations
         run: |
           swiftc -O App/Models/FuturesIndicatorMath.swift scripts/FuturesIndicatorSelfTest.swift -o /tmp/futures-indicators

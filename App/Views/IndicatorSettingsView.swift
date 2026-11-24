@@ -4,6 +4,7 @@ import SwiftUI
 struct IndicatorSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: ChartDisplaySettings
+    @State private var editingFormula: FormulaDefinition?
     let onSave: (ChartDisplaySettings) -> Void
 
     init(settings: ChartDisplaySettings, onSave: @escaping (ChartDisplaySettings) -> Void) {
@@ -106,8 +107,31 @@ struct IndicatorSettingsView: View {
                     Toggle("显示 RSI", isOn: enabledBinding(.rsi))
                     parameter("RSI 周期", value: $draft.rsi)
                 }
+                Section("自定义公式指标") {
+                    ForEach($draft.formulas) { $formula in
+                        HStack {
+                            Toggle(formula.name, isOn: $formula.enabled)
+                            Button { editingFormula = formula } label: {
+                                Image(systemName: "pencil")
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("编辑公式")
+                        }
+                    }
+                    .onDelete { draft.formulas.remove(atOffsets: $0) }
+                    Button {
+                        editingFormula = FormulaDefinition()
+                    } label: {
+                        Label("新建公式指标", systemImage: "plus.circle")
+                    }
+                    .disabled(draft.formulas.count >= 12)
+                }
                 Section {
-                    Button("恢复默认参数") { draft = ChartDisplaySettings() }
+                    Button("恢复默认参数") {
+                        let formulas = draft.formulas
+                        draft = ChartDisplaySettings()
+                        draft.formulas = formulas
+                    }
                         .foregroundStyle(MarketPalette.accent)
                 } footer: {
                     if draft.hasDuplicateAverages {
@@ -138,6 +162,15 @@ struct IndicatorSettingsView: View {
                     }
                     .fontWeight(.semibold)
                     .disabled(!draft.isValid)
+                }
+            }
+        }
+        .sheet(item: $editingFormula) { formula in
+            FormulaEditorView(draft: formula) { updated in
+                if let i = draft.formulas.firstIndex(where: { $0.id == updated.id }) {
+                    draft.formulas[i] = updated
+                } else if draft.formulas.count < 12 {
+                    draft.formulas.append(updated)
                 }
             }
         }

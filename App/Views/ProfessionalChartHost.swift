@@ -250,6 +250,22 @@ struct ProfessionalChartHost: View {
                             }
                         }
                     }
+                    ForEach(displaySettings.formulas) { formula in
+                        Button {
+                            var updated = displaySettings
+                            if let index = updated.formulas.firstIndex(where: { $0.id == formula.id }) {
+                                updated.formulas[index].enabled.toggle()
+                                displaySettings = updated
+                            }
+                        } label: {
+                            Text(formula.name)
+                                .font(.system(size: 12, weight: formula.enabled ? .semibold : .regular))
+                                .foregroundStyle(formula.enabled ? MarketPalette.accent : MarketPalette.muted)
+                                .padding(.horizontal, 6)
+                                .frame(height: 30)
+                        }
+                        .buttonStyle(.plain)
+                    }
                     ForEach(displaySettings.additionalAverages) { average in
                         Button {
                             var updated = displaySettings

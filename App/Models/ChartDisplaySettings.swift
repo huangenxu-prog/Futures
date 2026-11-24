@@ -44,6 +44,7 @@ struct ChartDisplaySettings: Codable, Equatable {
     var emaSlow = 50
     var wma = 20
     var additionalAverages: [AdditionalMovingAverage] = []
+    var formulas: [FormulaDefinition] = []
     var bollPeriod = 20
     var bollMultiplier = 2.0
     var volumeMA = 20
@@ -74,6 +75,7 @@ struct ChartDisplaySettings: Codable, Equatable {
         emaSlow = try c.decodeIfPresent(Int.self, forKey: .emaSlow) ?? emaSlow
         wma = try c.decodeIfPresent(Int.self, forKey: .wma) ?? wma
         additionalAverages = try c.decodeIfPresent([AdditionalMovingAverage].self, forKey: .additionalAverages) ?? []
+        formulas = try c.decodeIfPresent([FormulaDefinition].self, forKey: .formulas) ?? []
         bollPeriod = try c.decodeIfPresent(Int.self, forKey: .bollPeriod) ?? bollPeriod
         bollMultiplier = try c.decodeIfPresent(Double.self, forKey: .bollMultiplier) ?? bollMultiplier
         volumeMA = try c.decodeIfPresent(Int.self, forKey: .volumeMA) ?? volumeMA
@@ -122,6 +124,7 @@ struct ChartDisplaySettings: Codable, Equatable {
         return periods.allSatisfy { (2...500).contains($0) }
             && additionalAverages.allSatisfy { (2...500).contains($0.period) }
             && Set(additionalAverages.map(\.id)).count == additionalAverages.count
+            && formulas.count <= 12 && Set(formulas.map(\.id)).count == formulas.count
             && !hasDuplicateAverages
             && macdFast < macdSlow
             && sarStep.isFinite && sarMaximum.isFinite && sarStep > 0 && sarStep <= sarMaximum && sarMaximum <= 1
@@ -215,6 +218,11 @@ struct ChartDisplaySettings: Codable, Equatable {
         }
         for average in additionalAverages where average.enabled {
             result.append(Self.movingAverage(type: average.type, period: average.period))
+        }
+        for formula in formulas where formula.enabled {
+            if let program = try? FormulaProgram(formula.source) {
+                result.append(QihuiFormulaIndicator(definition:formula,program:program))
+            }
         }
         return result
     }
