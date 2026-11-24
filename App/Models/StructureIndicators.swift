@@ -39,11 +39,21 @@ struct QihuiHuntPreview: ChartIndicator {
     var displayName: String { "猎杀·扫回候选" }
     var placement: IndicatorPlacement { .overlay }
     func calculate(_ input: IndicatorInput) -> IndicatorOutput {
-        let marks = HuntSignals.calculate(structureBars(input)).enumerated().compactMap { i,s -> IndicatorSignal? in
+        let bars = structureBars(input)
+        let candidates = HuntSignals.calculate(bars)
+        let confirmation = HuntConfirmation.calculate(bars,candidates:candidates)
+        let rawMarks = candidates.enumerated().compactMap { i,s -> IndicatorSignal? in
             guard let s else { return nil }
             return IndicatorSignal(time:input.candles[i].time,value:s.extreme,
                 text:s.side > 0 ? "扫低↑" : "扫高↓",color:ChartColor(hex:s.side > 0 ? "FF5B5B" : "23C6C8"))
         }
-        return IndicatorOutput(signals:marks)
+        let confirmedMarks = confirmation.signals.enumerated().compactMap { i,s -> IndicatorSignal? in
+            guard let s else { return nil }
+            return IndicatorSignal(time:input.candles[i].time,
+                value:s.side > 0 ? bars[i].low : bars[i].high,
+                text:s.side > 0 ? "确认多" : "确认空",
+                color:ChartColor(hex:s.side > 0 ? "FF5B5B" : "23C6C8"))
+        }
+        return IndicatorOutput(signals:(rawMarks+confirmedMarks).sorted{$0.time < $1.time})
     }
 }

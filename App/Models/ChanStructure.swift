@@ -148,6 +148,88 @@ enum HuntSignals {
 }
 
 
+
+
+/// Research rule: a sweep is only a candidate. Wait for a later strict
+/// retest fractal that respects the sweep extreme. Report the confirmation
+/// at its right-hand bar, never on the earlier fractal center.
+enum HuntConfirmation {
+    struct Result: Sendable {
+        let signals: [HuntSignals.Signal?]
+        let reverseN: [Int]
+        let candidates: Int
+        let confirmed: Int
+        let invalidated: Int
+        let expired: Int
+    }
+    private struct Pivot {
+        let kind: Int
+        let price: Double
+    }
+    static func calculate(_ bars: [FormulaBar], candidates: [HuntSignals.Signal?], maxWait: Int = 12) -> Result {
+        precondition(bars.count == candidates.count)
+        var pending: (index:Int,signal:HuntSignals.Signal)?
+        var pivots: [Pivot] = []
+        var signals = [HuntSignals.Signal?](repeating:nil,count:bars.count)
+        var reversal = [Int](repeating:0,count:bars.count)
+        var total = 0, confirmed = 0, invalidated = 0, expired = 0
+        for i in bars.indices {
+            var fractal = 0
+            if i >= 2 {
+                let a = bars[i-2], b = bars[i-1], c = bars[i]
+                if b.high > a.high && b.high > c.high && b.low > a.low && b.low > c.low {
+                    fractal = 1
+                } else if b.high < a.high && b.high < c.high && b.low < a.low && b.low < c.low {
+                    fractal = -1
+                }
+                if fractal != 0 {
+                    let p = Pivot(kind:fractal,price:fractal > 0 ? b.high : b.low)
+                    if let last = pivots.last, last.kind == p.kind {
+                        if p.kind > 0 ? p.price > last.price : p.price < last.price {
+                            pivots[pivots.count-1] = p
+                        }
+                    } else {
+                        pivots.append(p)
+                        if pivots.count > 4 { pivots.removeFirst() }
+                    }
+                }
+            }
+            // N proxy: latest two confirmed highs and lows both rising
+            // or both falling. This is intentionally a research definition.
+            if pivots.count == 4 {
+                let a = pivots[0], b = pivots[1], c = pivots[2], d = pivots[3]
+                if c.price > a.price && d.price > b.price { reversal[i] = 1 }
+                else if c.price < a.price && d.price < b.price { reversal[i] = -1 }
+            }
+            if let active = pending {
+                let s = active.signal, b = bars[i]
+                let broken = s.side > 0 ? b.low < s.extreme : b.high > s.extreme
+                if broken || reversal[i] == -s.side {
+                    pending = nil; invalidated += 1
+                } else if i-active.index > maxWait {
+                    pending = nil; expired += 1
+                } else if i-1 > active.index && fractal == -s.side {
+                    let center = bars[i-1]
+                    let respects = s.side > 0 ? center.low >= s.extreme && b.close > s.level
+                                              : center.high <= s.extreme && b.close < s.level
+                    if respects {
+                        signals[i] = s; pending = nil; confirmed += 1
+                    }
+                }
+            }
+            if let candidate = candidates[i] {
+                total += 1
+                // A replacement candidate is a separate sweep, not a
+                // retrospectively altered original signal.
+                if pending != nil { invalidated += 1 }
+                pending = (i,candidate)
+            }
+        }
+        return Result(signals:signals,reverseN:reversal,candidates:total,
+                      confirmed:confirmed,invalidated:invalidated,expired:expired)
+    }
+}
+
 /// A historical research version of the multi-timeframe hunting rules.
 /// Timestamp alignment uses conservative nominal close times; only known
 /// completed higher-period prefixes enter the decision. It is not a
@@ -162,6 +244,11 @@ enum MultiPeriodHunt {
         let covered: Int
         let candidates: Int
         let accepted: Int
+        let confirmed: Int
+        let invalidated: Int
+        let expired: Int
+        let exitsLong: [Bool]
+        let exitsShort: [Bool]
     }
 
     private static func trend(_ pivots:[ChanStructure.Pivot]) -> Int {
@@ -175,38 +262,60 @@ enum MultiPeriodHunt {
         return 0
     }
 
-    private static func departure(_ data:[Timed], count:Int) -> Int {
-        guard count >= 12 else { return 0 }
+    private struct Qualification {
+        var side = 0
+        var zone: ChanStructure.Zone?
+    }
+    private static func departure(_ data:[Timed], count:Int) -> Qualification {
+        guard count >= 12 else { return Qualification() }
         let bars = data.prefix(count).map(\.bar)
         let structure = ChanStructure.analyze(bars)
-        guard let zone = structure.zones.last, let last = bars.last else { return 0 }
+        guard let zone = structure.zones.last, let last = bars.last else { return Qualification() }
         let direction = trend(structure.pivots)
         // Latest overlapping three-stroke region; only a price still
         // outside that region in the structure's direction is eligible.
         // This is a coarse departure proxy, not the final entry-leg rule.
-        if direction == 1 && last.close > zone.high { return 1 }
-        if direction == -1 && last.close < zone.low { return -1 }
-        return 0
+        if direction == 1 && last.close > zone.high { return Qualification(side:1,zone:zone) }
+        if direction == -1 && last.close < zone.low { return Qualification(side:-1,zone:zone) }
+        return Qualification(side:0,zone:zone)
     }
 
-    static func calculate(five:[Timed],thirty:[Timed],hour:[Timed]) -> ResearchResult {
-        let candidates = HuntSignals.calculate(five.map(\.bar))
+    static func calculate(five:[Timed],thirty:[Timed],hour:[Timed],fifteen:[Timed] = [],requireFifteen:Bool = false) -> ResearchResult {
+        let bars = five.map(\.bar)
+        let confirmation = HuntConfirmation.calculate(bars,candidates:HuntSignals.calculate(bars))
+        let candidates = confirmation.signals
         var signals = [HuntSignals.Signal?](repeating:nil,count:five.count)
-        var h = 0, m = 0, hourTrend = 0, qualification = 0
+        var exitsLong = [Bool](repeating:false,count:five.count)
+        var exitsShort = exitsLong
+        var h = 0, m = 0, f = 0, hourTrend = 0, auxiliary = 0
+        var qualification = Qualification()
         var covered = 0, examined = 0, accepted = 0
         var calendar = Calendar(identifier:.gregorian)
         calendar.timeZone = TimeZone(identifier:"Asia/Shanghai")!
         for i in five.indices {
             let close = five[i].time + 300
-            let oldH = h, oldM = m
+            let oldH = h, oldM = m, oldF = f
             while h < hour.count && hour[h].time+3600 <= close { h += 1 }
             while m < thirty.count && thirty[m].time+1800 <= close { m += 1 }
+            while f < fifteen.count && fifteen[f].time+900 <= close { f += 1 }
             if h != oldH {
                 hourTrend = trend(ChanStructure.analyze(hour.prefix(h).map(\.bar)).pivots)
             }
             if m != oldM { qualification = departure(thirty,count:m) }
-            guard h >= 12,m >= 12 else { continue }
+            if f != oldF && requireFifteen {
+                let pivots = ChanStructure.analyze(fifteen.prefix(f).map(\.bar)).fractals
+                // Auxiliary confirmation proxy, not a claim of the exact
+                // discretionary 15m rule: latest confirmed bottom/top.
+                auxiliary = pivots.last.map { $0.kind == .bottom ? 1 : -1 } ?? 0
+            }
+            guard h >= 12,m >= 12, !requireFifteen || f >= 12 else { continue }
             covered += 1
+            let closePrice = five[i].bar.close
+            let reverse = confirmation.reverseN[i]
+            exitsLong[i] = reverse == -1 || hourTrend == -1 || qualification.side != 1
+                || (qualification.zone.map { closePrice <= $0.high } ?? false)
+            exitsShort[i] = reverse == 1 || hourTrend == 1 || qualification.side != -1
+                || (qualification.zone.map { closePrice >= $0.low } ?? false)
             guard let signal = candidates[i] else { continue }
             examined += 1
             // Friday signal and execution dates are filtered by Shanghai
@@ -215,11 +324,15 @@ enum MultiPeriodHunt {
             let signalDay = calendar.component(.weekday,from:Date(timeIntervalSince1970:Double(close)))
             let entryDay = calendar.component(.weekday,from:Date(timeIntervalSince1970:Double(five[i+1].time)))
             guard signalDay != 6,entryDay != 6 else { continue }
-            if signal.side == hourTrend && signal.side == qualification {
+            if signal.side == hourTrend && signal.side == qualification.side
+                && (!requireFifteen || signal.side == auxiliary)
+                && !(signal.side > 0 ? exitsLong[i] : exitsShort[i]) {
                 signals[i] = signal
                 accepted += 1
             }
         }
-        return ResearchResult(signals:signals,covered:covered,candidates:examined,accepted:accepted)
+        return ResearchResult(signals:signals,covered:covered,candidates:examined,accepted:accepted,
+                              confirmed:confirmation.confirmed,invalidated:confirmation.invalidated,
+                              expired:confirmation.expired,exitsLong:exitsLong,exitsShort:exitsShort)
     }
 }

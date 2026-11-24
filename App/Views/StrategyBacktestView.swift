@@ -11,6 +11,7 @@ struct StrategyBacktestView: View {
     @State private var source = "LONG:CROSS(EMA(C,20),EMA(C,50));\nSHORT:CROSS(EMA(C,50),EMA(C,20));"
     @State private var hunt = false
     @State private var multiPeriod = true
+    @State private var requireFifteen = true
     @State private var multiplier = ""
     @State private var tick = ""
     @State private var margin = ""
@@ -39,10 +40,11 @@ struct StrategyBacktestView: View {
                     if hunt {
                         Toggle("60/30/5分钟联合研究",isOn:$multiPeriod)
                         if multiPeriod {
-                            Text("固定5分钟执行，60分钟结构方向过滤、30分钟三笔重叠区离开方向过滤；不引用未收盘大周期K线。周五不新开。仍为研究版，未包含完整进入段、15分钟辅助分型与N形态放弃规则。")
+                            Toggle("15分钟辅助分型过滤",isOn:$requireFifteen)
+                            Text("60分钟方向、30分钟重叠区离开代理、5分钟扫回后二次分型确认。可选15分钟最近确认分型。反向高低点N代理、重入30分钟重叠区或方向失效退出。周五不新开；不引用未收盘大周期K线。研究定义尚非完整心法。")
                                 .font(.caption)
                         } else {
-                            Text("单周期候选：已确认高低点、HH+HL/LH+LL、刺破后收盘收回；不是完整猎杀系统。")
+                            Text("单周期研究：扫回后二次分型确认，期间极值破坏或反向N代理取消。不是完整猎杀系统。")
                                 .font(.caption)
                         }
                     } else {
@@ -157,6 +159,7 @@ struct StrategyBacktestView: View {
         let requested = historyCount
         guard p.valid else { error = "回测参数无效"; return }
         let code = source, useHunt = hunt, useMulti = hunt && multiPeriod
+        let useFifteen = useMulti && requireFifteen
         let executionPeriod = useMulti ? 300 : period
         running = true; error = nil; result = nil
         task = Task {
@@ -171,6 +174,7 @@ struct StrategyBacktestView: View {
                     volume:Double($0.volume),openInterest:$0.openInterest,closeInterest:$0.closeInterest) }
                 var thirty: [MultiPeriodHunt.Timed] = []
                 var hour: [MultiPeriodHunt.Timed] = []
+                var fifteen: [MultiPeriodHunt.Timed] = []
                 func timed(_ items:[MarketBar]) -> [MultiPeriodHunt.Timed] {
                     items.dropLast().map { b in
                         MultiPeriodHunt.Timed(time:b.time,bar:FormulaBar(open:b.open,high:b.high,low:b.low,close:b.close,
@@ -180,25 +184,41 @@ struct StrategyBacktestView: View {
                 if useMulti {
                     thirty = timed(try await MarketDataService.backtestHistory(symbol:symbol,period:1800,count:max(1200,requested/6+600)))
                     hour = timed(try await MarketDataService.backtestHistory(symbol:symbol,period:3600,count:max(1200,requested/12+600)))
-                    guard thirty.count >= 12,hour.count >= 12 else { throw FormulaFailure("多周期历史不足") }
+                    if useFifteen {
+                        fifteen = timed(try await MarketDataService.backtestHistory(symbol:symbol,period:900,count:max(1200,requested/3+600)))
+                    }
+                    guard thirty.count >= 12,hour.count >= 12,!useFifteen || fifteen.count >= 12 else { throw FormulaFailure("多周期历史不足") }
                 }
-                let thirtyBars = thirty, hourBars = hour
+                let thirtyBars = thirty, hourBars = hour, fifteenBars = fifteen
                 let five = zip(closed,bars).map { b,v in MultiPeriodHunt.Timed(time:b.time,bar:v) }
                 let calculation = Task.detached(priority:.userInitiated) {
                     let signals: [BacktestSignal]
                     var researchNote = ""
                     if useHunt {
                         let candidates: [HuntSignals.Signal?]
+                        let exitLong: [Bool], exitShort: [Bool]
                         if useMulti {
-                            let filtered = MultiPeriodHunt.calculate(five:five,thirty:thirtyBars,hour:hourBars)
-                            guard filtered.covered > 0 else { throw FormulaFailure("三周期历史没有足够的共同覆盖") }
+                            let filtered = MultiPeriodHunt.calculate(five:five,thirty:thirtyBars,hour:hourBars,
+                                fifteen:fifteenBars,requireFifteen:useFifteen)
+                            guard filtered.covered > 0 else { throw FormulaFailure("多周期历史没有足够的共同覆盖") }
                             candidates = filtered.signals
-                            researchNote = " · 多周期覆盖\(filtered.covered)根，扫回候选\(filtered.candidates)个，方向过滤通过\(filtered.accepted)个"
-                        } else { candidates = HuntSignals.calculate(bars) }
-                        signals = candidates.map { s in
-                            guard let s else { return BacktestSignal() }
-                            let stop = s.extreme-Double(s.side)*p.tick
-                            return BacktestSignal(long:s.side > 0,short:s.side < 0,stopPrice:stop)
+                            exitLong = filtered.exitsLong; exitShort = filtered.exitsShort
+                            researchNote = " · 多周期覆盖\(filtered.covered)根，二次确认\(filtered.confirmed)个，失效\(filtered.invalidated)个，超时\(filtered.expired)个，联合过滤通过\(filtered.accepted)个"
+                        } else {
+                            let confirmed = HuntConfirmation.calculate(bars,candidates:HuntSignals.calculate(bars))
+                            candidates = confirmed.signals
+                            exitLong = confirmed.reverseN.map { $0 == -1 }
+                            exitShort = confirmed.reverseN.map { $0 == 1 }
+                            researchNote = " · 扫回\(confirmed.candidates)个，二次确认\(confirmed.confirmed)个，失效\(confirmed.invalidated)个，超时\(confirmed.expired)个"
+                        }
+                        signals = candidates.enumerated().map { i,s in
+                            var signal = BacktestSignal(exitLong:exitLong[i],exitShort:exitShort[i])
+                            if let s {
+                                signal.long = s.side > 0 && !exitLong[i]
+                                signal.short = s.side < 0 && !exitShort[i]
+                                signal.stopPrice = s.extreme-Double(s.side)*p.tick
+                            }
+                            return signal
                         }
                     } else {
                         signals = try FuturesBacktest.formulaSignals(code,bars:bars)

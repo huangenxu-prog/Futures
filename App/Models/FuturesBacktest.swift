@@ -23,6 +23,8 @@ struct BacktestSignal: Sendable {
     var short = false
     var exit = false
     var stopPrice: Double? = nil
+    var exitLong = false
+    var exitShort = false
 }
 struct BacktestTrade: Sendable, Identifiable {
     let id: Int
@@ -116,7 +118,9 @@ enum FuturesBacktest {
                 if let pos = position {
                     let gapStop = pos.side > 0 ? bar.open <= pos.stop : bar.open >= pos.stop
                     if gapStop { close(pos,bar.open,i,pos.breakEvenArmed ? "跳空保本止损" : "跳空止损"); exitedAtOpen = true }
-                    else if signal.exit || (pos.side > 0 ? signal.short : signal.long) {
+                    else if pos.side > 0 ? signal.exitLong : signal.exitShort {
+                        close(pos,bar.open,i,"结构失效"); exitedAtOpen = true
+                    } else if signal.exit || (pos.side > 0 ? signal.short : signal.long) {
                         close(pos,bar.open,i,"信号平仓"); exitedAtOpen = true
                     }
                 }

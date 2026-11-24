@@ -52,6 +52,21 @@ struct StrategySelfTest {
         }
         let filtered = MultiPeriodHunt.calculate(five:timed,thirty:future,hour:future)
         precondition(filtered.covered == 0 && filtered.signals.allSatisfy{$0 == nil})
-        print("Backtest next-open, fees, stop-first, Chan confirmation, causal hunt and timeframe alignment checks passed")
+        let retest = [bar(100,102,95,101),bar(101,105,100,104),bar(103,103,97,101),bar(102,106,101,105),bar(105,107,102,106)]
+        let seed = HuntSignals.Signal(side:1,level:100,extreme:95)
+        let raw: [HuntSignals.Signal?] = [seed,nil,nil,nil,nil]
+        let confirmed = HuntConfirmation.calculate(retest,candidates:raw)
+        precondition(confirmed.signals[0] == nil && confirmed.signals[2] == nil && confirmed.signals[3] == seed)
+        for i in 1...retest.count {
+            let prefix = HuntConfirmation.calculate(Array(retest.prefix(i)),candidates:Array(raw.prefix(i)))
+            precondition(prefix.signals == Array(confirmed.signals.prefix(i)))
+        }
+        var broken = retest
+        broken[2] = bar(103,104,94,101)
+        let invalid = HuntConfirmation.calculate(broken,candidates:raw)
+        precondition(invalid.invalidated == 1 && invalid.confirmed == 0)
+        let directional = try FuturesBacktest.run(bars:bars,signals:[.init(long:true),.init(exitLong:true),.init(),.init()],p:protect)
+        precondition(directional.trades.first?.reason == "结构失效")
+        print("Backtest next-open, net risk, causal retest, invalidation and timeframe alignment checks passed")
     }
 }
