@@ -23,7 +23,7 @@ struct PaperContract: Codable, Equatable, Sendable {
     }
     func actionTitle(direction:PaperDirection,offset:PaperOffset)->String {
         guard let optionTitle else {return PaperOrder.actionTitle(direction:direction,offset:offset)}
-        return direction.title+optionTitle+"（"+offset.title+"）"
+        return direction.title+optionTitle
     }
     var displayName:String {
         guard let option else {return name}

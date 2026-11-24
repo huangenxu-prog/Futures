@@ -350,9 +350,9 @@ struct TradingCenterView:View {
                 Text("最新 \(price.map{$0.formatted()} ?? "--")")
             }.font(.caption).monospacedDigit().lineLimit(1).minimumScaleFactor(0.75)
             HStack {
-                Text("可平 \(ledger.closable(symbol:pos.contract.symbol,side:pos.side))手").font(.caption).foregroundStyle(MarketPalette.muted)
+                Text("\(pos.contract.isOption ? (pos.side == .long ? "可卖出" : "可买回") : "可平") \(ledger.closable(symbol:pos.contract.symbol,side:pos.side))手").font(.caption).foregroundStyle(MarketPalette.muted)
                 Spacer()
-                Text(pos.contract.isOption ? (pos.side == .long ? "卖出平仓" : "买入平仓") : (pos.side == .long ? "平多" : "平空")).font(.caption.weight(.semibold)).foregroundStyle(MarketPalette.accent)
+                Text(pos.contract.isOption ? (pos.side == .long ? "卖出" : "买回") : (pos.side == .long ? "平多" : "平空")).font(.caption.weight(.semibold)).foregroundStyle(MarketPalette.accent)
                 Image(systemName:"chevron.right").font(.caption2).foregroundStyle(MarketPalette.muted)
             }
         }
@@ -377,7 +377,7 @@ struct TradingCenterView:View {
             ForEach(displayedOrders){order in
                 VStack(alignment:.leading,spacing:6) {
                     HStack {Text(order.contract.symbol).fontWeight(.semibold);Spacer();Text(order.status.title).font(.caption).foregroundStyle(.secondary)}
-                    Text("\(order.actionTitle) · \(order.quantity)手 · 限价 \(order.price.formatted())").font(.subheadline)
+                    Text("\(order.actionTitle) · \(order.quantity)手 · 限价 \(order.price.formatted())"+(order.contract.isOption ? (order.offset == .open ? " · 新增持仓" : " · 减少持仓") : "")).font(.subheadline)
                     Text(order.created.formatted(date:.abbreviated,time:.standard)).font(.caption2).foregroundStyle(.secondary)
                     if order.status == .pending {
                         HStack {
@@ -479,12 +479,12 @@ private struct PaperOrderTicket:View {
                 HStack {
                     Text("可用 \(ledger.available.formatted(.number.precision(.fractionLength(0))))")
                     Spacer()
-                    Text(contract.isOption ? "可卖出 \(longAvailable)手" : "可平 多 \(longAvailable) / 空 \(shortAvailable)")
+                    Text(contract.isOption ? (closeOnly ? "可操作 \(closeAvailable)手" : "持有 \(ledger.positions.filter{$0.contract.symbol == contract.symbol && $0.side == .long}.reduce(0){$0+$1.quantity})手") : "可平 多 \(longAvailable) / 空 \(shortAvailable)")
                 }.font(.caption).monospacedDigit().foregroundStyle(MarketPalette.muted)
                 if contract.isOption {optionCostRow}
                 actionRow
                 if contract.isOption && !closeOnly {
-                    Text("卖出仅平已有买方持仓；暂不支持卖方开仓").font(.caption2).foregroundStyle(MarketPalette.muted)
+                    Text("卖方交易暂未启用；已有持仓请从持仓页操作").font(.caption2).foregroundStyle(MarketPalette.muted)
                 }
                 if !contract.hasMetadata {
                     Text(contract.isOption ? "期权交易参数未获取，请升级行情网关" : "合约参数未就绪，禁止委托").foregroundStyle(.red).font(.caption)
@@ -510,7 +510,7 @@ private struct PaperOrderTicket:View {
             }
             Button("取消",role:.cancel){pending = nil}
         } message:{intent in
-            Text("\(contract.symbol) · \(intent.title) · \(intent.quantity)手 @ \(intent.price.formatted())")
+            Text("\(contract.symbol) · \(intent.title) · \(intent.quantity)手 @ \(intent.price.formatted())"+(contract.isOption ? (intent.offset == .open ? "\n新增买方持仓，支付权利金" : "\n减少已有持仓") : ""))
         }
         .tint(MarketPalette.accent)
     }
@@ -554,7 +554,7 @@ private struct PaperOrderTicket:View {
         HStack(spacing:10) {
             Text("手数").font(.subheadline.weight(.medium))
             if closeOnly {
-                Button("全平") {quantity = String(min(999,closeAvailable));hideKeyboard()}
+                Button(contract.isOption ? (preferredDirection == .sell ? "全部卖出" : "全部买回") : "全平") {quantity = String(min(999,closeAvailable));hideKeyboard()}
                     .font(.caption.weight(.semibold)).disabled(closeAvailable == 0)
             }
             Spacer()
@@ -568,7 +568,7 @@ private struct PaperOrderTicket:View {
     private var optionCostRow:some View {
         let premium = numericPrice.flatMap{p in numericQuantity.flatMap{q in contract.multiplier.map{p*Double(q)*$0}}}
         return HStack {
-            Text(closeOnly ? "预计权利金收入" : "权利金")
+            Text(closeOnly && preferredDirection == .sell ? "预计权利金收入" : "权利金")
             Spacer()
             Text(premium.flatMap{$0.isFinite && $0 >= 0 ? $0.formatted(.number.precision(.fractionLength(2))) : nil} ?? "--")
                 .fontWeight(.semibold).monospacedDigit()
@@ -578,10 +578,10 @@ private struct PaperOrderTicket:View {
         HStack(spacing:7) {
             if let title = contract.optionTitle {
                 if !closeOnly {
-                    optionActionButton(.buy,.open,"买入"+title,"开仓",MarketPalette.up)
-                    optionActionButton(.sell,.close,"卖出"+title,"平仓",MarketPalette.down)
+                    optionActionButton(.buy,.open,"买入"+title,MarketPalette.up)
+                    optionActionButton(.sell,.open,"卖出"+title,MarketPalette.down)
                 } else {
-                    optionActionButton(preferredDirection,.close,preferredDirection.title+title,"平仓",MarketPalette.accent)
+                    optionActionButton(preferredDirection,.close,preferredDirection.title+title,MarketPalette.accent)
                 }
             } else if closeOnly {
                 actionButton(preferredDirection,.close,preferredDirection == .sell ? "平多" : "平空",MarketPalette.accent)
@@ -593,13 +593,11 @@ private struct PaperOrderTicket:View {
             }
         }
     }
-    private func optionActionButton(_ direction:PaperDirection,_ offset:PaperOffset,_ title:String,_ subtitle:String,_ tint:Color)->some View {
+    private func optionActionButton(_ direction:PaperDirection,_ offset:PaperOffset,_ title:String,_ tint:Color)->some View {
         let eligible = contract.hasMetadata && ((offset == .open && direction == .buy) || (offset == .close && (direction == .sell ? longAvailable : shortAvailable)>0))
         return Button {prepare(direction,offset)} label:{
-            VStack(spacing:3) {
-                Text(title).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.75)
-                Text(subtitle).font(.caption2).opacity(0.9)
-            }.foregroundStyle(.white)
+            Text(title).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.75)
+                .foregroundStyle(.white)
                 .frame(maxWidth:.infinity).frame(height:50)
                 .background(tint,in:RoundedRectangle(cornerRadius:7))
         }.buttonStyle(.plain).disabled(!eligible).opacity(eligible ? 1 : 0.35)
