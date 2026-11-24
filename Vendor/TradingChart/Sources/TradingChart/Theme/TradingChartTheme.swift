@@ -27,6 +27,10 @@ public struct TradingChartTheme: Sendable {
     public var bullish: Color = .green
     /// Colour of falling candles, sell markers and negative histogram bars.
     public var bearish: Color = .red
+    /// Optional candle-only overrides; indicators and markers retain the theme palette.
+    public var candleBullish: Color?
+    public var candleBearish: Color?
+    public var showsNeutralDoji: Bool = false
     /// Colour of the line and area series.
     public var line: Color = .blue
     /// Opacity of the area gradient at the line.

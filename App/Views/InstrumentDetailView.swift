@@ -9,6 +9,7 @@ struct InstrumentDetailView: View {
     @State private var tradeContract: PaperContract?
     @State private var showContracts = false
     @State private var showChartIndicatorSettings = false
+    @State private var showCandleAppearance = false
     let instrument: FuturesInstrument
     @State private var selectedContract: MarketDataService.ContractQuote?
 
@@ -175,6 +176,7 @@ struct InstrumentDetailView: View {
                 showContracts = false
             }
         }
+        .sheet(isPresented: $showCandleAppearance) { CandleAppearanceView() }
         .sheet(isPresented: $showPeriodOrder) {
             PeriodOrderView(order: periods, label: periodLabel) { updated in
                 storedPeriodOrder = updated.joined(separator: ",")
@@ -457,6 +459,7 @@ struct InstrumentDetailView: View {
 
     private var actions: some View {
         Menu {
+            Button("K线样式") { showCandleAppearance = true }
             Button("指标参数设置") { showChartIndicatorSettings = true }
             Button("周期排序") { showPeriodOrder = true }
         } label: {

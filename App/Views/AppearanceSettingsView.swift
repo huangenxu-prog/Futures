@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// User-selected appearance. Default is dark, with an explicit system option.
 enum AppAppearanceMode: String, CaseIterable, Identifiable {
@@ -76,5 +77,101 @@ struct AppearanceSettingsView: View {
             }
         }
         .tint(MarketPalette.accent)
+    }
+}
+
+/// Independent display preferences: no changes to indicator parameters,
+/// trading colors, quotes, history, or real-time chart data.
+enum CandleAppearance {
+    static let hollowKey = "qihui.chart.rising-hollow.v1"
+    static let upKey = "qihui.chart.candle-up-rgb.v1"
+    static let downKey = "qihui.chart.candle-down-rgb.v1"
+    static let dojiKey = "qihui.chart.candle-doji-rgb.v1"
+    static let automatic = -1
+
+    static var defaultDoji: Color {
+        Color(uiColor: UIColor { traits in traits.userInterfaceStyle == .dark ? .white : .black })
+    }
+    static func color(_ rgb: Int, fallback: Color) -> Color {
+        guard (0...0xFFFFFF).contains(rgb) else { return fallback }
+        return Color(red: Double((rgb >> 16) & 255)/255,
+                     green: Double((rgb >> 8) & 255)/255,
+                     blue: Double(rgb & 255)/255)
+    }
+    static func rgb(_ color: Color) -> Int? {
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        guard UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha),
+              [red,green,blue].allSatisfy({$0.isFinite}) else { return nil }
+        func byte(_ v: CGFloat) -> Int { Int((min(1,max(0,v))*255).rounded()) }
+        return (byte(red)<<16) | (byte(green)<<8) | byte(blue)
+    }
+}
+
+struct CandleAppearanceView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage(CandleAppearance.hollowKey) private var hollow = true
+    @AppStorage(CandleAppearance.upKey) private var up = CandleAppearance.automatic
+    @AppStorage(CandleAppearance.downKey) private var down = CandleAppearance.automatic
+    @AppStorage(CandleAppearance.dojiKey) private var doji = CandleAppearance.automatic
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("K线样式") {
+                    Picker("上涨实体", selection: $hollow) {
+                        Text("空心").tag(true)
+                        Text("实心").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    ColorPicker("上涨颜色", selection: colorBinding($up, fallback: MarketPalette.up), supportsOpacity: false)
+                    ColorPicker("下跌颜色", selection: colorBinding($down, fallback: MarketPalette.down), supportsOpacity: false)
+                    ColorPicker("十字星颜色", selection: colorBinding($doji, fallback: CandleAppearance.defaultDoji), supportsOpacity: false)
+                }
+                Section {
+                    HStack(spacing: 22) {
+                        sample("上涨", color: CandleAppearance.color(up, fallback: MarketPalette.up), outlined: hollow)
+                        sample("下跌", color: CandleAppearance.color(down, fallback: MarketPalette.down), outlined: false)
+                        sample("十字星", color: CandleAppearance.color(doji, fallback: CandleAppearance.defaultDoji), outlined: false, isDoji: true)
+                    }
+                    .frame(maxWidth: .infinity)
+                    Button("恢复默认") {
+                        hollow = true
+                        up = CandleAppearance.automatic
+                        down = CandleAppearance.automatic
+                        doji = CandleAppearance.automatic
+                    }
+                } footer: {
+                    Text("只改变K线外观，自动保存。可随时切回原版实心样式。")
+                }
+            }
+            .navigationTitle("K线样式")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
+            }
+        }
+        .tint(MarketPalette.accent)
+    }
+
+    private func colorBinding(_ value: Binding<Int>, fallback: Color) -> Binding<Color> {
+        Binding(get: { CandleAppearance.color(value.wrappedValue, fallback: fallback) },
+                set: { if let rgb = CandleAppearance.rgb($0) { value.wrappedValue = rgb } })
+    }
+
+    private func sample(_ title: String, color: Color, outlined: Bool, isDoji: Bool = false) -> some View {
+        VStack(spacing: 6) {
+            VStack(spacing: 0) {
+                Rectangle().fill(color).frame(width: 1.5,height: 9)
+                if isDoji {
+                    Rectangle().fill(color).frame(width: 15,height: 1.5)
+                } else if outlined {
+                    Rectangle().strokeBorder(color,lineWidth: 1.5).frame(width: 12,height: 22)
+                } else {
+                    Rectangle().fill(color).frame(width: 12,height: 22)
+                }
+                Rectangle().fill(color).frame(width: 1.5,height: 9)
+            }.frame(height: 42)
+            Text(title).font(.caption).foregroundStyle(MarketPalette.muted)
+        }.frame(maxWidth: .infinity)
     }
 }

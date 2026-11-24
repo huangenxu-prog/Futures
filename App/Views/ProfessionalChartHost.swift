@@ -18,6 +18,10 @@ struct ProfessionalChartHost: View {
     var isReplay = false
     var onReplayApplied: ((MarketBar, Double) -> Void)? = nil
     @State private var feedOwner = UUID()
+    @AppStorage(CandleAppearance.hollowKey) private var hollowRising = true
+    @AppStorage(CandleAppearance.upKey) private var candleUp = CandleAppearance.automatic
+    @AppStorage(CandleAppearance.downKey) private var candleDown = CandleAppearance.automatic
+    @AppStorage(CandleAppearance.dojiKey) private var candleDoji = CandleAppearance.automatic
 
 
     @State private var model: TradingChartModel = {
@@ -150,20 +154,17 @@ struct ProfessionalChartHost: View {
         value.legendLabel = MarketPalette.muted
         value.candleCornerRadius = 0
         value.candleBodyWidthFactor = 0.75
-        // Production uses the original TradingChart candle renderer.
-        value.hollowRisingCandles = false
+        // Both styles remain in the native Swift Charts mark pipeline.
+        value.hollowRisingCandles = hollowRising
         #if DEBUG
-        // Keep the isolated renderer A/B regression test available.
-        if isReplay && !ProcessInfo.processInfo.arguments.contains("-qihui-native-candles") {
-            value.hollowRisingCandles = true
+        if isReplay {
+            value.hollowRisingCandles = !ProcessInfo.processInfo.arguments.contains("-qihui-native-candles")
         }
         #endif
-        value.hollowCandleFill = MarketPalette.surface
-        // A white doji on the graphite theme; dark ink in optional light mode
-        // keeps the same neutral symbol visible on both backgrounds.
-        value.dojiCandleColor = Color(uiColor: UIColor { traits in
-            traits.userInterfaceStyle == .dark ? .white : .black
-        })
+        value.candleBullish = CandleAppearance.color(candleUp, fallback: MarketPalette.up)
+        value.candleBearish = CandleAppearance.color(candleDown, fallback: MarketPalette.down)
+        value.showsNeutralDoji = true
+        value.dojiCandleColor = CandleAppearance.color(candleDoji, fallback: CandleAppearance.defaultDoji)
         return value
     }
 

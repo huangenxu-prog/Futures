@@ -25,6 +25,7 @@ struct MainChartPane: View {
         /// The style actually drawn: candles fall back to a line when the series has no OHLC data.
         var drawnStyle: SeriesStyle
         var bodyWidth: CGFloat
+        var bodyHalfDuration: TimeInterval
         var overlayBands: [IndicatorBandItem]
         var overlayLines: [IndicatorLineItem]
         var series: ChartSeries
@@ -53,19 +54,26 @@ struct MainChartPane: View {
         let overlays = overlayOutputs(input)
         let renderRange = model.renderWindow
         let drawnStyle: SeriesStyle = model.style == .candles && !series.hasCandles ? .line : model.style
+        let bodyWidth = ViewportMath.candleBodyWidth(
+            plotWidth: model.plotWidth,
+            visibleBars: model.visibleBars,
+            factor: theme.candleBodyWidthFactor,
+            min: theme.minCandleBodyWidth,
+            max: theme.maxCandleBodyWidth
+        )
+        // Native chart coordinates: use the same visible X span that Swift
+        // Charts uses, rather than a separate overlay or a second renderer.
+        let halfDuration = model.plotWidth > 0
+            ? Double(bodyWidth / model.plotWidth) * model.chartVisibleDuration / 2
+            : 0
         return Layout(
             xDomain: xDomain,
             yDomain: model.mainYBase,
             bodySpanDomain: 0...bodySpan,
             indices: series.indexRange(in: renderRange),
             drawnStyle: drawnStyle,
-            bodyWidth: ViewportMath.candleBodyWidth(
-                plotWidth: model.plotWidth,
-                visibleBars: model.visibleBars,
-                factor: theme.candleBodyWidthFactor,
-                min: theme.minCandleBodyWidth,
-                max: theme.maxCandleBodyWidth
-            ),
+            bodyWidth: bodyWidth,
+            bodyHalfDuration: halfDuration.isFinite ? halfDuration : 0,
             overlayBands: overlays.flatMap { bandItems(of: $0.output, base: $0.base, range: renderRange) },
             overlayLines: overlays.flatMap { lineItems(of: $0.output, base: $0.base, range: renderRange) },
             series: series
@@ -126,7 +134,6 @@ struct MainChartPane: View {
                 .modifier(YTransform(model: model, state: nil, plotHeight: plot.height))
                 .frame(width: plot.width, height: plot.height, alignment: .top)
                 .clipped()
-            hollowCandleLayer(layout: layout, plot: plot)
             let outputs = overlayOutputs(model.renderInput).map { $0.output }
             if outputs.contains(where: { !$0.sticks.isEmpty || !$0.signals.isEmpty || !$0.segmentSeries.isEmpty }) {
                 IndicatorSignalLayer(outputs: outputs, visible: model.visibleTimeRange,
@@ -154,67 +161,6 @@ struct MainChartPane: View {
         }
     }
 
-
-    /// Locally customized candlesticks: hollow rising bodies, solid falling
-    /// bodies, and white doji. Use the same scroll window and autoscaled
-    /// Y-domain as the chart axes, so history paging and zoom remain aligned.
-    @ViewBuilder
-    private func hollowCandleLayer(layout: Layout, plot: CGRect) -> some View {
-        if theme.hollowRisingCandles,
-           layout.drawnStyle == .candles,
-           let candles = layout.series.candles {
-            let visible = model.visibleTimeRange
-            let priceRange = model.mainYTarget
-            let width = layout.bodyWidth
-            let theme = theme
-            Canvas { context, _ in
-                let span = visible.upperBound.timeIntervalSince(visible.lowerBound)
-                guard span > 0, plot.width > 0, plot.height > 0 else { return }
-                let yMapping = YMapping(domain: priceRange, height: plot.height)
-                for candle in candles[layout.indices] {
-                    let seconds = candle.time.timeIntervalSince(visible.lowerBound)
-                    let x = CGFloat(seconds / span) * plot.width
-                    guard x >= -width, x <= plot.width + width else { continue }
-                    let yHigh = yMapping.y(of: candle.high)
-                    let yLow = yMapping.y(of: candle.low)
-                    let yOpen = yMapping.y(of: candle.open)
-                    let yClose = yMapping.y(of: candle.close)
-                    guard [x, yHigh, yLow, yOpen, yClose].allSatisfy(\.isFinite) else { continue }
-
-                    let doji = candle.open == candle.close
-                    let rising = candle.close > candle.open
-                    let color = doji ? theme.dojiCandleColor
-                        : (rising ? theme.bullish : theme.bearish)
-
-                    var wick = Path()
-                    wick.move(to: CGPoint(x: x, y: yHigh))
-                    wick.addLine(to: CGPoint(x: x, y: yLow))
-                    context.stroke(wick, with: .color(color), lineWidth: theme.wickWidth)
-
-                    if doji {
-                        var crossbar = Path()
-                        crossbar.move(to: CGPoint(x: x - width / 2, y: yOpen))
-                        crossbar.addLine(to: CGPoint(x: x + width / 2, y: yOpen))
-                        context.stroke(crossbar, with: .color(color), lineWidth: max(1.3, theme.wickWidth))
-                    } else {
-                        let yTop = min(yOpen, yClose)
-                        let rect = CGRect(x: x - width / 2, y: yTop,
-                                          width: width, height: max(1, abs(yClose - yOpen)))
-                        let body = Path(rect)
-                        if rising {
-                            context.fill(body, with: .color(theme.hollowCandleFill))
-                            context.stroke(body, with: .color(color), lineWidth: max(1, theme.wickWidth))
-                        } else {
-                            context.fill(body, with: .color(color))
-                        }
-                    }
-                }
-            }
-            .frame(width: plot.width, height: plot.height)
-            .clipped()
-            .allowsHitTesting(false)
-        }
-    }
 
     private func chart(_ layout: Layout) -> some View {
         let _ = model.renderCounters.chartBuilds += 1
@@ -260,27 +206,8 @@ struct MainChartPane: View {
     private func seriesMarks(_ layout: Layout) -> some ChartContent {
         let series = layout.series
         if layout.drawnStyle == .candles, let candles = series.candles {
-            if !theme.hollowRisingCandles {
-                ForEach(candles[layout.indices]) { candle in
-                let color = candle.isBullish ? theme.bullish : theme.bearish
-                let body = ViewportMath.candleBodyRange(candle, yDomain: layout.bodySpanDomain)
-                RuleMark(
-                    x: .value("Time", candle.time),
-                    yStart: .value("Low", candle.low),
-                    yEnd: .value("High", candle.high)
-                )
-                .lineStyle(StrokeStyle(lineWidth: theme.wickWidth))
-                .foregroundStyle(color)
-
-                RectangleMark(
-                    x: .value("Time", candle.time),
-                    yStart: .value("Open", body.lowerBound),
-                    yEnd: .value("Close", body.upperBound),
-                    width: .fixed(layout.bodyWidth)
-                )
-                .foregroundStyle(color)
-                .cornerRadius(theme.candleCornerRadius)
-                }
+            ForEach(candles[layout.indices]) { candle in
+                candleMarks(candle, layout: layout)
             }
         } else {
             ForEach(series.points[layout.indices]) { point in
@@ -311,6 +238,49 @@ struct MainChartPane: View {
                     )
                     .interpolationMethod(theme.lineInterpolation.chartsMethod)
                 }
+            }
+        }
+    }
+
+    /// Both body styles use the original Swift Charts mark pipeline. Hollow
+    /// bodies use split wicks and four rules, so the wick does not fill the
+    /// transparent interior. No extra Canvas or independent viewport.
+    @ChartContentBuilder
+    private func candleMarks(_ candle: Candle, layout: Layout) -> some ChartContent {
+        let doji = candle.open == candle.close
+        let rising = candle.close > candle.open
+        let up = theme.candleBullish ?? theme.bullish
+        let down = theme.candleBearish ?? theme.bearish
+        let color = doji && theme.showsNeutralDoji ? theme.dojiCandleColor : (candle.isBullish ? up : down)
+        let body = ViewportMath.candleBodyRange(candle, yDomain: layout.bodySpanDomain)
+        let half = layout.bodyHalfDuration
+        let left = candle.time.addingTimeInterval(-half)
+        let right = candle.time.addingTimeInterval(half)
+        let stroke = StrokeStyle(lineWidth: max(1, theme.wickWidth))
+        if rising && theme.hollowRisingCandles && half > 0 {
+            RuleMark(x: .value("Time", candle.time), yStart: .value("Low", candle.low), yEnd: .value("Open", body.lowerBound))
+                .lineStyle(stroke).foregroundStyle(color)
+            RuleMark(x: .value("Time", candle.time), yStart: .value("Close", body.upperBound), yEnd: .value("High", candle.high))
+                .lineStyle(stroke).foregroundStyle(color)
+            RuleMark(x: .value("Left", left), yStart: .value("Open", body.lowerBound), yEnd: .value("Close", body.upperBound))
+                .lineStyle(stroke).foregroundStyle(color)
+            RuleMark(x: .value("Right", right), yStart: .value("Open", body.lowerBound), yEnd: .value("Close", body.upperBound))
+                .lineStyle(stroke).foregroundStyle(color)
+            RuleMark(xStart: .value("Left", left), xEnd: .value("Right", right), y: .value("Open", body.lowerBound))
+                .lineStyle(stroke).foregroundStyle(color)
+            RuleMark(xStart: .value("Left", left), xEnd: .value("Right", right), y: .value("Close", body.upperBound))
+                .lineStyle(stroke).foregroundStyle(color)
+        } else {
+            RuleMark(x: .value("Time", candle.time), yStart: .value("Low", candle.low), yEnd: .value("High", candle.high))
+                .lineStyle(StrokeStyle(lineWidth: theme.wickWidth)).foregroundStyle(color)
+            if doji && theme.showsNeutralDoji && half > 0 {
+                RuleMark(xStart: .value("Left", left), xEnd: .value("Right", right), y: .value("Open", candle.open))
+                    .lineStyle(stroke).foregroundStyle(color)
+            } else {
+                RectangleMark(x: .value("Time", candle.time),
+                              yStart: .value("Open", body.lowerBound), yEnd: .value("Close", body.upperBound),
+                              width: .fixed(layout.bodyWidth))
+                    .foregroundStyle(color).cornerRadius(theme.candleCornerRadius)
             }
         }
     }
