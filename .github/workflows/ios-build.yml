@@ -71,6 +71,20 @@ jobs:
             -project Futures.xcodeproj \
             -scheme Futures \
             -sdk iphonesimulator \
+            -derivedDataPath "$RUNNER_TEMP/QihuiReplayBuild" \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
             build
+
+      - name: Compare native and hollow live candle renderers
+        timeout-minutes: 8
+        run: bash scripts/compare-chart-renderers.sh "$RUNNER_TEMP/QihuiReplayBuild/Build/Products/Debug-iphonesimulator/Futures.app" "$RUNNER_TEMP/chart-replay"
+
+      - name: Upload live chart replay evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chart-renderer-replay
+          path: ${{ runner.temp }}/chart-replay
+          if-no-files-found: warn
+          retention-days: 7
