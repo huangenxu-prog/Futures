@@ -67,7 +67,7 @@ enum MarketDataService {
         let configured = Bundle.main.object(forInfoDictionaryKey: "QIHUI_API_BASE_URL") as? String
         let raw = (configured?.hasPrefix("https://") == true)
             ? configured!
-            : "https://fill-investments-ordinance-mumbai.trycloudflare.com"
+            : "https://8.153.96.190"
         guard let base = URL(string: raw), base.scheme == "https",
               let host = base.host, !host.isEmpty else {
             throw MarketDataError.notConfigured
