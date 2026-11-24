@@ -431,6 +431,7 @@ public final class TradingChartModel {
             interval: series.interval,
             configuration: viewport
         )
+        guard abs(result.visibleBars-visibleBars) > 0.00001 || result.scrollPosition != scrollPosition else { return }
         batch {
             visibleBars = result.visibleBars
             scrollPosition = result.scrollPosition

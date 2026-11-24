@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import TradingChartCore
 
 /// The transparent layer over the plot of a pane that takes the finger: a drag scrolls the chart (and a fling goes on after
 /// the finger lifts), a long press shows the crosshair and a drag after it moves the crosshair. On the main pane
@@ -33,6 +34,7 @@ struct ChartInputLayer: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ view: ChartInputView, coordinator: ()) {
+        view.finishPinch()
         view.stopFling()
         view.scrollPans.releaseAll()
     }
@@ -46,8 +48,9 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
     let press = UILongPressGestureRecognizer()
     let tap = UITapGestureRecognizer()
     let drawingPan = UIPanGestureRecognizer()
-    /// Watches for two fingers on the layer, only to keep the page still: the pinch itself is the chart view's.
+    /// A single native recognizer owns both the pinch and page-scroll lock.
     let pinchWatch = UIPinchGestureRecognizer()
+    private var pinchAnchor: ZoomAnchor?
     /// The scroll views above this layer.
     let scrollPans = ScrollAncestorPans()
     private let takesDrawingTouches: Bool
@@ -64,6 +67,7 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
         self.takesDrawingTouches = takesDrawingTouches
         super.init(frame: .zero)
         backgroundColor = .clear
+        isMultipleTouchEnabled = true
         isAccessibilityElement = false
 
         pan.maximumNumberOfTouches = 1
@@ -72,6 +76,7 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
         addGestureRecognizer(pan)
 
         press.minimumPressDuration = 0.3
+        press.numberOfTouchesRequired = 1
         press.addTarget(self, action: #selector(handlePress(_:)))
         press.delegate = self
         addGestureRecognizer(press)
@@ -109,7 +114,7 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
     /// The scroll views above the layer are looked for whenever its place in the hierarchy changes.
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { stopFling() }
+        if window == nil { finishPinch(); stopFling() }
         scrollPans.refresh(from: self)
     }
 
@@ -133,7 +138,7 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
     // MARK: - The chart: scroll and crosshair
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-        guard !isSelecting else { return }
+        guard !isSelecting, pinchAnchor == nil else { return }
         switch gesture.state {
         case .began:
             model.beginTouchScroll()
@@ -147,6 +152,7 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
     }
 
     @objc func handlePress(_ gesture: UILongPressGestureRecognizer) {
+        guard pinchAnchor == nil else { return }
         switch gesture.state {
         case .began:
             guard model.configuration.isCrosshairEnabled else { return }
@@ -165,25 +171,67 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    /// Two fingers on the layer: the page stays still for as long as they are down.
+    /// Drive zoom directly from UIKit, with no second SwiftUI recognizer.
+    /// Incremental scale is reset on every update so reversing at either
+    /// zoom bound takes effect immediately, without a cumulative dead zone.
     @objc func handlePinchWatch(_ gesture: UIPinchGestureRecognizer) {
         switch gesture.state {
-        case .began: scrollPans.hold(.pinch)
-        case .changed: break
-        default: scrollPans.release(.pinch)
+        case .began:
+            guard model.configuration.isZoomEnabled,bounds.width > 0 else { return }
+            let fraction = min(1,max(0,Double(gesture.location(in:self).x/bounds.width)))
+            pinchAnchor = model.isAtLiveEdge ? .liveEdge : .fraction(fraction)
+            scrollPans.hold(.pinch)
+            model.stopScrollMomentum()
+            model.cancelTouchScroll()
+            if isSelecting {
+                isSelecting = false
+                scrollPans.release(.crosshair)
+                model.clearTouchCrosshair()
+            }
+            if isDraggingDrawing {
+                isDraggingDrawing = false
+                scrollPans.release(.drawingDrag)
+                model.drawingEndDrag()
+            }
+            applyPinch(gesture)
+        case .changed:
+            applyPinch(gesture)
+        case .ended:
+            applyPinch(gesture)
+            finishPinch()
+        default:
+            finishPinch()
         }
+    }
+
+    private func applyPinch(_ gesture: UIPinchGestureRecognizer) {
+        guard let anchor = pinchAnchor,model.configuration.isZoomEnabled else { return }
+        let raw = Double(gesture.scale)
+        gesture.scale = 1
+        guard raw.isFinite,raw > 0,abs(raw-1) > 0.00001 else { return }
+        // Symmetric logarithmic gain: a 10% spread becomes ~13.7%,
+        // while contracting by its reciprocal exactly reverses the zoom.
+        let scale = pow(raw,1.35)
+        model.zoom(by:scale,anchor:anchor)
+    }
+
+    func finishPinch() {
+        guard pinchAnchor != nil else { return }
+        pinchAnchor = nil
+        scrollPans.release(.pinch)
     }
 
     // MARK: - The drawings
 
     /// A tap places an anchor while a tool is active, and otherwise selects the drawing under it or clears the selection.
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
-        guard gesture.state == .ended else { return }
+        guard gesture.state == .ended,pinchAnchor == nil else { return }
         model.drawingTap(at: gesture.location(in: self), plot: bounds)
     }
 
     /// A drag that started on the selected drawing: the anchor or the whole drawing follows the finger.
     @objc func handleDrawingPan(_ gesture: UIPanGestureRecognizer) {
+        guard pinchAnchor == nil else { return }
         switch gesture.state {
         case .began:
             isDraggingDrawing = model.drawingBeginDrag(at: firstTouch, plot: bounds)
@@ -209,6 +257,7 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
         // pan that follows would never begin.
         if gestureRecognizer === press { return model.configuration.isCrosshairEnabled }
         if gestureRecognizer === pinchWatch { return model.configuration.isZoomEnabled }
+        if pinchAnchor != nil { return false }
         // A vertical drag fails the chart's pan at once, and the scroll view above (which waits for it) takes the drag.
         if gestureRecognizer === pan,
            !chartTakesPan(translation: pan.translation(in: self), velocity: pan.velocity(in: self)) {

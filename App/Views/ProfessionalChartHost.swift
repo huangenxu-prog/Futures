@@ -22,6 +22,7 @@ struct ProfessionalChartHost: View {
     @State private var model: TradingChartModel = {
         var configuration = TradingChartConfiguration()
         configuration.viewport.candleVisibleBars = 52
+        configuration.viewport.minVisibleBars = 5
         // Keep the newest candle immediately before the price axis, like
         // a dense futures terminal. Preserve a fraction of one bar as breathing room.
         // With the large live-price badge disabled there is no badge-overhang
