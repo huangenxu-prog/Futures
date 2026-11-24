@@ -5,6 +5,7 @@ struct InstrumentDetailView: View {
     @Environment(\.mainContracts) private var contracts
     @EnvironmentObject private var favorites: Favorites
     @State private var showOptions = false
+    @State private var showingTrade = false
     @State private var showContracts = false
     @State private var showChartIndicatorSettings = false
     let instrument: FuturesInstrument
@@ -148,6 +149,15 @@ struct InstrumentDetailView: View {
             // A navigation destination may have captured an older environment
             // dictionary. Consume the actual shared live feed directly.
             liveQuote = incoming
+        }
+        .sheet(isPresented:$showingTrade) {
+            TradingCenterView(initialContract: PaperContract(
+                symbol:chartSymbol, name:instrument.name,
+                tick:selectedContract?.priceTick ?? currentPriceTick,
+                multiplier:selectedContract?.volumeMultiple ?? currentVolumeMultiple,
+                last:rawBars.last?.close ?? selectedContract?.last ?? quote?.last,
+                bid:selectedContract?.bid ?? (selectedContract == nil ? quote?.bid : nil),
+                ask:selectedContract?.ask ?? (selectedContract == nil ? quote?.ask : nil)))
         }
         .sheet(isPresented: $showOptions) {
             OptionChainView(code: chartSymbol, underlyingLast: rawBars.last?.close ?? selectedContract?.last ?? quote?.last)
@@ -385,6 +395,7 @@ struct InstrumentDetailView: View {
 
     private var actions: some View {
         Menu {
+            Button("交易",systemImage:"arrow.left.arrow.right") { showingTrade = true }
             Button(favorites.ids.contains(instrument.id) ? "移出自选" : "加入自选") {
                 favorites.toggle(instrument.id)
             }

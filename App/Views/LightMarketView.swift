@@ -58,6 +58,7 @@ struct LightMarketView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedInstrument: FuturesInstrument?
     @State private var showingStrategyCenter = false
+    @State private var showingTradingCenter = false
     @State private var selectedCategory = "全部"
     @State private var sortBy = "默认"
     @State private var onDemandQuotes: [String: MarketDataService.MainContract] = [:]
@@ -240,6 +241,9 @@ struct LightMarketView: View {
                         live, extra in live.last == nil ? extra : live
                     })
             }
+            .sheet(isPresented:$showingTradingCenter) {
+                TradingCenterView()
+            }
             .sheet(isPresented:$showingStrategyCenter) {
                 StrategyCenterView(instruments:catalog, favoriteIDs:favorites.ids,
                                    mainCodes:contracts.merging(onDemandQuotes) { live,extra in live.last == nil ? extra : live }.mapValues(\.code))
@@ -300,6 +304,16 @@ struct LightMarketView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("策略中心")
+            Button {
+                IndicatorKeyboard.dismiss()
+                showingTradingCenter = true
+            } label: {
+                Text("交易").font(.system(size:13,weight:.medium))
+                    .foregroundStyle(MarketPalette.accent)
+                    .frame(height:36).padding(.horizontal,3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("交易中心")
             Button {
                 appearanceMode = (colorScheme == .dark ? AppAppearanceMode.light : .dark).rawValue
             } label: {

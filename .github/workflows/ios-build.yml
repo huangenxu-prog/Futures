@@ -33,6 +33,8 @@ jobs:
           /tmp/strategy-test
           swiftc App/Models/MarketBar.swift App/Models/IntradaySession.swift scripts/IntradaySessionSelfTest.swift -o /tmp/intraday-test
           /tmp/intraday-test
+          swiftc App/Models/PaperTrading.swift scripts/PaperTradingSelfTest.swift -o /tmp/paper-trading-test
+          /tmp/paper-trading-test
 
       - name: Verify sandboxed formula engine
         run: |
