@@ -10,11 +10,11 @@ struct InstrumentDetailView: View {
     @State private var showContracts = false
     @State private var showChartIndicatorSettings = false
     let instrument: FuturesInstrument
-    let selectedContract: MarketDataService.ContractQuote?
+    @State private var selectedContract: MarketDataService.ContractQuote?
 
     init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote? = nil) {
         self.instrument = instrument
-        self.selectedContract = selectedContract
+        _selectedContract = State(initialValue: selectedContract)
     }
 
     @Environment(\.scenePhase) private var scenePhase
@@ -49,9 +49,12 @@ struct InstrumentDetailView: View {
     @State private var mostRecentStreamBar: MarketBar?
     @State private var lastCachedCandleAt: Date?
 
-    private var displayedChange: Double? { selectedContract?.change ?? quote?.change }
+    private var displayedChange: Double? { selectedContract == nil ? quote?.change : selectedContract?.change }
     private var changeColor: Color { MarketPalette.movement(displayedChange) }
-    private var changeText: String { selectedContract?.changePercent ?? quote?.changePercent ?? "--" }
+    private var changeText: String { (selectedContract == nil ? quote?.changePercent : selectedContract?.changePercent) ?? "--" }
+    private var currentLast: Double? {
+        (displayedKey == chartKey ? rawBars.last?.close : nil) ?? (selectedContract == nil ? quote?.last : selectedContract?.last)
+    }
     private var periodSeconds: Int { ["1分":60,"5分":300,"15分":900,"30分":1800,"60分":3600,"日线":86400][period] ?? 900 }
     var body: some View {
         VStack(spacing: 3) {
@@ -159,9 +162,19 @@ struct InstrumentDetailView: View {
             }
         }
         .sheet(isPresented: $showOptions) {
-            OptionChainView(code: chartSymbol, underlyingLast: rawBars.last?.close ?? selectedContract?.last ?? quote?.last,underlyingName:instrument.name)
+            OptionChainView(code: chartSymbol, underlyingLast: currentLast,underlyingName:instrument.name)
         }
-        .sheet(isPresented: $showContracts) { ContractListView(instrument: instrument) }
+        .sheet(isPresented: $showContracts) {
+            ContractListView(instrument: instrument, currentCode: chartSymbol) { contract in
+                if contract.code != chartSymbol {
+                    selectedContract = contract
+                    currentPriceTick = contract.priceTick
+                    currentVolumeMultiple = contract.volumeMultiple
+                    prepareCachedCandles(symbol: contract.code, period: periodSeconds)
+                }
+                showContracts = false
+            }
+        }
         .sheet(isPresented: $showPeriodOrder) {
             PeriodOrderView(order: periods, label: periodLabel) { updated in
                 storedPeriodOrder = updated.joined(separator: ",")
@@ -288,15 +301,39 @@ struct InstrumentDetailView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Text(instrument.name + (selectedContract?.month ?? quote?.month ?? ""))
-                .font(.system(size: 17, weight: .semibold))
-                .lineLimit(1)
-            Text(selectedContract?.code ?? quote?.code ?? (instrument.id + " 主连"))
-                .font(.system(size: 11))
-                .foregroundStyle(MarketPalette.muted)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            Spacer(minLength: 0)
+            Button { showContracts = true } label: {
+                HStack(spacing: 4) {
+                    Text(instrument.name + (selectedContract?.month ?? quote?.month ?? ""))
+                        .font(.system(size: 17, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(MarketPalette.muted)
+                    Text(selectedContract?.code ?? quote?.code ?? (instrument.id + " 主连"))
+                        .font(.system(size: 11))
+                        .foregroundStyle(MarketPalette.muted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
+                }
+                .frame(minHeight: 34)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("切换合约月份")
+            Spacer(minLength: 2)
+            Button("期权") { showOptions = true }
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(MarketPalette.accent)
+                .fixedSize()
+                .frame(minWidth: 40, minHeight: 34)
+                .disabled(selectedContract == nil && quote == nil)
+            Button("下单") { openTrade() }
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(MarketPalette.accent)
+                .fixedSize()
+                .frame(minWidth: 40, minHeight: 34)
+                .disabled(selectedContract == nil && quote == nil)
         }
         .foregroundStyle(MarketPalette.ink)
         .padding(.horizontal, 7)
@@ -305,7 +342,7 @@ struct InstrumentDetailView: View {
 
     private var priceSummary: some View {
         HStack(alignment: .center, spacing: 7) {
-            Text(((displayedKey == chartKey ? rawBars.last?.close : nil) ?? selectedContract?.last ?? quote?.last)?.formatted() ?? "--")
+            Text(currentLast?.formatted() ?? "--")
                 .font(.system(size: 30, weight: .semibold, design: .rounded))
                 .foregroundStyle(changeColor)
                 .monospacedDigit()
@@ -407,15 +444,11 @@ struct InstrumentDetailView: View {
 
     private var actions: some View {
         Menu {
-            Button("交易",systemImage:"arrow.left.arrow.right") { openTrade() }
-            Button(favorites.ids.contains(instrument.id) ? "移出自选" : "加入自选") {
+             Button(favorites.ids.contains(instrument.id) ? "移出自选" : "加入自选") {
                 favorites.toggle(instrument.id)
             }
-            Button("查看期权 T 型报价") { showOptions = true }
-                .disabled(selectedContract == nil && quote == nil)
-            Button("指标参数设置") { showChartIndicatorSettings = true }
-            Button("选择合约月份") { showContracts = true }
-            Button("周期排序") { showPeriodOrder = true }
+             Button("指标参数设置") { showChartIndicatorSettings = true }
+             Button("周期排序") { showPeriodOrder = true }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 17, weight: .semibold))
