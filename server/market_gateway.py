@@ -414,8 +414,9 @@ def bars_from_serial(serial):
 # bars. Never synthesize missing bars, even over exchange session breaks.
 KLINE_MAX_SERIES = 24
 KLINE_DATA_LENGTH = 2
-KLINE_HISTORY_LENGTH = 200
-KLINE_MAX_MEMORY_SERIES = 256
+KLINE_HISTORY_LENGTH = 1200  # prefetch recent history once per symbol/period
+KLINE_DISK_HISTORY_LENGTH = 8964  # preserve older pages on VPS across visits
+KLINE_MAX_MEMORY_SERIES = 96   # bounded RAM; old pages stay on disk
 KLINE_HISTORY_REFRESH_SECONDS = 600
 # The favorites' stored history need not be re-downloaded every 10 minutes.
 # Opening a chart always requests an up-to-date reconciliation separately.
@@ -471,7 +472,7 @@ class KlineFileCache:
     def read(self, key):
         try:
             path = self.path(key)
-            if path.stat().st_size > 128_000:
+            if path.stat().st_size > 2_000_000:
                 return [], 0.0
             with path.open("r", encoding="utf-8") as handle:
                 payload = json.load(handle)
@@ -490,20 +491,29 @@ class KlineFileCache:
                     continue
                 valid.append({name: bar[name] for name in
                               ("time", "open", "high", "low", "close", "volume")})
-            return merge_kline_bars([], valid), float(payload.get("saved_at", 0))
+            return merge_kline_bars([], valid, limit=KLINE_DISK_HISTORY_LENGTH), float(payload.get("saved_at", 0))
         except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
             return [], 0.0
 
-    def write(self, key, bars):
+    def write(self, key, bars, *, older=False):
         if not bars:
             return
         target = self.path(key)
         temporary = None
         try:
             self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            # Disk is a persistent historical store, not a 200-bar ring.
+            # Updating the current bar must not delete already-downloaded
+            # older pages; pagination backfills must not overwrite recent
+            # candles with a stale historical snapshot.
+            persisted, _ = self.read(key)
+            combined = (merge_kline_bars(bars, persisted,
+                                         limit=KLINE_DISK_HISTORY_LENGTH)
+                        if older else merge_kline_bars(
+                            persisted, bars, limit=KLINE_DISK_HISTORY_LENGTH))
             content = json.dumps({
                 "symbol": key[0], "period": key[1], "saved_at": time.time(),
-                "bars": bars[-KLINE_HISTORY_LENGTH:]
+                "bars": combined
             }, allow_nan=False, separators=(",", ":")).encode("utf-8")
             with tempfile.NamedTemporaryFile(dir=self.directory, prefix=".tmp-",
                                              delete=False) as handle:
@@ -565,7 +575,7 @@ class SharedKlineHub:
             return
         bars, saved_at = self.store.read(key)
         if bars:
-            self.cache[key] = (bars, 1)
+            self.cache[key] = (bars[-KLINE_HISTORY_LENGTH:], 1)
             self.cached_used[key] = time.monotonic()
             # A disk file is instantly displayable but must be reconciled
             # before being treated as a current exchange snapshot.
@@ -625,7 +635,11 @@ class SharedKlineHub:
                 entry["listeners"] += 1
             if waiter:
                 entry["waiters"] += 1
-            self._schedule_locked(key, urgent=True)
+            bars = self.cache.get(key, ([], 0))[0]
+            refreshed = self.last_history.get(key, 0)
+            if (len(bars) < KLINE_HISTORY_LENGTH - 2
+                    or time.time() - refreshed > KLINE_HISTORY_REFRESH_SECONDS):
+                self._schedule_locked(key, urgent=True)
             self.condition.notify_all()
         self.start()
         return key
@@ -795,7 +809,7 @@ class SharedKlineHub:
                 while time.time() < deadline:
                     api.wait_update(deadline=time.time() + 1)
                     bars = bars_from_serial(serial)
-                    if len(bars) >= min(120, KLINE_HISTORY_LENGTH):
+                    if len(bars) >= min(1000, KLINE_HISTORY_LENGTH):
                         break
                     # Newly listed contracts can have fewer than 120 bars.
                     # Let the SDK continue filling history before returning
@@ -887,6 +901,53 @@ class SharedKlineHub:
 
 
 KLINE_HUB = SharedKlineHub(store=KlineFileCache())
+
+
+# This lock serializes only cold historical pagination. It never blocks
+# quote updates; actual TqApi objects are not shared between threads.
+HISTORY_QUERY_LOCK = threading.Lock()
+
+
+def historical_page(symbol, period, before, count, depth):
+    """Serve prior candles from Aliyun disk; fetch only a genuinely missing page.
+
+    Disk can retain up to 8964 genuine TqSdk bars per symbol/period. A 1200-bar
+    prewarm covers normal swipes without a new TqSdk login. Requests beyond the
+    stored depth fetch once, merge atomically and remain fast on repeat.
+    """
+    key = (quote_symbol(symbol), period)
+
+    def available():
+        if KLINE_HUB.store is not None:
+            return KLINE_HUB.store.read(key)[0]
+        with KLINE_HUB.condition:
+            return list(KLINE_HUB.cache.get(key, ([], 0))[0])
+
+    def older_rows(candles):
+        return [bar for bar in candles if bar["time"] < before]
+
+    stored = available()
+    older = older_rows(stored)
+    if len(older) >= count or len(stored) >= depth:
+        return older[-count:]
+
+    # One cold request can download missing history; subsequent requests will
+    # be served entirely from disk, including after a gateway restart.
+    with HISTORY_QUERY_LOCK:
+        stored = available()
+        older = older_rows(stored)
+        if len(older) >= count or len(stored) >= depth:
+            return older[-count:]
+        fetched = load_bars(symbol, period, depth)
+        if not fetched:
+            return older[-count:]
+        if KLINE_HUB.store is None:
+            return older_rows(merge_kline_bars(
+                fetched, stored, limit=KLINE_DISK_HISTORY_LENGTH))[-count:]
+        with KLINE_HUB.file_write_lock:
+            KLINE_HUB.store.write(key, fetched, older=True)
+            persisted = available()
+        return older_rows(persisted)[-count:]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1101,10 +1162,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(400, {"error": "invalid_history_parameters"})
                 return
             try:
-                with LOCK:
-                    candles = load_bars(symbol, period, depth)
-                older = [bar for bar in candles if bar["time"] < before]
-                self.reply(200, {"symbol": symbol, "period": period, "bars": older[-count:]})
+                older = historical_page(symbol, period, before, count, depth)
+                self.reply(200, {"symbol": symbol, "period": period, "bars": older})
             except Exception:
                 self.reply(503, {"error": "history_unavailable"})
             return

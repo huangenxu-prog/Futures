@@ -22,9 +22,10 @@ spec.loader.exec_module(gateway)
 class GatewayStreamingTests(unittest.TestCase):
     def test_live_history_depth_covers_longest_used_ma(self):
         # On the live connection only 2 real bars are subscribed. A separate
-        # one-off history worker acquires 200 bars for MA120 and chart panning.
+        # One-off worker warms 1200 real bars; disk retains fetched older pages.
         self.assertEqual(gateway.KLINE_DATA_LENGTH, 2)
-        self.assertEqual(gateway.KLINE_HISTORY_LENGTH, 200)
+        self.assertEqual(gateway.KLINE_HISTORY_LENGTH, 1200)
+        self.assertEqual(gateway.KLINE_DISK_HISTORY_LENGTH, 8964)
         self.assertGreaterEqual(gateway.KLINE_HISTORY_LENGTH, 120)
         self.assertEqual(gateway.SharedKlineHub().status()["data_length"], 2)
 
@@ -204,6 +205,86 @@ class GatewayStreamingTests(unittest.TestCase):
             self.assertEqual(store.read(key)[0], [])
             with self.assertRaises(ValueError):
                 store.path(("../secret", 900))
+
+    def test_disk_retains_older_pages_when_live_tail_updates(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as dirname:
+            store = gateway.KlineFileCache(dirname)
+            key = ("CZCE.SR701", 900)
+            def bar(i, price=None):
+                c = float(i if price is None else price)
+                return {"time": i, "open": c, "high": c,
+                        "low": c, "close": c, "volume": 1}
+            first = [bar(i) for i in range(1, 1701)]
+            store.write(key, first)
+            self.assertEqual(len(store.read(key)[0]), 1700)
+            store.write(key, [bar(1700, 9000), bar(1701, 9001)])
+            restored, _ = store.read(key)
+            self.assertEqual(len(restored), 1701)
+            self.assertEqual(restored[0]["time"], 1)
+            self.assertEqual(restored[-2]["close"], 9000)
+            # Cold older history may overlap a fresh live final candle.
+            store.write(key, [bar(i) for i in range(1, 1750)], older=True)
+            restored, _ = store.read(key)
+            self.assertEqual(restored[-50]["close"], 9000)
+            self.assertEqual(restored[-1]["time"], 1749)
+
+    def test_history_page_uses_disk_without_connecting_to_tqsdk(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as dirname:
+            store = gateway.KlineFileCache(dirname)
+            key = ("CZCE.SR701", 900)
+            def bar(t):
+                return {"time": t, "open": 1., "high": 2., "low": 0.,
+                        "close": 1.5, "volume": 5}
+            store.write(key, [bar(t) for t in range(1, 1301)])
+            hub = gateway.SharedKlineHub(store=store)
+            with patch.object(gateway, "KLINE_HUB", hub):
+                with patch.object(gateway, "load_bars") as sdk:
+                    found = gateway.historical_page("CZCE.SR701", 900,
+                                                    before=1151, count=300,
+                                                    depth=1100)
+            self.assertEqual(len(found), 300)
+            self.assertEqual(found[0]["time"], 851)
+            self.assertEqual(found[-1]["time"], 1150)
+            sdk.assert_not_called()
+
+    def test_history_page_downloads_once_and_stores_for_restart(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as dirname:
+            store = gateway.KlineFileCache(dirname)
+            key = ("CZCE.SR701", 900)
+            def bar(t):
+                return {"time": t, "open": 1., "high": 2., "low": 0.,
+                        "close": 1.5, "volume": 5}
+            store.write(key, [bar(t) for t in range(1001, 1201)])
+            hub = gateway.SharedKlineHub(store=store)
+            with patch.object(gateway, "KLINE_HUB", hub):
+                with patch.object(gateway, "load_bars",
+                                  return_value=[bar(t) for t in range(1, 1201)]) as sdk:
+                    first = gateway.historical_page("CZCE.SR701", 900,
+                                                    before=1101, count=300,
+                                                    depth=1100)
+                    second = gateway.historical_page("CZCE.SR701", 900,
+                                                     before=1101, count=300,
+                                                     depth=1100)
+            self.assertEqual(first, second)
+            self.assertEqual(len(first), 300)
+            self.assertEqual(first[0]["time"], 801)
+            self.assertEqual(sdk.call_count, 1)
+            self.assertEqual(len(gateway.KlineFileCache(dirname).read(key)[0]), 1200)
+
+    def test_rehydrated_disk_uses_bounded_ram(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as dirname:
+            store = gateway.KlineFileCache(dirname)
+            key = ("CZCE.SR701", 900)
+            store.write(key, [{"time": t, "open": 1., "high": 2., "low": 0.,
+                              "close": 1.5, "volume": 1} for t in range(1, 2001)])
+            hub = gateway.SharedKlineHub(store=store)
+            with hub.condition:
+                hub._restore_locked(key)
+                self.assertEqual(len(hub.cache[key][0]), 1200)
 
     def test_favorites_warm_endpoint_rejects_arbitrary_codes(self):
         output = []
