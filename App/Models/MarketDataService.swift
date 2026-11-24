@@ -281,7 +281,7 @@ enum MarketDataService {
         return result.bars.filter { $0.time < before }.sorted { $0.time < $1.time }
     }
 
-    static func fetch(symbol: String, period: Int, count: Int = 100) async throws -> [MarketBar] {
+    static func fetch(symbol: String, period: Int, count: Int = 100, mergeCached: Bool = true) async throws -> [MarketBar] {
         let url = try baseURL().appendingPathComponent("v1/klines")
         guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             throw MarketDataError.invalidResponse
@@ -302,6 +302,11 @@ enum MarketDataService {
         guard responseBars.symbol == symbol else { throw MarketDataError.invalidResponse }
         let bars = responseBars.bars
         guard !bars.isEmpty else { throw MarketDataError.noData }
+        // The chart startup merges on the main actor with the latest SSE bar.
+        // Return only the requested network page and do not overwrite its cache.
+        if !mergeCached {
+            return Array(bars.sorted { $0.time < $1.time }.suffix(max(1, count)))
+        }
         // Never destroy a previously hydrated phone history with a short
         // 2-bar HTTP snapshot or a partial first subscription response.
         var byTime: [Int64: MarketBar] = [:]

@@ -5,6 +5,9 @@ import Foundation
 /// exchange bar remains authoritative if it is at least as recent as the
 /// server snapshot's last candle. The exchange timestamp is the identity.
 enum KlineStartupMerge {
+    static let initialCount = 200
+    static let historyPageCount = 300
+
     static func combine<Bar>(
         server: [Bar],
         existing: [Bar],

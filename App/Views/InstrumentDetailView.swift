@@ -218,7 +218,7 @@ struct InstrumentDetailView: View {
         loading = candles.isEmpty
         defer { if !Task.isCancelled { loading = false } }
         do {
-            let bars = try await MarketDataService.fetch(symbol: symbol, period: requestedPeriod, count: 500)
+            let bars = try await MarketDataService.fetch(symbol: symbol, period: requestedPeriod, count: KlineStartupMerge.initialCount, mergeCached: false)
             try Task.checkCancellation()
             guard symbol == chartSymbol, requestedPeriod == periodSeconds,
                   displayedKey == requestedKey else { return }

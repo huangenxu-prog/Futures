@@ -46,6 +46,16 @@ struct KlineStartupMergeSelfTest {
         precondition(limited.count == 500 && limited.first?.time == 151 &&
                      limited.last?.time == 650, "500-bar memory cap")
 
+        // A 200-bar network page must not discard cached history or a live tick.
+        let page = Array(long.suffix(KlineStartupMerge.initialCount))
+        let prior = Array(long.suffix(500))
+        let live = B(time: 650, price: 999)
+        let warmed = KlineStartupMerge.combine(server: page, existing: prior,
+                                               live: live, timestamp: { $0.time })
+        precondition(KlineStartupMerge.initialCount == 200 && KlineStartupMerge.historyPageCount == 300)
+        precondition(page.count == 200 && warmed.count == 500 && warmed.first?.time == 151 && warmed.last == live,
+                     "first page preserves cached history and newest live bar")
+
         print("K-line parallel startup merge checks OK")
     }
 }

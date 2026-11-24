@@ -53,6 +53,7 @@ struct ProfessionalChartHost: View {
     @State private var drawingsRestored = false
     @State private var historyDepth = 1100
     @State private var historyTask: Task<Void, Never>?
+    @State private var didScheduleInitialHistory = false
 
     private var interval: ChartInterval {
         ChartInterval(seconds: TimeInterval(period))
@@ -188,6 +189,7 @@ struct ProfessionalChartHost: View {
             model.indicators = displaySettings.indicators()
             configureChart()
             synchronizeBars(previous: [], incoming: bars)
+            scheduleInitialHistoryIfNeeded()
         }
         .onChange(of: displaySettings) { _, current in
             model.indicators = current.indicators()
@@ -200,6 +202,7 @@ struct ProfessionalChartHost: View {
         }
         .onChange(of: bars) { previous, incoming in
             synchronizeBars(previous: previous, incoming: incoming)
+            scheduleInitialHistoryIfNeeded()
         }
         .onDisappear {
             model.onEvent = nil
@@ -424,11 +427,28 @@ struct ProfessionalChartHost: View {
         }
     }
 
+    // Once the first page is visible, warm one older page without blocking
+    // the SSE stream or requesting the same page twice during a user pan.
     @MainActor
-    private func fetchOlderHistory() async {
+    private func scheduleInitialHistoryIfNeeded() {
+        guard !didScheduleInitialHistory, historyTask == nil,
+              bars.count >= KlineStartupMerge.initialCount,
+              (model.series.candles?.count ?? 0) < KlineStartupMerge.initialCount + KlineStartupMerge.historyPageCount,
+              model.hasMoreHistory else { return }
+        didScheduleInitialHistory = true
+        historyTask = Task { @MainActor in
+            defer { historyTask = nil }
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+            await fetchOlderHistory(prefetch: true)
+        }
+    }
+
+    @MainActor
+    private func fetchOlderHistory(prefetch: Bool = false) async {
         guard !model.isLoadingHistory, model.hasMoreHistory,
               let first = model.series.firstTime else { return }
         model.isLoadingHistory = true
+        defer { model.isLoadingHistory = false }
         guard let before = sessionAxis.actualTime(for: first) else {
             model.isLoadingHistory = false
             return
@@ -439,18 +459,22 @@ struct ProfessionalChartHost: View {
             while !Task.isCancelled {
                 let older = try await MarketDataService.fetchOlder(
                     symbol: symbol, period: period, before: before,
-                    count: 300, depth: historyDepth
+                    count: KlineStartupMerge.historyPageCount, depth: historyDepth
                 )
+                try Task.checkCancellation()
                 if !older.isEmpty {
                     sessionAxis.register(older.map(\.time), period: period)
                     model.prependHistory(ChartSeries(candles: older.map(chartCandle),
                                                      interval: interval))
                     historyDepth = min(8964, historyDepth + 450)
-                    if older.count < 300 && historyDepth == 8964 {
+                    if older.count < KlineStartupMerge.historyPageCount && historyDepth == 8964 {
                         model.hasMoreHistory = false
                     }
                     return
                 }
+                // Speculative warmup never widens the upstream window or
+                // declares history exhausted; explicit scrolling still can.
+                if prefetch { return }
                 if historyDepth >= 8964 {
                     model.hasMoreHistory = false
                     model.isLoadingHistory = false
@@ -464,7 +488,7 @@ struct ProfessionalChartHost: View {
             // A legacy VPS gateway may not yet support paging. Stop repeated
             // retries rather than freezing the chart's working interactions.
             model.isLoadingHistory = false
-            model.hasMoreHistory = false
+            if !prefetch && !Task.isCancelled { model.hasMoreHistory = false }
         }
     }
 }
