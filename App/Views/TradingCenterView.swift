@@ -86,12 +86,12 @@ struct TradingCenterView:View {
                 Button("按限价模拟成交"){ apply{try ledger.fill(order.id)};fillConfirmation = nil }
                 Button("取消",role:.cancel){fillConfirmation = nil}
             } message:{ order in
-                Text(order.contract.symbol+" · "+order.actionTitle+" "+String(order.quantity)+"手 @ "+order.price.formatted()+"。仅本地演练，不是交易所撮合。")
+                Text("\(order.contract.symbol) · \(order.actionTitle) \(order.quantity)手 @ \(order.price.formatted())。仅本地演练，不是交易所撮合。")
             }
             .alert("确认撤销模拟委托",isPresented:Binding(get:{cancelConfirmation != nil},set:{if !$0 {cancelConfirmation = nil}}),presenting:cancelConfirmation) { order in
                 Button("撤单",role:.destructive){apply{try ledger.cancel(order.id)};cancelConfirmation = nil}
                 Button("取消",role:.cancel){cancelConfirmation = nil}
-            } message:{ order in Text(order.contract.symbol+" · "+order.actionTitle) }
+            } message:{ order in Text("\(order.contract.symbol) · \(order.actionTitle)") }
             .onAppear {
                 guard !restored else {return};restored = true
                 if !saved.isEmpty {
@@ -279,7 +279,7 @@ private struct PaperOrderTicket:View {
                     do{try onSubmit(direction,offset,numericPrice,quantity);dismiss()}catch{self.error = error.localizedDescription}
                 }
                 Button("取消",role:.cancel){}
-            } message:{Text(contract.symbol+" · "+direction.title+offset.title+" · "+String(quantity)+"手 @ "+price+"。不是真实订单。")}
+            } message:{Text("\(contract.symbol) · \(direction.title)\(offset.title) · \(quantity)手 @ \(price)。不是真实订单。")}
         }
     }
     private func hideKeyboard(){input = nil;IndicatorKeyboard.dismiss()}
