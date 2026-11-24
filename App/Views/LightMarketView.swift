@@ -242,7 +242,7 @@ struct LightMarketView: View {
                     })
             }
             .sheet(isPresented:$showingTradingCenter) {
-                TradingCenterView()
+                TradingCenterView(favoriteIDs:favorites.ids,mainCodes:contracts.merging(onDemandQuotes) { live,extra in live.last == nil ? extra : live }.mapValues(\.code))
             }
             .sheet(isPresented:$showingStrategyCenter) {
                 StrategyCenterView(instruments:catalog, favoriteIDs:favorites.ids,
