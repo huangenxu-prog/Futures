@@ -18,3 +18,5 @@ jobs:
           python3 -m unittest discover -s server -p 'test_gateway_stream.py' -v
       - name: Verify Ubuntu 24.04 bootstrap
         run: bash server/test_bootstrap.sh
+      - name: Verify IP HTTPS installer
+        run: bash server/test_ip_https.sh
