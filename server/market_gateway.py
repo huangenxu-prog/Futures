@@ -132,6 +132,12 @@ def selected_quotes(products):
     requested = sorted(set(products))
     if not requested or len(requested) > 48 or any(not supported_product(p) for p in requested):
         raise ValueError("invalid products")
+    # The long-lived quote feed already holds current prices for the common
+    # products. Reply directly instead of creating and closing a new TqApi
+    # for requests wholly covered by that feed.
+    live = LIVE_QUOTES.current()
+    if requested and all(product in live for product in requested):
+        return {product: live[product] for product in requested}
     key = tuple(requested)
     with DYNAMIC_QUOTE_LOCK:
         if time.monotonic() < QUOTE_BATCH_UNTIL.get(key, 0):

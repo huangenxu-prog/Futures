@@ -84,6 +84,12 @@ struct LightMarketView: View {
          favorites.ids.joined(separator: ","), String(catalog.count)].joined(separator: "|")
     }
 
+    private var favoriteWarmKey: String {
+        favorites.ids.compactMap { id in
+            contracts[id]?.code ?? onDemandQuotes[id]?.code
+        }.joined(separator: "|")
+    }
+
     private var quoteRequestIDs: [String] {
         let keyword = search.trimmingCharacters(in: .whitespacesAndNewlines)
         var options = keyword.isEmpty && scope == .favorites
@@ -107,7 +113,10 @@ struct LightMarketView: View {
 
     @MainActor
     private func refreshVisibleQuotes() async {
-        let ids = quoteRequestIDs
+        // Main contracts are already delivered by the shared SSE feed.
+        // Re-requesting them starts another TqSdk login every 30 seconds on
+        // the older on-demand path and delays the remaining catalog batches.
+        let ids = quoteRequestIDs.filter { contracts[$0]?.last == nil }
         for start in stride(from: 0, to: ids.count, by: 40) {
             if Task.isCancelled { return }
             let chunk = Array(ids[start..<min(start + 40, ids.count)])
@@ -118,9 +127,6 @@ struct LightMarketView: View {
             if start + 40 < ids.count {
                 try? await Task.sleep(for: .milliseconds(500))
             }
-        }
-        if scope == .favorites && search.isEmpty {
-            await warmFavoritesIfNeeded()
         }
     }
 
@@ -235,6 +241,13 @@ struct LightMarketView: View {
                     await refreshVisibleQuotes()
                     do { try await Task.sleep(for: .seconds(30)) } catch { return }
                 }
+            }
+            .task(id: favoriteWarmKey) {
+                // Start the most useful K-line history warmup as soon as the
+                // shared quote feed reveals the main contract identity.
+                // It must not wait for sequential on-demand quote batches.
+                guard !favoriteWarmKey.isEmpty else { return }
+                await warmFavoritesIfNeeded()
             }
         }
         .tint(MarketPalette.accent)

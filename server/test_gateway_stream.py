@@ -33,6 +33,17 @@ class GatewayStreamingTests(unittest.TestCase):
         self.assertEqual(gateway.quote_symbol("CFFEX.IF"), "KQ.m@CFFEX.IF")
         self.assertEqual(gateway.quote_symbol("DCE.m2701"), "DCE.m2701")
 
+    def test_existing_live_quotes_never_open_another_tqsdk_session(self):
+        sample = {
+            "CZCE.SR": {"code": "CZCE.SR701", "last": 5066},
+            "DCE.m": {"code": "DCE.m2701", "last": 3022},
+        }
+        with patch.object(gateway.LIVE_QUOTES, "current", return_value=sample):
+            with patch.object(gateway, "TqApi") as new_connection:
+                result = gateway.selected_quotes(["DCE.m", "CZCE.SR"])
+        self.assertEqual(result, sample)
+        new_connection.assert_not_called()
+
     def test_quote_publish_is_change_driven(self):
         hub = gateway.LiveQuoteHub()
         first = {"CZCE.SR": {"code": "CZCE.SR701", "month": "2701", "last": 5024.0}}

@@ -64,13 +64,11 @@ struct ContentView: View {
                 contracts = contracts.mapValues(\.identity)
                 return
             }
-            // Fetch one snapshot immediately, then receive individual market
-            // updates as soon as TqSdk pushes them to the gateway.
+            // The persistent server-side feed sends its most recent quote
+            // snapshot immediately on SSE connection. Do not delay that fast
+            // path with a separate cold HTTP/TqSdk query first.
             while !Task.isCancelled {
                 do {
-                    let initial = try await MarketDataService.mainContracts()
-                    try Task.checkCancellation()
-                    applyContracts(initial)
                     try await MarketDataService.streamQuotes { live in
                         applyContracts(live)
                     }
