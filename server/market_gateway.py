@@ -519,6 +519,7 @@ class SharedKlineHub:
         self.cached_used = {}       # key -> monotonic LRU clock
         self.live_tail = {}         # last 2 authoritative live bars
         self.last_saved = {}
+        self.file_write_lock = threading.Lock()
         self.last_history = {}
         self.pending_history = set()
         self.urgent_history = deque()
@@ -549,12 +550,17 @@ class SharedKlineHub:
         if key in self.history_running:
             return
         if key in self.pending_history:
-            if urgent:
-                self.urgent_history.append(key)  # upgrade priority
+            if urgent and key not in self.urgent_history:
+                self.urgent_history.append(key)  # one priority upgrade only
             return
-        # A public cache hint cannot build an unbounded background backlog.
+        # The foreground chart must not lose backfill priority to a backlog
+        # of public warm hints. Discard one speculative task when necessary.
         if len(self.pending_history) >= 144:
-            return
+            if urgent and self.background_history:
+                dropped = self.background_history.pop()
+                self.pending_history.discard(dropped)
+            else:
+                return
         self.pending_history.add(key)
         (self.urgent_history if urgent else self.background_history).append(key)
         self.condition.notify_all()
@@ -644,7 +650,13 @@ class SharedKlineHub:
                     self.cached_used.pop(oldest, None)
                     self.live_tail.pop(oldest, None)
         if to_save is not None:
-            self.store.write(key, to_save)
+            # Serialize writes and take the newest version after acquiring the
+            # lock: a simultaneous live tick must never overwrite an already
+            # completed 200-bar history snapshot with an older 2-bar file.
+            with self.file_write_lock:
+                with self.condition:
+                    newest = self.cache.get(key, (to_save, 0))[0]
+                self.store.write(key, newest)
 
     def read(self, key, after_version=-1, timeout=10):
         deadline = time.monotonic() + timeout
@@ -739,7 +751,12 @@ class SharedKlineHub:
                 while time.time() < deadline:
                     api.wait_update(deadline=time.time() + 1)
                     bars = bars_from_serial(serial)
-                    if len(bars) >= 1:
+                    if len(bars) >= min(120, KLINE_HISTORY_LENGTH):
+                        break
+                    # Newly listed contracts can have fewer than 120 bars.
+                    # Let the SDK continue filling history before returning
+                    # a partial frame, but don't block the worker indefinitely.
+                    if bars and time.time() > deadline - 3:
                         break
                 if bars:
                     self.publish(key, bars, history=True)
