@@ -25,6 +25,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Verify immediate SSE line parsing
+        run: |
+          swiftc App/Models/SSELineBuffer.swift scripts/SSELineBufferSelfTest.swift -o /tmp/sse-line-test
+          /tmp/sse-line-test
+
       - name: Verify futures price formatting
         run: |
           swiftc App/Models/MarketPricePrecision.swift scripts/MarketPricePrecisionSelfTest.swift -o /tmp/market-price-precision-test

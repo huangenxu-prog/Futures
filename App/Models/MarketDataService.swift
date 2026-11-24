@@ -233,23 +233,42 @@ enum MarketDataService {
         stamp: ((T, Double, Double) -> T)? = nil,
         onEvent: @MainActor @escaping (T) -> Void
     ) async throws {
-        var request = URLRequest(url: endpoint)
+        var request = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData)
         request.timeoutInterval = 45
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-              (http.value(forHTTPHeaderField: "Content-Type") ?? "").hasPrefix("text/event-stream")
-        else { throw MarketDataError.invalidResponse }
-        for try await line in bytes.lines {
-            try Task.checkCancellation()
-            guard line.hasPrefix("data:") else { continue }
-            let epoch = Date().timeIntervalSince1970
-            let uptime = ProcessInfo.processInfo.systemUptime
-            let raw = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-            guard let data = raw.data(using: .utf8) else { continue }
-            let value = try JSONDecoder().decode(T.self, from: data)
-            await onEvent(stamp?(value, epoch, uptime) ?? value)
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+
+        // Read actual URLSession data callbacks rather than waiting on the
+        // AsyncBytes.lines adapter. The serial delegate can receive subsequent
+        // chunks while the main actor is applying a previous event.
+        let (chunks, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+        let receiver = SSEChunkReceiver(continuation: continuation)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 45
+        let session = URLSession(configuration: configuration, delegate: receiver, delegateQueue: nil)
+        let task = session.dataTask(with: request)
+        defer {
+            task.cancel()
+            session.invalidateAndCancel()
+            continuation.finish()
         }
+        task.resume()
+        var parser = SSELineBuffer()
+        let decoder = JSONDecoder()
+        for try await chunk in chunks {
+            try Task.checkCancellation()
+            for payload in parser.append(chunk) {
+                try Task.checkCancellation()
+                let epoch = Date().timeIntervalSince1970
+                let uptime = ProcessInfo.processInfo.systemUptime
+                let value = try decoder.decode(T.self, from: payload)
+                await onEvent(stamp?(value, epoch, uptime) ?? value)
+            }
+        }
+        try Task.checkCancellation()
         throw MarketDataError.invalidResponse
     }
 
@@ -339,5 +358,35 @@ enum MarketDataService {
         let merged = Array(byTime.values.sorted { $0.time < $1.time }.suffix(500))
         save(merged, symbol: symbol, period: period)
         return merged
+    }
+}
+
+// Delegate receives raw transport chunks on a private serial operation queue.
+// Finishing the continuation releases a waiting reader on disconnect/error.
+private final class SSEChunkReceiver: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let continuation: AsyncThrowingStream<Data, Error>.Continuation
+
+    init(continuation: AsyncThrowingStream<Data, Error>.Continuation) {
+        self.continuation = continuation
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              (http.value(forHTTPHeaderField: "Content-Type") ?? "").hasPrefix("text/event-stream") else {
+            continuation.finish(throwing: MarketDataError.invalidResponse)
+            completionHandler(.cancel)
+            return
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        continuation.yield(data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        continuation.finish(throwing: error)
     }
 }
