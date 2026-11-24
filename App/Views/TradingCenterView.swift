@@ -18,6 +18,7 @@ struct TradingCenterView:View {
     @State private var fillConfirmation:PaperOrder?
     @State private var cancelConfirmation:PaperOrder?
     @State private var restored = false
+    @State private var bankTransfer:BankTransferDirection?
     var initialContract:PaperContract? = nil
 
     private enum Tab:String,CaseIterable {
@@ -72,6 +73,9 @@ struct TradingCenterView:View {
             }
             .confirmationDialog("重置5万元模拟账户？",isPresented:$resetConfirmation,titleVisibility:.visible) {
                 Button("清空全部模拟记录",role:.destructive){ledger = PaperLedger(); storageFailed = false; persist()}
+            }
+            .sheet(item:$bankTransfer) { direction in
+                BankTransferView(initialDirection:direction)
             }
             .sheet(isPresented:$picking,onDismiss:{
                 if let pendingTicket {
@@ -143,6 +147,23 @@ struct TradingCenterView:View {
 
     private var accountSection:some View {
         Group {
+            Section("银期转账") {
+                HStack(spacing:12) {
+                    Button {bankTransfer = .deposit} label:{
+                        Label("入金",systemImage:"arrow.down.to.line")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth:.infinity).padding(.vertical,12)
+                            .background(MarketPalette.raised,in:RoundedRectangle(cornerRadius:9))
+                    }.buttonStyle(.plain).foregroundStyle(MarketPalette.accent)
+                    Button {bankTransfer = .withdraw} label:{
+                        Label("出金",systemImage:"arrow.up.to.line")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth:.infinity).padding(.vertical,12)
+                            .background(MarketPalette.raised,in:RoundedRectangle(cornerRadius:9))
+                    }.buttonStyle(.plain).foregroundStyle(MarketPalette.accent)
+                }
+                Text("实盘未连接").font(.caption).foregroundStyle(MarketPalette.muted)
+            }
             Section("模拟资金") {
                 LabeledContent("初始本金",value:money(PaperLedger.initialCapital))
                 LabeledContent("账面资金（不含浮盈亏）",value:money(ledger.cash))
@@ -531,5 +552,51 @@ private struct PaperContractList:View {
         loading = true;error = nil;defer{loading = false}
         do{quotes = try await MarketDataService.listedContracts(for:instrument.id);if quotes.isEmpty{error = "暂无挂牌合约"}}
         catch{self.error = error.localizedDescription}
+    }
+}
+
+// Entry and read-only layout only. No bank credentials, API calls, fake
+// transfers, or changes to the paper ledger.
+private enum BankTransferDirection:String,CaseIterable,Identifiable {
+    case deposit = "入金"
+    case withdraw = "出金"
+    var id:String {rawValue}
+    var route:String {self == .deposit ? "银行 → 期货" : "期货 → 银行"}
+}
+private struct BankTransferView:View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var direction:BankTransferDirection
+    init(initialDirection:BankTransferDirection) {
+        _direction = State(initialValue:initialDirection)
+    }
+    var body:some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("转账方向",selection:$direction) {
+                        ForEach(BankTransferDirection.allCases){item in
+                            Text(item.rawValue).tag(item)
+                        }
+                    }.pickerStyle(.segmented)
+                    LabeledContent("转账方向",value:direction.route)
+                    LabeledContent("签约银行",value:"未连接")
+                    LabeledContent("银行余额",value:"--")
+                    LabeledContent("可取资金",value:"--")
+                    LabeledContent("金额（元）",value:"--")
+                    Button(direction == .deposit ? "确认入金" : "确认出金") {}
+                        .disabled(true)
+                    Text("银期转账尚未获得授权。连接实盘账户后才可查询银行信息或发起转账。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("转账记录") {
+                    Text("未连接，无法查询").foregroundStyle(.secondary)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(MarketPalette.background)
+            .navigationTitle("银期转账")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {ToolbarItem(placement:.cancellationAction){Button("关闭"){dismiss()}}}
+        }.tint(MarketPalette.accent)
     }
 }
