@@ -566,6 +566,7 @@ class SharedKlineHub:
         self.cache = {}             # key -> (deduplicated bars, version)
         self.cached_used = {}       # key -> monotonic LRU clock
         self.live_tail = {}         # last 2 authoritative live bars
+        self.live_timing = {}       # key -> (version, TqSdk observation epoch)
         self.last_saved = {}
         self.file_write_lock = threading.Lock()
         self.last_history = {}
@@ -666,7 +667,7 @@ class SharedKlineHub:
                 entry["used"] = time.monotonic()
             self.condition.notify_all()
 
-    def publish(self, key, bars, *, history=False):
+    def publish(self, key, bars, *, history=False, received_at=None):
         if not bars:
             return
         to_save = None
@@ -700,6 +701,10 @@ class SharedKlineHub:
                 combined = merge_kline_bars(previous, bars)
             if combined != previous:
                 self.cache[key] = (combined, version + 1)
+                if not history and received_at is not None:
+                    self.live_timing[key] = (version + 1, received_at)
+                else:
+                    self.live_timing.pop(key, None)
                 self.cached_used[key] = time.monotonic()
                 self.condition.notify_all()
             now = time.monotonic()
@@ -717,6 +722,7 @@ class SharedKlineHub:
                     del self.cache[oldest]
                     self.cached_used.pop(oldest, None)
                     self.live_tail.pop(oldest, None)
+                    self.live_timing.pop(oldest, None)
         if to_save is not None:
             # Serialize writes and take the newest version after acquiring the
             # lock: a simultaneous live tick must never overwrite an already
@@ -725,6 +731,11 @@ class SharedKlineHub:
                 with self.condition:
                     newest = self.cache.get(key, (to_save, 0))[0]
                 self.store.write(key, newest)
+
+    def timing_for(self, key, version):
+        with self.condition:
+            record = self.live_timing.get(key)
+            return record[1] if record and record[0] == version else None
 
     def read(self, key, after_version=-1, timeout=10):
         deadline = time.monotonic() + timeout
@@ -879,16 +890,25 @@ class SharedKlineHub:
                         targets = sorted(self.entries, key=lambda key: -self.entries[key]["used"])
                     for key in targets:
                         if key not in installed:
+                            started = time.monotonic()
                             installed[key] = api.get_kline_serial(
                                 key[0], key[1], data_length=KLINE_DATA_LENGTH)
+                            elapsed = (time.monotonic() - started) * 1000
+                            if elapsed >= 300:
+                                print(f"QIHUI_LATENCY subscribe symbol={key[0]} period={key[1]} ms={elapsed:.1f}", flush=True)
                             break
                     updated = api.wait_update(deadline=time.time() + 0.3)
+                    received_at = time.time()
                     for key in targets:
                         serial = installed.get(key)
                         if serial is None:
                             continue
                         if updated and api.is_changing(serial):
-                            self.publish(key, bars_from_serial(serial))
+                            started = time.monotonic()
+                            self.publish(key, bars_from_serial(serial), received_at=received_at)
+                            elapsed = (time.monotonic() - started) * 1000
+                            if elapsed >= 100:
+                                print(f"QIHUI_LATENCY publish symbol={key[0]} period={key[1]} ms={elapsed:.1f}", flush=True)
                         with self.condition:
                             last = self.last_history.get(key, 0)
                             if time.time() - last > KLINE_HISTORY_REFRESH_SECONDS:
@@ -1033,6 +1053,7 @@ class Handler(BaseHTTPRequestHandler):
             self.push_event({"symbol": symbol, "bars": bars[-count:]})
             previous_frame = bars[-count:]
             last_full = time.monotonic()
+            last_trace = float('-inf')
             while True:
                 bars, next_version = KLINE_HUB.read(key, after_version=version, timeout=12)
                 now = time.monotonic()
@@ -1041,7 +1062,19 @@ class Handler(BaseHTTPRequestHandler):
                         symbol, previous_frame, bars, count,
                         force_full=(now - last_full >= 60))
                     if event is not None:
-                        self.push_event(event)
+                        received_at = KLINE_HUB.timing_for(key, next_version) if now - last_trace >= 2 else None
+                        if received_at is not None:
+                            sent_at = time.time()
+                            event["diag"] = {"version": next_version, "received_at": received_at,
+                                             "sent_at": sent_at}
+                            started = time.monotonic()
+                            self.push_event(event)
+                            print(f"QIHUI_LATENCY sse symbol={symbol} period={period} version={next_version} "
+                                  f"server_ms={(sent_at - received_at) * 1000:.1f} "
+                                  f"flush_ms={(time.monotonic() - started) * 1000:.1f}", flush=True)
+                            last_trace = now
+                        else:
+                            self.push_event(event)
                         if "bars" in event:
                             last_full = now
                     previous_frame = bars[-count:]

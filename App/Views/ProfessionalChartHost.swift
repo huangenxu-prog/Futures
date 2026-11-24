@@ -344,6 +344,8 @@ struct ProfessionalChartHost: View {
     @MainActor
     private func synchronizeBars(previous: [MarketBar], incoming: [MarketBar]) {
         guard !incoming.isEmpty else { return }
+        let modelStarted = ProcessInfo.processInfo.systemUptime
+        defer { KlineDiagnostics.chartUpdated(symbol: symbol, period: period, newest: incoming.last, started: modelStarted) }
         sessionAxis.register(incoming.map(\.time), period: period)
         if !drawingsRestored {
             restoreDrawings()

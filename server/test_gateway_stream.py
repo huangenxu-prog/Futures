@@ -45,6 +45,16 @@ class GatewayStreamingTests(unittest.TestCase):
         self.assertEqual(result, sample)
         new_connection.assert_not_called()
 
+    def test_live_timing_matches_only_current_version(self):
+        hub = gateway.SharedKlineHub()
+        key = ("CZCE.SR701", 900)
+        hub.publish(key, [{"time": 100, "close": 1}], received_at=1000.0)
+        self.assertEqual(hub.timing_for(key, 1), 1000.0)
+        self.assertIsNone(hub.timing_for(key, 0))
+        hub.publish(key, [{"time": 100, "close": 2}], history=True)
+        self.assertIsNone(hub.timing_for(key, 2))
+        self.assertIsNone(hub.timing_for(key, 1))
+
     def test_quote_publish_is_change_driven(self):
         hub = gateway.LiveQuoteHub()
         first = {"CZCE.SR": {"code": "CZCE.SR701", "month": "2701", "last": 5024.0}}

@@ -207,15 +207,25 @@ enum MarketDataService {
     }
 
     struct CandlePush: Decodable {
+        struct Timing: Decodable {
+            let version: Int
+            let received_at: Double
+            let sent_at: Double
+        }
         let symbol: String
         let bars: [MarketBar]?
         let bar: MarketBar?
+        let diag: Timing?
+        var phoneEpoch: Double? = nil
+        var phoneUptime: Double? = nil
+        private enum CodingKeys: String, CodingKey { case symbol, bars, bar, diag }
     }
 
     // Reads real server-sent events. Heartbeats carry no data and are ignored.
     // Ending the connection throws so the caller can reconnect or fall back to HTTP.
     private static func events<T: Decodable>(
         from endpoint: URL,
+        stamp: ((T, Double, Double) -> T)? = nil,
         onEvent: @MainActor @escaping (T) -> Void
     ) async throws {
         var request = URLRequest(url: endpoint)
@@ -228,10 +238,12 @@ enum MarketDataService {
         for try await line in bytes.lines {
             try Task.checkCancellation()
             guard line.hasPrefix("data:") else { continue }
+            let epoch = Date().timeIntervalSince1970
+            let uptime = ProcessInfo.processInfo.systemUptime
             let raw = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
             guard let data = raw.data(using: .utf8) else { continue }
             let value = try JSONDecoder().decode(T.self, from: data)
-            await onEvent(value)
+            await onEvent(stamp?(value, epoch, uptime) ?? value)
         }
         throw MarketDataError.invalidResponse
     }
@@ -253,7 +265,12 @@ enum MarketDataService {
                 URLQueryItem(name: "period", value: String(period)),
                 URLQueryItem(name: "count", value: String(count))
             ])
-        try await events(from: url, onEvent: onEvent)
+        try await events(from: url, stamp: { (event: CandlePush, epoch, uptime) in
+            var timed = event
+            timed.phoneEpoch = epoch
+            timed.phoneUptime = uptime
+            return timed
+        }, onEvent: onEvent)
     }
 
     /// Returns candles strictly older than `before`. The server progressively

@@ -316,8 +316,10 @@ struct InstrumentDetailView: View {
         let oldCount = candles.count
         let anchor = candles.indices.contains(Int(visibleStart)) ? candles[Int(visibleStart)].time : nil
         let fraction = visibleStart - floor(visibleStart)
+        let applyStarted = ProcessInfo.processInfo.systemUptime
         rawBars = updated
         candles = DemoCandle.from(updated)
+        KlineDiagnostics.record(event, period: periodSeconds, newest: updated.last, started: applyStarted)
         lastStreamCandleAt = Date()
         lastStreamCandleKey = chartKey
         // Retain the freshest authoritative bar while the parallel history
