@@ -54,7 +54,9 @@ struct LightMarketView: View {
     @State private var scope: Scope = .favorites
     @State private var search = ""
     @State private var editing = false
-    @State private var showingSettings = false
+    @AppStorage("qihui.appearance.mode.v1") private var appearanceMode = AppAppearanceMode.dark.rawValue
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var selectedInstrument: FuturesInstrument?
     @State private var selectedCategory = "全部"
     @State private var sortBy = "默认"
     @State private var onDemandQuotes: [String: MarketDataService.MainContract] = [:]
@@ -97,7 +99,7 @@ struct LightMarketView: View {
             : catalog.map(\.id)
         let available = Set(catalog.map(\.id))
         options = options.filter { available.contains($0) }
-        if let exchange = exchangeCode(for: selectedCategory) {
+        if scope != .favorites, let exchange = exchangeCode(for: selectedCategory) {
             let supported = Set(catalog.filter { $0.exchange == exchange }.map(\.id))
             options = options.filter { supported.contains($0) }
         }
@@ -164,7 +166,7 @@ struct LightMarketView: View {
                     || (quote(for: item.id)?.code.localizedCaseInsensitiveContains(keyword) ?? false)
             }
         }
-        if selectedCategory != "全部" {
+        if scope != .favorites, selectedCategory != "全部" {
             base = base.filter { $0.exchange == exchangeCode(for: selectedCategory) }
         }
         let order = scope == .rankings ? "涨幅" : sortBy
@@ -192,17 +194,12 @@ struct LightMarketView: View {
         return base
     }
 
-    private var connectedCount: Int {
-        catalog.filter { quote(for: $0.id)?.last != nil }.count
-    }
-
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                header
                 searchField
                 scopeSelector
-                categorySelector
+                if scope != .favorites { categorySelector }
                 columnHeadings
 
                 List {
@@ -210,7 +207,7 @@ struct LightMarketView: View {
                         marketRow(item)
                             .listRowBackground(MarketPalette.surface)
                             .listRowSeparatorTint(MarketPalette.divider)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 18, bottom: 0, trailing: 18))
+                            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 if favorites.ids.contains(item.id) {
                                     Button("移出自选", role: .destructive) { favorites.toggle(item.id) }
@@ -236,6 +233,12 @@ struct LightMarketView: View {
             }
             .background(MarketPalette.background.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(item: $selectedInstrument) { item in
+                InstrumentDetailView(instrument: item)
+                    .environment(\.mainContracts, contracts.merging(onDemandQuotes) {
+                        live, extra in live.last == nil ? extra : live
+                    })
+            }
             .task(id: quoteRequestKey) {
                 while !Task.isCancelled {
                     await refreshVisibleQuotes()
@@ -251,74 +254,47 @@ struct LightMarketView: View {
             }
         }
         .tint(MarketPalette.accent)
-        .sheet(isPresented: $showingSettings) {
-            AppearanceSettingsView()
-        }
+
     }
 
-    private var header: some View {
-        HStack(alignment: .bottom, spacing: 12) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("行情")
-                    .font(.system(size: 29, weight: .bold, design: .rounded))
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 15))
+                    .foregroundStyle(MarketPalette.muted)
+                TextField("搜索品种、代码", text: $search)
+                    .font(.system(size: 14))
                     .foregroundStyle(MarketPalette.ink)
-                Text("国内期货")
-                    .font(.system(size: 12))
-                    .foregroundStyle(MarketPalette.muted)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .accessibilityLabel("搜索期货品种")
+                if !search.isEmpty {
+                    Button { search = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(MarketPalette.muted)
+                    }
+                    .accessibilityLabel("清除搜索")
+                }
             }
-            Spacer()
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(connectedCount > 0 ? MarketPalette.down : MarketPalette.muted)
-                    .frame(width: 6, height: 6)
-                Text(connectedCount > 0 ? "天勤行情" : "等待行情")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MarketPalette.muted)
-            }
-            .padding(.bottom, 4)
+            .padding(.horizontal, 11)
+            .frame(height: 36)
+            .background(MarketPalette.surface, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(MarketPalette.divider, lineWidth: 1))
             Button {
-                showingSettings = true
+                appearanceMode = (colorScheme == .dark ? AppAppearanceMode.light : .dark).rawValue
             } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(MarketPalette.ink)
+                Image(systemName: colorScheme == .dark ? "sun.max" : "moon")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(MarketPalette.muted)
                     .frame(width: 36, height: 36)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("设置与外观")
+            .accessibilityLabel(colorScheme == .dark ? "切换浅色" : "切换深色")
         }
-        .padding(.horizontal, 19)
-        .padding(.top, 14)
-        .padding(.bottom, 17)
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 15))
-                .foregroundStyle(MarketPalette.muted)
-            TextField("搜索品种、代码", text: $search)
-                .font(.system(size: 15))
-                .foregroundStyle(MarketPalette.ink)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .accessibilityLabel("搜索期货品种")
-            if !search.isEmpty {
-                Button {
-                    search = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(MarketPalette.muted)
-                }
-                .accessibilityLabel("清除搜索")
-            }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 43)
-        .background(MarketPalette.surface, in: RoundedRectangle(cornerRadius: 11))
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(MarketPalette.divider, lineWidth: 1))
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 12)
+        .padding(.top, 3)
+        .padding(.bottom, 3)
     }
 
     private var scopeSelector: some View {
@@ -326,6 +302,7 @@ struct LightMarketView: View {
             ForEach(Scope.allCases, id: \.self) { option in
                 Button {
                     scope = option
+                    selectedCategory = "全部"
                     editing = false
                 } label: {
                     VStack(spacing: 9) {
@@ -363,8 +340,8 @@ struct LightMarketView: View {
             }
             .padding(.bottom, 6)
         }
-        .padding(.horizontal, 19)
-        .padding(.top, 19)
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
     }
 
     private var categorySelector: some View {
@@ -393,19 +370,28 @@ struct LightMarketView: View {
         .padding(.bottom, 7)
     }
 
+    private var showsFavoriteControl: Bool { scope != .favorites || !search.isEmpty }
+
+    // The header and every row share exactly the same column widths.
+    private let lastWidth: CGFloat = 64
+    private let changeWidth: CGFloat = 54
+    private let quantityWidth: CGFloat = 53
+
     private var columnHeadings: some View {
-        HStack {
-            Text("品种")
-            Spacer()
-            Text("最新价")
-                .frame(width: 90, alignment: .trailing)
-            Text("涨跌幅")
-                .frame(width: 82, alignment: .trailing)
+        HStack(spacing: 5) {
+            Text("品种").frame(maxWidth: .infinity, alignment: .leading)
+            Text("最新价").frame(width: lastWidth, alignment: .trailing)
+            Text("涨跌幅").frame(width: changeWidth, alignment: .trailing)
+            Text("成交量").frame(width: quantityWidth, alignment: .trailing)
+            Text("持仓").frame(width: quantityWidth, alignment: .trailing)
+            if showsFavoriteControl || editing {
+                Color.clear.frame(width: 23, height: 1)
+            }
         }
-        .font(.system(size: 11, weight: .medium))
+        .font(.system(size: 10, weight: .medium))
         .foregroundStyle(MarketPalette.muted)
-        .padding(.horizontal, 19)
-        .frame(height: 39)
+        .padding(.horizontal, 12)
+        .frame(height: 33)
         .background(MarketPalette.background)
         .overlay(alignment: .bottom) {
             Rectangle().fill(MarketPalette.divider).frame(height: 1)
@@ -415,58 +401,67 @@ struct LightMarketView: View {
     private func marketRow(_ item: FuturesInstrument) -> some View {
         let quote = quote(for: item.id)
         let isFavorite = favorites.ids.contains(item.id)
-        return HStack(spacing: 8) {
-            NavigationLink {
-                InstrumentDetailView(instrument: item)
-                    .environment(\.mainContracts,
-                                 contracts.merging(onDemandQuotes) {
-                                     live, extra in live.last == nil ? extra : live
-                                 })
+        return HStack(spacing: 5) {
+            Button {
+                if !editing { selectedInstrument = item }
             } label: {
-                HStack(spacing: 9) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(item.name + (quote?.month ?? ""))
-                            .font(.system(size: 16, weight: .semibold))
+                HStack(spacing: 5) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.name + (quote.map { " " + $0.month } ?? ""))
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(MarketPalette.ink)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.8)
+                            .minimumScaleFactor(0.68)
                         Text(quote?.code ?? item.id)
-                            .font(.system(size: 10, design: .monospaced))
+                            .font(.system(size: 9, design: .monospaced))
                             .foregroundStyle(MarketPalette.muted)
                             .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                     }
-                    Spacer(minLength: 0)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     Text(quote?.last?.formatted() ?? "--")
-                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
                         .foregroundStyle(MarketPalette.movement(quote?.change))
                         .monospacedDigit()
-                        .frame(width: 88, alignment: .trailing)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
+                        .frame(width: lastWidth, alignment: .trailing)
                     Text(quote?.changePercent ?? "--")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(MarketPalette.movement(quote?.change))
                         .monospacedDigit()
-                        .frame(width: 75, alignment: .trailing)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .frame(width: changeWidth, alignment: .trailing)
+                    quantityCell(quote?.volume)
+                    quantityCell(quote?.interest)
                 }
-                .frame(height: 67)
+                .frame(height: 57)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            // In the normal favorites list the star is redundant. Keep
-            // it visible in catalog/rankings and global search results.
-            if scope != .favorites || !search.isEmpty {
-                Button {
-                    favorites.toggle(item.id)
-                } label: {
+            if showsFavoriteControl {
+                Button { favorites.toggle(item.id) } label: {
                     Image(systemName: isFavorite ? "star.fill" : "star")
-                        .font(.system(size: 14))
+                        .font(.system(size: 12))
                         .foregroundStyle(isFavorite ? MarketPalette.accent : MarketPalette.muted)
-                        .frame(width: 25, height: 43)
+                        .frame(width: 23, height: 40)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel(isFavorite ? "移出自选" : "加入自选")
             }
         }
+    }
+
+    private func quantityCell(_ value: Double?) -> some View {
+        Text(CompactMarketQuantity.format(value))
+            .font(.system(size: 11, weight: .medium, design: .rounded))
+            .foregroundStyle(MarketPalette.ink)
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.65)
+            .frame(width: quantityWidth, alignment: .trailing)
     }
 
     private func move(from source: IndexSet, to destination: Int) {

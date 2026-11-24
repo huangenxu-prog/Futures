@@ -33,10 +33,7 @@ struct ProfessionalChartHost: View {
         configuration.maxLiveBarCount = nil
         configuration.showsLegend = true
         configuration.showsHighLowMarkers = true
-        configuration.stylePicker = StylePickerOptions(
-            titles: [.line: "折线图", .area: "面积图", .candles: "K线图"],
-            accessibilityLabel: "图表类型"
-        )
+        configuration.stylePicker = nil
         configuration.isDrawingEnabled = true
         configuration.isCrosshairEnabled = true
         configuration.isZoomEnabled = true
@@ -47,6 +44,7 @@ struct ProfessionalChartHost: View {
         configuration.persistence = ChartPersistence(
             key: "qihui.chart.indicators-and-style",
             indicatorCatalog: [],
+            persistsStyle: false,
             persistsIndicators: false
         )
         chart.configuration = configuration
@@ -197,6 +195,7 @@ struct ProfessionalChartHost: View {
         .tradingChartStrings(chartStrings)
         .background(MarketPalette.surface)
         .onAppear {
+            model.style = .candles
             model.indicators = displaySettings.indicators()
             configureChart()
             feed.attach(key: feedKey, owner: feedOwner, fallback: bars,

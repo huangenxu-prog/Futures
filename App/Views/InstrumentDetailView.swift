@@ -18,6 +18,8 @@ struct InstrumentDetailView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @State private var period = "15分"
+    @AppStorage("qihui.chart.period-order.v1") private var storedPeriodOrder = ""
+    @State private var showPeriodOrder = false
     @State private var rawBars: [MarketBar] = []
     @State private var chartFeed = DirectChartFeed<[MarketBar]>()
     @State private var liveQuote: MarketDataService.MainContract?
@@ -25,7 +27,17 @@ struct InstrumentDetailView: View {
     @State private var loadError: String? = nil
     @State private var loading = false
     @State private var currentPriceTick: Double?
-    private let periods = ["1分","5分","15分","30分","60分","日线"]
+    private static let defaultPeriods = ["1分","5分","15分","30分","60分","日线"]
+    private var periods: [String] {
+        var result: [String] = []
+        for item in storedPeriodOrder.split(separator: ",").map(String.init) + Self.defaultPeriods {
+            if Self.defaultPeriods.contains(item), !result.contains(item) { result.append(item) }
+        }
+        return result
+    }
+    private func periodLabel(_ item: String) -> String {
+        ["1分":"1m", "5分":"5m", "15分":"15m", "30分":"30m", "60分":"1h", "日线":"日"][item] ?? item
+    }
     private var quote: MarketDataService.MainContract? { liveQuote ?? contracts[instrument.id] }
     private var chartSymbol: String { selectedContract?.code ?? quote?.code ?? instrument.id }
     private var chartKey: String { chartSymbol + "/" + period }
@@ -39,12 +51,17 @@ struct InstrumentDetailView: View {
     private var changeText: String { selectedContract?.changePercent ?? quote?.changePercent ?? "--" }
     private var periodSeconds: Int { ["1分":60,"5分":300,"15分":900,"30分":1800,"60分":3600,"日线":86400][period] ?? 900 }
     var body: some View {
-        GeometryReader { geometry in
-            let quoteHeight: CGFloat = 62
-            let professionalChartHeight = max(32, geometry.size.height - 43 - quoteHeight - 18 - 11)
-            VStack(spacing: 3) {
+        VStack(spacing: 3) {
                 topBar
-                indicatorRow
+                priceSummary
+                marketStatistics
+                periodRow
+                if let timestamp = selectedCandleTime,
+                   let candle = rawBars.first(where: { $0.time == timestamp }) {
+                    selectedCandleInfo(candle)
+                        .padding(.horizontal, 8)
+                        .frame(height: 15)
+                }
                 if loading && rawBars.isEmpty {
                     Spacer()
                     ProgressView("正在获取行情")
@@ -62,15 +79,13 @@ struct InstrumentDetailView: View {
                         selectedCandleTime: $selectedCandleTime
                     )
                     .id(chartKey)
-                    .frame(height: professionalChartHeight)
+                    .frame(maxHeight: .infinity)
                 } else {
                     Spacer()
                 }
-                quoteStrip
-            }
-            .padding(.horizontal, 3)
-            .padding(.top, 2)
         }
+        .padding(.horizontal, 3)
+        .padding(.top, 2)
         .background(MarketPalette.surface.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .task(id: chartSymbol) {
@@ -134,6 +149,11 @@ struct InstrumentDetailView: View {
             OptionChainView(code: chartSymbol, underlyingLast: rawBars.last?.close ?? selectedContract?.last ?? quote?.last)
         }
         .sheet(isPresented: $showContracts) { ContractListView(instrument: instrument) }
+        .sheet(isPresented: $showPeriodOrder) {
+            PeriodOrderView(order: periods, label: periodLabel) { updated in
+                storedPeriodOrder = updated.joined(separator: ",")
+            }
+        }
         .onAppear {
             NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true)
         }
@@ -247,68 +267,97 @@ struct InstrumentDetailView: View {
     }
 
     private var topBar: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
             Button { dismiss() } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 16, weight: .medium))
-                    .frame(width: 25, height: 36)
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 28, height: 34)
+                    .contentShape(Rectangle())
             }
-            Text(instrument.name + (selectedContract?.month ?? contracts[instrument.id]?.month ?? ""))
-                .font(.system(size: 14, weight: .semibold))
+            .buttonStyle(.plain)
+            Text(instrument.name + (selectedContract?.month ?? quote?.month ?? ""))
+                .font(.system(size: 17, weight: .semibold))
                 .lineLimit(1)
             Text(selectedContract?.code ?? quote?.code ?? (instrument.id + " 主连"))
-                .font(.system(size: 10))
+                .font(.system(size: 11))
                 .foregroundStyle(MarketPalette.muted)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-            Spacer(minLength: 1)
-            Text(((displayedKey == chartKey ? rawBars.last?.close : nil) ?? selectedContract?.last ?? quote?.last)?.formatted() ?? "--")
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                .foregroundStyle(changeColor)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-            Text(changeText)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(changeColor)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-            Menu {
-                ForEach(periods, id: \.self) { p in Button(p) { period = p } }
-            } label: {
-                Text(period + "⌄")
-                    .font(.system(size: 12, weight: .semibold))
-                    .padding(.horizontal, 7).padding(.vertical, 7)
-                    .background(MarketPalette.background, in: Capsule())
-            }
-
+            Spacer(minLength: 0)
         }
         .foregroundStyle(MarketPalette.ink)
-        .padding(.horizontal, 4)
-        .frame(height: 43)
+        .padding(.horizontal, 7)
+        .frame(height: 34)
     }
+
+    private var priceSummary: some View {
+        HStack(alignment: .center, spacing: 7) {
+            Text(((displayedKey == chartKey ? rawBars.last?.close : nil) ?? selectedContract?.last ?? quote?.last)?.formatted() ?? "--")
+                .font(.system(size: 30, weight: .semibold, design: .rounded))
+                .foregroundStyle(changeColor)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+                .layoutPriority(1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(changeText)
+                Text(displayedChange.map { ($0 > 0 ? "+" : "") + $0.formatted() } ?? "--")
+            }
+            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .foregroundStyle(changeColor)
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            Spacer(minLength: 4)
+            VStack(spacing: 4) {
+                smallQuote("卖1", contractQuote(quote?.ask, selectedContract?.ask), MarketPalette.ink)
+                smallQuote("买1", contractQuote(quote?.bid, selectedContract?.bid), MarketPalette.ink)
+            }
+            .frame(width: 99)
+        }
+        .padding(.horizontal, 10)
+        .frame(minHeight: 45)
+    }
+
+    private var marketStatistics: some View {
+        HStack(spacing: 10) {
+            smallQuote("成交", CompactMarketQuantity.format(selectedContract == nil ? quote?.volume : selectedContract?.volume), MarketPalette.ink)
+            smallQuote("持仓", CompactMarketQuantity.format(selectedContract == nil ? quote?.interest : selectedContract?.interest), MarketPalette.ink)
+            smallQuote("增仓", selectedContract == nil ? (quote?.interestChange?.formatted() ?? "--") : "--", MarketPalette.ink)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 24)
+    }
+
+    private var periodRow: some View {
+        HStack(spacing: 3) {
+            ForEach(periods, id: \.self) { item in
+                Button { period = item } label: {
+                    Text(periodLabel(item))
+                        .font(.system(size: 13, weight: period == item ? .semibold : .medium))
+                        .foregroundStyle(period == item ? Color.white : MarketPalette.muted)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 29)
+                        .background(period == item ? MarketPalette.accent : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(period == item ? .isSelected : [])
+            }
+            actions
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .overlay(alignment: .top) { quoteSeparator }
+        .overlay(alignment: .bottom) { quoteSeparator }
+    }
+
     private func timeLabel(_ timestamp: Int64) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(timestamp))
         let formatter = DateFormatter()
         formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
         formatter.dateFormat = period == "日线" ? "MM/dd" : "MM/dd HH:mm"
         return formatter.string(from: date)
-    }
-    private var indicatorRow: some View {
-            HStack(spacing: 5) {
-                if let timestamp = selectedCandleTime,
-                   let candle = rawBars.first(where: { $0.time == timestamp }) {
-                    selectedCandleInfo(candle)
-                } else {
-                    Text("技术分析").foregroundStyle(MarketPalette.muted)
-                }
-                Spacer(minLength: 0)
-                actions
-            }
-            .font(.system(size: 10, weight: .medium))
-            .frame(height: 18, alignment: .leading)
-            .clipped()
     }
     private func selectedCandleInfo(_ candle: MarketBar) -> some View {
         HStack(spacing: 5) {
@@ -335,34 +384,19 @@ struct InstrumentDetailView: View {
                 .disabled(selectedContract == nil && quote == nil)
             Button("指标参数设置") { showChartIndicatorSettings = true }
             Button("选择合约月份") { showContracts = true }
+            Button("周期排序") { showPeriodOrder = true }
         } label: {
-            Image(systemName: "ellipsis").frame(width: 38, height: 24)
+            Image(systemName: "ellipsis")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(MarketPalette.ink)
+                .frame(width: 32, height: 29)
+                .contentShape(Rectangle())
         }
         .accessibilityLabel("合约菜单")
     }
 
     private func contractQuote(_ mainValue: Double?, _ otherValue: Double?) -> String {
         (selectedContract == nil ? mainValue : otherValue)?.formatted() ?? "--"
-    }
-
-    private var quoteStrip: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                smallQuote("卖1", contractQuote(quote?.ask, selectedContract?.ask), MarketPalette.ink)
-                smallQuote("买1", contractQuote(quote?.bid, selectedContract?.bid), MarketPalette.ink)
-                smallQuote("持仓", contractQuote(quote?.interest, selectedContract?.interest), MarketPalette.ink)
-            }
-            .frame(height: 31)
-            .overlay(alignment: .top) { quoteSeparator }
-            HStack(spacing: 12) {
-                smallQuote("成交", contractQuote(quote?.volume, selectedContract?.volume), MarketPalette.ink)
-                smallQuote("增仓", selectedContract == nil ? (quote?.interestChange?.formatted() ?? "--") : "--", MarketPalette.ink)
-                smallQuote("幅度", changeText, changeColor)
-            }
-            .frame(height: 31)
-            .overlay(alignment: .top) { quoteSeparator }
-        }
-        .padding(.horizontal, 6)
     }
 
     private var quoteSeparator: some View {
@@ -375,11 +409,44 @@ struct InstrumentDetailView: View {
             Spacer(minLength: 1)
             Text(value).foregroundStyle(tint)
         }
-        .font(.system(size: 10, weight: .medium, design: .rounded))
+        .font(.system(size: 11, weight: .medium, design: .rounded))
         .monospacedDigit()
         .lineLimit(1)
         .minimumScaleFactor(0.65)
         .frame(maxWidth: .infinity)
     }
 
+}
+
+
+/// Reorder the existing supported periods without introducing new server intervals.
+private struct PeriodOrderView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State var order: [String]
+    let label: (String) -> String
+    let onSave: ([String]) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(order, id: \.self) { item in
+                    Text(label(item))
+                }
+                .onMove { source, destination in
+                    order.move(fromOffsets: source, toOffset: destination)
+                }
+            }
+            .environment(\.editMode, .constant(.active))
+            .navigationTitle("周期排序")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { onSave(order); dismiss() }
+                }
+            }
+        }
+    }
 }
