@@ -63,7 +63,7 @@ struct StrategyBacktestView: View {
                     }
                 }
                 Section("模拟账户") {
-                    LabeledContent("初始本金","¥50,000")
+                    LabeledContent("初始本金",value:"¥50,000")
                     Picker("目标历史长度",selection:$historyCount) {
                         Text("500根").tag(500)
                         Text("1200根").tag(1200)
@@ -100,17 +100,17 @@ struct StrategyBacktestView: View {
                 }
                 if let result {
                     Section("回测结果") {
-                        LabeledContent("期末权益",result.final.formatted(.currency(code:"CNY")))
-                        LabeledContent("净盈亏",(result.final-result.initial).formatted(.currency(code:"CNY")))
-                        LabeledContent("收益率",((result.final/result.initial)-1).formatted(.percent.precision(.fractionLength(2))))
-                        LabeledContent("胜率",result.winRate.map{$0.formatted(.percent.precision(.fractionLength(1)))} ?? "无成交")
-                        LabeledContent("交易次数",String(result.trades.count))
-                        LabeledContent("盈利 / 亏损 / 保本","\(result.wins) / \(result.losses) / \(result.breakevens)")
-                        LabeledContent("盈利因子",result.profitFactor.map{$0.formatted(.number.precision(.fractionLength(2)))} ?? "—")
-                        LabeledContent("最大回撤",result.maxDrawdown.formatted(.percent.precision(.fractionLength(2))))
-                        LabeledContent("拒绝入场",String(result.rejected))
-                        LabeledContent("同根止盈止损冲突",String(result.ambiguous))
-                        LabeledContent("模拟保证金不足",String(result.marginCalls))
+                        LabeledContent("期末权益",value:result.final.formatted(.currency(code:"CNY")))
+                        LabeledContent("净盈亏",value:(result.final-result.initial).formatted(.currency(code:"CNY")))
+                        LabeledContent("收益率",value:((result.final/result.initial)-1).formatted(.percent.precision(.fractionLength(2))))
+                        LabeledContent("胜率",value:result.winRate.map{$0.formatted(.percent.precision(.fractionLength(1)))} ?? "无成交")
+                        LabeledContent("交易次数",value:String(result.trades.count))
+                        LabeledContent("盈利 / 亏损 / 保本",value:"\(result.wins) / \(result.losses) / \(result.breakevens)")
+                        LabeledContent("盈利因子",value:result.profitFactor.map{$0.formatted(.number.precision(.fractionLength(2)))} ?? "—")
+                        LabeledContent("最大回撤",value:result.maxDrawdown.formatted(.percent.precision(.fractionLength(2))))
+                        LabeledContent("拒绝入场",value:String(result.rejected))
+                        LabeledContent("同根止盈止损冲突",value:String(result.ambiguous))
+                        LabeledContent("模拟保证金不足",value:String(result.marginCalls))
                         Text(coverage).font(.caption).foregroundStyle(.secondary)
                         Chart(Array(result.equity.enumerated()),id:\.offset) { item in
                             LineMark(x:.value("K线",item.offset),y:.value("权益",item.element))

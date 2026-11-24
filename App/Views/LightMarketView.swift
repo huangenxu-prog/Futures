@@ -57,6 +57,7 @@ struct LightMarketView: View {
     @AppStorage("qihui.appearance.mode.v1") private var appearanceMode = AppAppearanceMode.dark.rawValue
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedInstrument: FuturesInstrument?
+    @State private var showingStrategyCenter = false
     @State private var selectedCategory = "全部"
     @State private var sortBy = "默认"
     @State private var onDemandQuotes: [String: MarketDataService.MainContract] = [:]
@@ -239,6 +240,10 @@ struct LightMarketView: View {
                         live, extra in live.last == nil ? extra : live
                     })
             }
+            .sheet(isPresented:$showingStrategyCenter) {
+                StrategyCenterView(instruments:catalog, favoriteIDs:favorites.ids,
+                                   mainCodes:contracts.merging(onDemandQuotes) { live,extra in live.last == nil ? extra : live }.mapValues(\.code))
+            }
             .task(id: quoteRequestKey) {
                 while !Task.isCancelled {
                     await refreshVisibleQuotes()
@@ -280,6 +285,21 @@ struct LightMarketView: View {
             .frame(height: 36)
             .background(MarketPalette.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(MarketPalette.divider, lineWidth: 1))
+            Button {
+                showingStrategyCenter = true
+            } label: {
+                HStack(spacing:3) {
+                    Image(systemName:"chart.xyaxis.line")
+                        .font(.system(size:15,weight:.medium))
+                    Text("策略").font(.system(size:13,weight:.medium))
+                }
+                .foregroundStyle(MarketPalette.accent)
+                .frame(height:36)
+                .padding(.horizontal,3)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("策略中心")
             Button {
                 appearanceMode = (colorScheme == .dark ? AppAppearanceMode.light : .dark).rawValue
             } label: {
