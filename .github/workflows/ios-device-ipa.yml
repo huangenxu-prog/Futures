@@ -35,6 +35,10 @@ jobs:
           swiftc App/Models/KlineCorrectionPolicy.swift scripts/KlineCorrectionSelfTest.swift -o /tmp/kline-correction-test
           /tmp/kline-correction-test
 
+      - name: Verify parallel cached-history and SSE merge
+        run: |
+          swiftc App/Models/KlineStartupMerge.swift scripts/KlineStartupMergeSelfTest.swift -o /tmp/kline-startup-merge-test
+          /tmp/kline-startup-merge-test
       - name: Generate app icon asset
         run: swift scripts/generate-app-icon.swift
 

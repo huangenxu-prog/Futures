@@ -48,7 +48,7 @@ struct InstrumentDetailView: View {
     @State private var displayedKey = ""
     @State private var lastStreamCandleAt: Date?
     @State private var lastStreamCandleKey: String?
-    @State private var realtimeRevision = 0
+    @State private var mostRecentStreamBar: MarketBar?
     @State private var lastCachedCandleAt: Date?
 
     // TqSdk quote datetimes are exchange-local (China Standard Time).
@@ -142,13 +142,10 @@ struct InstrumentDetailView: View {
             if displayedKey != key {
                 prepareCachedCandles(symbol: symbol, period: seconds)
             }
-            // Start the live feed immediately; do not block it behind a new
-            // TqSdk HTTP snapshot, which can take many seconds to initialize.
-            // Recover a small first-page snapshot promptly if SSE never yields.
+            // The VPS has already prefetched the historical series. Request
+            // that snapshot immediately and independently of the SSE setup.
+            // The phone's own cache was displayed above with no network wait.
             let initialSnapshot = Task { @MainActor in
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
-                guard !Task.isCancelled, chartKey == key,
-                      lastStreamCandleKey != key else { return }
                 await loadCandles(reset: false)
             }
             defer { initialSnapshot.cancel() }
@@ -161,10 +158,8 @@ struct InstrumentDetailView: View {
                 } catch is CancellationError {
                     return
                 } catch {
-                    // Stream failure is not proof of stale TqSdk data. Use an
-                    // HTTP snapshot, then retry promptly instead of pausing 30s.
-                    initialSnapshot.cancel()
-                    await loadCandles(reset: false)
+                    // The independent HTTP snapshot is already in progress.
+                    // Retry SSE without creating a duplicate 25-second request.
                     do { try await Task.sleep(for: .seconds(3)) } catch { return }
                 }
             }
@@ -191,7 +186,7 @@ struct InstrumentDetailView: View {
         displayedKey = chartKey
         lastStreamCandleAt = nil
         lastStreamCandleKey = nil
-        realtimeRevision = 0
+        mostRecentStreamBar = nil
         lastCachedCandleAt = nil
         if let cached = MarketDataService.cached(symbol: symbol, period: period) {
             rawBars = cached
@@ -218,22 +213,31 @@ struct InstrumentDetailView: View {
         let requestedPeriod = periodSeconds
         let symbol = chartSymbol
         if reset { prepareCachedCandles(symbol: symbol, period: requestedPeriod) }
-        let revisionAtRequest = realtimeRevision
+        let requestedKey = chartKey
         loadError = nil
         loading = candles.isEmpty
         defer { if !Task.isCancelled { loading = false } }
         do {
-            let bars = try await MarketDataService.fetch(symbol: symbol, period: requestedPeriod, count: 120)
+            let bars = try await MarketDataService.fetch(symbol: symbol, period: requestedPeriod, count: 500)
             try Task.checkCancellation()
             guard symbol == chartSymbol, requestedPeriod == periodSeconds,
-                  revisionAtRequest == realtimeRevision else { return }
+                  displayedKey == requestedKey else { return }
+            // SSE may have delivered newer ticks while HTTP was in flight.
+            // History wins over an older phone cache, but a newer live bar
+            // must not be rolled back by the later HTTP completion.
+            let merged = KlineStartupMerge.combine(
+                server: bars, existing: rawBars,
+                live: lastStreamCandleKey == requestedKey ? mostRecentStreamBar : nil,
+                timestamp: { $0.time })
             let wasEmpty = candles.isEmpty
             let wasAtLatest = visibleStart + visibleCount >= Double(candles.count) - 1
             let oldCount = candles.count
             let anchor = candles.indices.contains(Int(visibleStart)) ? candles[Int(visibleStart)].time : nil
             let fraction = visibleStart - floor(visibleStart)
-            rawBars = bars
-            candles = DemoCandle.from(bars)
+            guard !merged.isEmpty else { return }
+            rawBars = merged
+            candles = DemoCandle.from(merged)
+            MarketDataService.cache(merged, symbol: symbol, period: requestedPeriod)
             showingCachedData = false
             if wasEmpty {
                 visibleCount = Double(min(100, candles.count))
@@ -278,7 +282,6 @@ struct InstrumentDetailView: View {
         next[next.count - 1] = candidate
         rawBars = next
         candles = DemoCandle.from(next)
-        realtimeRevision &+= 1
     }
 
     @MainActor
@@ -317,7 +320,12 @@ struct InstrumentDetailView: View {
         candles = DemoCandle.from(updated)
         lastStreamCandleAt = Date()
         lastStreamCandleKey = chartKey
-        realtimeRevision &+= 1
+        // Retain the freshest authoritative bar while the parallel history
+        // request is pending; never let a late HTTP result roll it back.
+        if let newest = event.bar ?? event.bars?.max(by: { $0.time < $1.time }),
+           mostRecentStreamBar == nil || newest.time >= mostRecentStreamBar!.time {
+            mostRecentStreamBar = newest
+        }
         // Save the first authoritative live frame and occasionally refresh it.
         // Throttling prevents thousands of writes per trading session.
         let now = Date()
