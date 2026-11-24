@@ -58,7 +58,11 @@ struct PaperOrder:Identifiable,Codable,Equatable,Sendable {
     let quantity:Int
     let created:Date
     var status:PaperOrderStatus
-    var actionTitle:String { (direction == .buy ? "买" : "卖") + (offset == .open ? "开" : "平") }
+    var actionTitle:String { PaperOrder.actionTitle(direction:direction,offset:offset) }
+    static func actionTitle(direction:PaperDirection,offset:PaperOffset)->String {
+        let long = offset == .open ? direction == .buy : direction == .sell
+        return (offset == .open ? "开" : "平") + (long ? "多" : "空")
+    }
     var side:PaperPositionSide {
         (offset == .open ? direction == .buy : direction == .sell) ? .long : .short
     }
@@ -76,6 +80,16 @@ struct PaperFill:Identifiable,Codable,Equatable,Sendable {
     let orderID:UUID
     let symbol:String
     let action:String
+    // Preserve saved fills from earlier versions while normalizing display.
+    var displayAction:String {
+        switch action {
+        case "买开","买入开仓":return "开多"
+        case "卖开","卖出开仓":return "开空"
+        case "卖平","卖出平仓":return "平多"
+        case "买平","买入平仓":return "平空"
+        default:return action
+        }
+    }
     let price:Double
     let quantity:Int
     let realized:Double

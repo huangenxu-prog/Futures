@@ -191,7 +191,7 @@ struct TradingCenterView:View {
             if ledger.fills.isEmpty {Text("暂无成交").foregroundStyle(.secondary)}
             ForEach(ledger.fills.reversed()){fill in
                 VStack(alignment:.leading,spacing:5){
-                    HStack{Text(fill.symbol).fontWeight(.semibold);Spacer();Text(fill.action)}
+                    HStack{Text(fill.symbol).fontWeight(.semibold);Spacer();Text(fill.displayAction)}
                     Text("\(fill.quantity)手 @ \(fill.price.formatted()) · 手续费 \(money(fill.fee))").font(.caption)
                     Text("平仓盈亏 \(money(fill.realized)) · \(fill.time.formatted(date:.omitted,time:.standard))").font(.caption).foregroundStyle(.secondary)
                 }
@@ -243,7 +243,7 @@ private struct PaperOrderTicket:View {
         let price:Double
         let quantity:Int
         var id:String { direction.rawValue+offset.rawValue }
-        var title:String { (direction == .buy ? "买" : "卖") + (offset == .open ? "开" : "平") }
+        var title:String { PaperOrder.actionTitle(direction:direction,offset:offset) }
     }
 
     init(contract:PaperContract,ledger:PaperLedger,preferredDirection:PaperDirection,preferredOffset:PaperOffset,onSubmit:@escaping(PaperDirection,PaperOffset,Double,Int)throws->Void) {
@@ -342,10 +342,10 @@ private struct PaperOrderTicket:View {
     }
     private var actionRow:some View {
         HStack(spacing:7) {
-            actionButton(.buy,.open,"买开",MarketPalette.up)
-            actionButton(.sell,.open,"卖开",MarketPalette.down)
-            actionButton(.buy,.close,"买平",MarketPalette.up)
-            actionButton(.sell,.close,"卖平",MarketPalette.down)
+            actionButton(.buy,.open,"开多",MarketPalette.up)
+            actionButton(.sell,.open,"开空",MarketPalette.down)
+            actionButton(.sell,.close,"平多",MarketPalette.down)
+            actionButton(.buy,.close,"平空",MarketPalette.up)
         }
     }
     private func actionButton(_ direction:PaperDirection,_ offset:PaperOffset,_ title:String,_ tint:Color)->some View {
