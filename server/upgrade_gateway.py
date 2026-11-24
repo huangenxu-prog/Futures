@@ -15,8 +15,8 @@ from urllib.request import urlopen
 
 ROOT = Path("/root/tq_test")
 SCRIPT = ROOT / "server/market_gateway.py"
-VERSION = "05f405b3e88adcaa8af0c01e0f73579c458b6c70"
-GIT_BLOB_SHA = "9e82fc63c7b4bd2b7b8f9f49b29610156ba1b55d"
+VERSION = "866007aa9aa4e24b5eb7702f0b07b0586fcd54e3"
+GIT_BLOB_SHA = "427da33b02c1ecbf3627c3c7d5f2cc250eed3c2d"
 
 
 def existing():
