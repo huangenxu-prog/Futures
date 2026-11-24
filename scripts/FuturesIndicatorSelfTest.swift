@@ -26,7 +26,11 @@ struct FuturesIndicatorSelfTest {
         let a = FuturesIndicatorMath.kdj(changed,period:2,kPeriod:3,dPeriod:3)
         precondition(Array(a.k.dropLast()) == Array(kdj.k.dropLast()))
         precondition(a.k.last! != kdj.k.last!)
-        let long = (0..<9000).map { i in Bar(high: Double(100+i%11),low:Double(90+i%11),close:Double(95+i%11)) }
+        var long: [Bar] = []
+        for i in 0..<9000 {
+            let offset = Double(i % 11)
+            long.append(Bar(high: 100 + offset, low: 90 + offset, close: 95 + offset))
+        }
         let out = FuturesIndicatorMath.kdj(long,period:500,kPeriod:3,dPeriod:3)
         precondition(out.j.compactMap{$0}.count == 8501)
         precondition(out.j.compactMap{$0}.allSatisfy{$0.isFinite})
