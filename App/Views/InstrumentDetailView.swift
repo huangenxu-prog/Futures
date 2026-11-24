@@ -319,18 +319,8 @@ struct InstrumentDetailView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("切换合约月份")
             Spacer(minLength: 2)
-            Button("期权") { showOptions = true }
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(MarketPalette.accent)
-                .fixedSize()
-                .frame(minWidth: 40, minHeight: 34)
-                .disabled(selectedContract == nil && quote == nil)
-            Button("下单") { openTrade() }
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(MarketPalette.accent)
-                .fixedSize()
-                .frame(minWidth: 40, minHeight: 34)
-                .disabled(selectedContract == nil && quote == nil)
+            headerAction("期权") { showOptions = true }
+            headerAction("下单") { openTrade() }
             Button { favorites.toggle(instrument.id) } label: {
                 Image(systemName: favorites.ids.contains(instrument.id) ? "star.fill" : "star")
                     .font(.system(size: 12))
@@ -344,6 +334,23 @@ struct InstrumentDetailView: View {
         .foregroundStyle(MarketPalette.ink)
         .padding(.horizontal, 7)
         .frame(height: 34)
+    }
+
+    private func headerAction(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(MarketPalette.ink)
+                .fixedSize()
+                .frame(minWidth: 44, minHeight: 25)
+                .overlay {
+                    Capsule().strokeBorder(MarketPalette.muted.opacity(0.65), lineWidth: 1)
+                }
+                .frame(minHeight: 34)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(selectedContract == nil && quote == nil)
     }
 
     private var priceSummary: some View {
