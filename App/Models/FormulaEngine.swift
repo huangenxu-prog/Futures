@@ -46,9 +46,17 @@ private struct FormulaStatement: Sendable {
     let drawing: Bool
 }
 
+struct FormulaSegment: Sendable, Equatable {
+    let startIndex: Int
+    let endIndex: Int
+    let startValue: Double
+    let endValue: Double
+}
+
 enum FormulaDrawing: Sendable {
     case stick(starts: [Double?], width: Double, hollow: Bool)
     case signal(text: String)
+    case segments([FormulaSegment])
 }
 
 struct FormulaOutput: Sendable {
@@ -114,10 +122,37 @@ struct FormulaProgram: Sendable {
 
     private static func draw(_ statement: FormulaStatement, _ env: [String:[Double?]], _ n: Int) throws -> FormulaOutput {
         guard case .call(let name, let args) = statement.expr else { throw FormulaFailure("无效绘图语句") }
-        let required = name == "STICKLINE" ? 5 : 3
+        let required = name == "STICKLINE" || name == "DRAWLINE" ? 5 : 3
         guard args.count == required else { throw FormulaFailure("\(name) 需要 \(required) 个参数") }
         let condition = try eval(args[0],env,n)
         let first = try eval(args[1],env,n)
+        if name == "DRAWLINE" {
+            let endCondition = try eval(args[2],env,n)
+            let endValue = try eval(args[3],env,n)
+            guard case .constant(let extend) = args[4], extend == 0 else {
+                throw FormulaFailure("DRAWLINE 当前仅支持 EXTEND=0（不延长）")
+            }
+            // Pair the latest valid start with the first strictly later end.
+            // A completed segment is historical annotation: it appears only
+            // when its end is known, not as a signal at the earlier start.
+            var start: (index:Int,value:Double)?
+            var segments: [FormulaSegment] = []
+            var values = [Double?](repeating:nil,count:n)
+            for i in 0..<n {
+                if let c = endCondition[i], c != 0, let value = endValue[i],
+                   let pending = start, pending.index < i {
+                    segments.append(FormulaSegment(startIndex:pending.index,endIndex:i,
+                        startValue:pending.value,endValue:value))
+                    values[i] = value
+                    start = nil
+                }
+                if let c = condition[i], c != 0, let value = first[i] {
+                    start = (i,value)
+                }
+            }
+            return FormulaOutput(name:name,values:values,color:statement.color,width:statement.width,
+                                 histogram:false,drawing:.segments(segments))
+        }
         if name == "STICKLINE" {
             let second = try eval(args[2],env,n)
             guard case .constant(let width) = args[3], (0...10).contains(width),
@@ -230,12 +265,59 @@ struct FormulaProgram: Sendable {
             let arity: [String:Int] = [
                 "MA":2,"EMA":2,"SMA":3,"WMA":2,"HMA":2,"DEMA":2,"TEMA":2,"DMA":2,"WILDER":2,
                 "HHV":2,"LLV":2,"SUM":2,"STD":2,
-                "REF":2,"COUNT":2,"IF":3,"CROSS":2,"BARSLAST":1,"ABS":1,"MAX":2,"MIN":2
+                "REF":2,"COUNT":2,"IF":3,"CROSS":2,"BARSLAST":1,"ABS":1,"MAX":2,"MIN":2,
+                "VALUEWHEN":2,"FILTER":2,"HHVBARS":2,"LLVBARS":2,"EXIST":2,"EVERY":2,"NOT":1,"BARSCOUNT":1
             ]
             guard let expected = arity[fn] else { throw FormulaFailure("暂不支持函数：\(fn)") }
             guard args.count == expected else { throw FormulaFailure("\(fn) 需要 \(expected) 个参数") }
             let x = try eval(args[0],env,n)
             if fn == "ABS" { return x.map { $0.map(abs) } }
+            if fn == "NOT" { return x.map { $0.map { $0 == 0 ? 1.0 : 0.0 } } }
+            if fn == "BARSCOUNT" {
+                var count = 0
+                return x.map { v in
+                    guard v != nil else { return nil }
+                    count += 1
+                    return Double(count)
+                }
+            }
+            if fn == "VALUEWHEN" {
+                let values = try eval(args[1],env,n)
+                var previous: Double?
+                return x.indices.map { i in
+                    guard let condition = x[i] else { return nil }
+                    if condition != 0 { previous = values[i] }
+                    return previous
+                }
+            }
+            if fn == "REF" {
+                // Literal offsets fail at validation if invalid. Dynamic
+                // offsets may only reference present or earlier bars.
+                if case .constant(let offset) = args[1] {
+                    guard offset.rounded() == offset, (0...20_000).contains(offset) else {
+                        throw FormulaFailure("REF 偏移必须是0～20000的整数")
+                    }
+                } else if case .unary("-",.constant) = args[1] {
+                    throw FormulaFailure("REF 不支持未来引用")
+                }
+                let offsets = try eval(args[1],env,n)
+                return x.indices.map { i in
+                    guard let offset = offsets[i], offset.isFinite, offset.rounded() == offset,
+                          offset >= 0, offset <= Double(i) else { return nil }
+                    return x[i-Int(offset)]
+                }
+            }
+            if fn == "FILTER" {
+                let p = try period(args[1],zero:true)
+                var last: Int?
+                return x.indices.map { i in
+                    guard let v = x[i] else { return nil }
+                    guard v != 0 else { return 0 }
+                    if let last, i-last <= p { return 0 }
+                    last = i
+                    return 1
+                }
+            }
             if fn == "BARSLAST" {
                 var last: Int?
                 return x.enumerated().map { i,v in
@@ -319,9 +401,6 @@ struct FormulaProgram: Sendable {
                     return previous
                 }
             }
-            if fn == "REF" {
-                return x.indices.map { i in i >= p ? x[i-p] : nil }
-            }
             if fn == "EMA" || fn == "SMA" {
                 var alpha = 2.0 / Double(p+1)
                 if fn == "SMA" {
@@ -333,7 +412,9 @@ struct FormulaProgram: Sendable {
                 // This is distinct from the bundled TA-Lib EMA initialization.
                 return exponential(x,alpha:alpha)
             }
-            if fn == "HHV" || fn == "LLV" {
+            if ["HHV","LLV","HHVBARS","LLVBARS"].contains(fn) {
+                let highest = fn == "HHV" || fn == "HHVBARS"
+                let distance = fn == "HHVBARS" || fn == "LLVBARS"
                 var queue: [Int] = [], head = 0, missing = 0
                 return x.indices.map { i in
                     if x[i] == nil { missing += 1 }
@@ -342,22 +423,23 @@ struct FormulaProgram: Sendable {
                     if let value = x[i] {
                         while queue.count > head {
                             guard let last = queue.last, let tail = x[last],
-                                  fn == "HHV" ? tail <= value : tail >= value else { break }
+                                  highest ? tail <= value : tail >= value else { break }
                             queue.removeLast()
                         }
                         queue.append(i)
                     }
                     guard i >= p-1, missing == 0, head < queue.count else { return nil }
-                    return x[queue[head]]
+                    return distance ? Double(i-queue[head]) : x[queue[head]]
                 }
             }
             // Rolling sum, count, weighted mean and variance in O(n).
+            let booleanWindow = ["COUNT","EXIST","EVERY"].contains(fn)
             var sum = 0.0, squares = 0.0, weighted = 0.0, missing = 0
             return x.indices.map { i in
-                let value = x[i].map { fn == "COUNT" ? ($0 != 0 ? 1.0 : 0.0) : $0 }
+                let value = x[i].map { booleanWindow ? ($0 != 0 ? 1.0 : 0.0) : $0 }
                 if i >= p {
                     weighted -= sum
-                    if let old = x[i-p].map({ fn == "COUNT" ? ($0 != 0 ? 1.0 : 0.0) : $0 }) {
+                    if let old = x[i-p].map({ booleanWindow ? ($0 != 0 ? 1.0 : 0.0) : $0 }) {
                         sum -= old; squares -= old*old
                     } else { missing -= 1 }
                 }
@@ -369,6 +451,8 @@ struct FormulaProgram: Sendable {
                 switch fn {
                 case "MA": return finite(sum/Double(p))
                 case "SUM", "COUNT": return finite(sum)
+                case "EXIST": return sum > 0 ? 1 : 0
+                case "EVERY": return sum == Double(p) ? 1 : 0
                 case "WMA": return finite(weighted/(Double(p)*Double(p+1)/2))
                 case "STD":
                     let mean = sum/Double(p)
@@ -446,7 +530,7 @@ private struct FormulaParser {
         var statements: [FormulaStatement] = []
         while token != .end {
             guard case .name(let name) = take() else { throw FormulaFailure("每条公式必须以变量名开头") }
-            let drawing = ["STICKLINE","DRAWICON","DRAWTEXT"].contains(name) && token == .symbol("(")
+            let drawing = ["STICKLINE","DRAWICON","DRAWTEXT","DRAWLINE"].contains(name) && token == .symbol("(")
             let visible: Bool
             let expr: FormulaExpr
             if drawing {

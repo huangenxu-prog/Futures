@@ -17,6 +17,7 @@ struct QihuiFormulaIndicator: ChartIndicator {
         var histograms: [IndicatorHistogram] = []
         var sticks: [IndicatorStick] = []
         var signals: [IndicatorSignal] = []
+        var segmentSeries: [IndicatorSegmentSeries] = []
         for (index,output) in outputs.enumerated() {
             let color = output.color.flatMap { ChartColor(hex:$0) }
             if let drawing = output.drawing {
@@ -27,6 +28,13 @@ struct QihuiFormulaIndicator: ChartIndicator {
                         sticks.append(IndicatorStick(time:input.candles[i].time,start:start,end:end,
                                                     width:width,hollow:hollow,color:color))
                     }
+                case .segments(let segments):
+                    let plotted = segments.map { segment in
+                        IndicatorSegment(start:IndicatorValue(time:input.candles[segment.startIndex].time,value:segment.startValue),
+                                         end:IndicatorValue(time:input.candles[segment.endIndex].time,value:segment.endValue))
+                    }
+                    segmentSeries.append(IndicatorSegmentSeries(segments:plotted,
+                        style:IndicatorLineStyle(color:color,width:output.width)))
                 case .signal(let label):
                     for (bar,value) in zip(input.candles,output.values) {
                         guard let value else { continue }
@@ -52,6 +60,7 @@ struct QihuiFormulaIndicator: ChartIndicator {
         }
         return IndicatorOutput(lines:lines,histograms:histograms,
                                sticks:sticks.sorted { $0.time < $1.time },
-                               signals:signals.sorted { $0.time < $1.time })
+                               signals:signals.sorted { $0.time < $1.time },
+                               segmentSeries:segmentSeries)
     }
 }

@@ -36,6 +36,8 @@ struct FormulaEditorView: View {
                     Text("持仓：OPI（期末持仓），OPEN_OI（期初持仓），OI_CHANGE（本根K线持仓变化）。旧历史可能缺少持仓数据。")
                     Text("均线：MA EMA SMA WMA EMA2 HMA DEMA TEMA DMA WILDER")
                     Text("其他：HHV LLV SUM STD REF COUNT IF CROSS BARSLAST ABS MAX MIN")
+                    Text("状态：VALUEWHEN、FILTER、HHVBARS、LLVBARS、EXIST、EVERY、NOT、BARSCOUNT；REF 支持非负动态偏移。")
+                    Text("HHVBARS/LLVBARS 同值取最近一根；FILTER 保留信号并屏蔽随后N根。")
                     Text("EMA2 与 WMA 等价；HMA 半周期、平方根周期向下取整。DMA 支持 0～1 的权重表达式。")
                     Text("嵌套示例：HMA(EMA((3*C+H+L+O)/6,5),20)")
                     Text("样式：COLORRED、COLORGREEN、COLORBLUE、COLORYELLOW、COLORWHITE、COLORCYAN、COLORMAGENTA、LINETHICK1～5、COLORSTICK。")
@@ -44,6 +46,8 @@ struct FormulaEditorView: View {
                     Text("DRAWICON(CROSS(EMA(C,20),EMA(C,50)),L,1),COLORRED;")
                     Text("图标编号1～4依次为↑、↓、●、×；不是其他平台完整图标库。")
                     Text("DRAWTEXT(C>O,H,'上涨'),COLORYELLOW; 文字最多32字。")
+                    Text("DRAWLINE(起点条件,起点值,终点条件,终点值,0),COLORBLUE;")
+                    Text("DRAWLINE 暂仅支持不延长：最近起点配对第一个后续终点，终点成立才补画历史线段；不代表起点当时已确认。")
                     Text("DRAWNULL 表示缺失值，适用于条件输出。当前未收盘K线的信号可能变化。")
                     Text("仅支持公式子集；EMA/SMA 从首个有效值递推，MA 等窗口函数需足够历史。缺失值不补零，不支持未来引用或任意代码。")
                 }

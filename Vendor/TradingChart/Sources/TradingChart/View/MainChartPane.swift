@@ -128,7 +128,7 @@ struct MainChartPane: View {
                 .clipped()
             hollowCandleLayer(layout: layout, plot: plot)
             let outputs = overlayOutputs(model.renderInput).map { $0.output }
-            if outputs.contains(where: { !$0.sticks.isEmpty || !$0.signals.isEmpty }) {
+            if outputs.contains(where: { !$0.sticks.isEmpty || !$0.signals.isEmpty || !$0.segmentSeries.isEmpty }) {
                 IndicatorSignalLayer(outputs: outputs, visible: model.visibleTimeRange,
                                      domain: model.mainYTarget, candleWidth: layout.bodyWidth)
                     .frame(width: plot.width,height: plot.height)

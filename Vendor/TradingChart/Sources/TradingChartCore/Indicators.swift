@@ -268,6 +268,39 @@ public struct IndicatorSignal: Hashable, Sendable {
     }
 }
 
+/// A confirmed finite segment; start and end are in the chart's time axis.
+public struct IndicatorSegment: Hashable, Sendable {
+    public var start: IndicatorValue
+    public var end: IndicatorValue
+    public init(start: IndicatorValue, end: IndicatorValue) { self.start = start; self.end = end }
+
+    /// Interpolated values at the edges of the visible part of the segment.
+    public func clipped(to range: ClosedRange<Date>) -> (IndicatorValue,IndicatorValue)? {
+        let lo = max(start.time,range.lowerBound), hi = min(end.time,range.upperBound)
+        let span = end.time.timeIntervalSince(start.time)
+        guard lo <= hi, span > 0, start.value.isFinite, end.value.isFinite else { return nil }
+        func point(_ time: Date) -> IndicatorValue {
+            let ratio = time.timeIntervalSince(start.time)/span
+            return IndicatorValue(time:time,value:start.value + (end.value-start.value)*ratio)
+        }
+        return (point(lo),point(hi))
+    }
+}
+
+/// A chronologically ordered, non-overlapping set of segments.
+public struct IndicatorSegmentSeries: Hashable, Sendable {
+    public var segments: [IndicatorSegment]
+    public var style: IndicatorLineStyle
+    public init(segments: [IndicatorSegment], style: IndicatorLineStyle = IndicatorLineStyle()) {
+        self.segments = segments; self.style = style
+    }
+    public func visible(in range: ClosedRange<Date>) -> ArraySlice<IndicatorSegment> {
+        let lo = segments.partitionPoint { $0.end.time >= range.lowerBound }
+        let hi = segments.partitionPoint { $0.start.time > range.upperBound }
+        return segments[lo..<max(lo,hi)]
+    }
+}
+
 /// Everything an indicator wants drawn.
 public struct IndicatorOutput: Sendable, Equatable {
     /// Lines.
@@ -282,6 +315,7 @@ public struct IndicatorOutput: Sendable, Equatable {
     public var fixedRange: ClosedRange<Double>?
     public var sticks: [IndicatorStick]
     public var signals: [IndicatorSignal]
+    public var segmentSeries: [IndicatorSegmentSeries]
 
     /// Creates an output.
     public init(
@@ -291,7 +325,8 @@ public struct IndicatorOutput: Sendable, Equatable {
         levels: [IndicatorLevel] = [],
         fixedRange: ClosedRange<Double>? = nil,
         sticks: [IndicatorStick] = [],
-        signals: [IndicatorSignal] = []
+        signals: [IndicatorSignal] = [],
+        segmentSeries: [IndicatorSegmentSeries] = []
     ) {
         self.lines = lines
         self.bands = bands
@@ -300,6 +335,7 @@ public struct IndicatorOutput: Sendable, Equatable {
         self.fixedRange = fixedRange
         self.sticks = sticks
         self.signals = signals
+        self.segmentSeries = segmentSeries
     }
 
     /// An output with nothing to draw.
@@ -312,6 +348,7 @@ public struct IndicatorOutput: Sendable, Equatable {
             && bands.allSatisfy { $0.upper.isEmpty && $0.lower.isEmpty }
             && histograms.allSatisfy { $0.bars.isEmpty }
             && sticks.isEmpty && signals.isEmpty
+            && segmentSeries.allSatisfy { $0.segments.isEmpty }
     }
 
     /// The lowest and highest plotted value whose time falls in `range` (bounds inclusive), for autoscaling.
@@ -360,6 +397,11 @@ public struct IndicatorOutput: Sendable, Equatable {
         let signalStart = signals.partitionPoint { $0.time >= range.lowerBound }
         let signalEnd = signals.partitionPoint { $0.time > range.upperBound }
         for signal in signals[signalStart..<Swift.max(signalStart,signalEnd)] { include(signal.value) }
+        for series in segmentSeries {
+            for segment in series.visible(in:range) {
+                if let (a,b) = segment.clipped(to:range) { include(a.value); include(b.value) }
+            }
+        }
         return low <= high ? low...high : nil
     }
 

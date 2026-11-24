@@ -20,6 +20,19 @@ struct IndicatorSignalLayer: View {
                 CGFloat(time.timeIntervalSince(visible.lowerBound)/span)*size.width
             }
             for output in outputs {
+                for series in output.segmentSeries {
+                    let color = series.style.color.map(Color.init) ?? theme.line
+                    for segment in series.visible(in:visible) {
+                        guard let (a,b) = segment.clipped(to:visible) else { continue }
+                        let x1 = x(a.time), x2 = x(b.time)
+                        let y1 = mapping.y(of:a.value), y2 = mapping.y(of:b.value)
+                        guard [x1,x2,y1,y2].allSatisfy(\.isFinite) else { continue }
+                        var path = Path()
+                        path.move(to:CGPoint(x:x1,y:y1))
+                        path.addLine(to:CGPoint(x:x2,y:y2))
+                        context.stroke(path,with:.color(color),lineWidth:CGFloat(series.style.width))
+                    }
+                }
                 let margin = Double(candleWidth)/Double(size.width)*span
                 let from = visible.lowerBound.addingTimeInterval(-margin)
                 let to = visible.upperBound.addingTimeInterval(margin)

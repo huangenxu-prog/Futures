@@ -130,6 +130,27 @@ struct FormulaEngineSelfTest {
         for i in before.indices {
             precondition(Array(before[i].values.dropLast()) == Array(after[i].values.dropLast()))
         }
-        print("Formula engine: conditional drawings, composition, persistence, numeric fixtures and validation passed")
+        let state = try FormulaProgram("A:VALUEWHEN(C=2 OR C=5,C); B:FILTER(C>1,2); D:HHVBARS(H,3); E:LLVBARS(L,3); F:EXIST(C>3,3); G:EVERY(C>3,3); I:REF(C,BARSLAST(C=2)); J:BARSCOUNT(C);")
+        let states = try state.evaluate(bars)
+        precondition(states[0].values[0] == nil); near(states[0].values[3],2); near(states[0].values[4],5)
+        precondition(states[1].values == [0,1,0,0,1,0])
+        near(states[2].values[5],0); near(states[3].values[5],2)
+        near(states[4].values[3],1); near(states[5].values[3],0); near(states[5].values[5],1)
+        precondition(states[6].values[0] == nil); near(states[6].values[5],2)
+        near(states[7].values[5],6)
+        let pairs = try FormulaProgram("DRAWLINE(C=1 OR C=2,L,C=4,H,0),COLORBLUE,LINETHICK2;")
+        let paired = try pairs.evaluate(bars)
+        if case .segments(let segments)? = paired[0].drawing {
+            precondition(segments == [FormulaSegment(startIndex:1,endIndex:3,startValue:1,endValue:5)])
+        } else { preconditionFailure("missing line segment") }
+        let prefix = try pairs.evaluate(Array(bars.prefix(3)))
+        if case .segments(let segments)? = prefix[0].drawing {
+            precondition(segments.isEmpty)
+        } else { preconditionFailure("missing pending line segment") }
+        for bad in ["DRAWLINE(C,L,C,H,1);","A:REF(C,-1);","A:REF(C,20001);","A:FILTER(C,-1);"] {
+            do { _ = try FormulaProgram(bad); preconditionFailure("accepted \(bad)") }
+            catch is FormulaFailure {}
+        }
+        print("Formula engine: causal state, dynamic references, confirmed segments and previous fixtures passed")
     }
 }
