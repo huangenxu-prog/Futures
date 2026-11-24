@@ -60,6 +60,41 @@ struct FormulaEngineSelfTest {
         near(g[1],5.0/3); precondition(g[2] == nil && g[3] == nil); near(g[4],14.0/3)
         let dynamic = try FormulaProgram("A:DMA(C,IF(C>3,1,0.5));")
         near(try dynamic.evaluate(bars)[0].values[3],4)
-        print("Formula engine: nested averages, weighted price sources, warm-up, gaps and live replacement passed")
+        var line = CompositionLine()
+        line.source = .weightedClose
+        line.layers = [CompositionLayer(function:.hma,period:4),CompositionLayer(function:.ema,period:3)]
+        line.color = .blue
+        var second = CompositionLine()
+        second.source = .custom
+        second.custom = "(O+C)/2"
+        second.layers = [CompositionLayer(function:.sma,period:3,weight:1)]
+        second.histogram = true
+        let composition = FormulaComposition(lines:[line,second])
+        let generated = try composition.validatedSource()
+        let expected = try FormulaProgram("LINE1:EMA(HMA((3*C+H+L+O)/6,4),3),COLORBLUE,LINETHICK2;LINE2:SMA((O+C)/2,3,1),COLORSTICK;")
+        let a = try FormulaProgram(generated).evaluate(bars)
+        let b = try expected.evaluate(bars)
+        precondition(a.count == b.count)
+        precondition(a[0].values == b[0].values && a[1].values == b[1].values)
+        precondition(a[1].histogram && a[0].width == 2)
+        var definition = FormulaDefinition()
+        definition.composition = composition
+        definition.source = generated
+        let restored = try JSONDecoder().decode(FormulaDefinition.self,from:JSONEncoder().encode(definition))
+        precondition(restored == definition)
+        let legacy = """
+        {"id":"00000000-0000-0000-0000-000000000001","name":"Old","source":"A:C;","overlay":true,"enabled":true}
+        """
+        let old = try JSONDecoder().decode(FormulaDefinition.self,from:Data(legacy.utf8))
+        precondition(old.composition == nil && old.enabled)
+        for bad in ["C;X:C", "C),COLORRED", "C,H", "((C)", ""] {
+            var invalid = second
+            invalid.custom = bad
+            do {
+                _ = try FormulaComposition(lines:[invalid]).validatedSource()
+                preconditionFailure("accepted invalid expression \(bad)")
+            } catch is FormulaFailure {}
+        }
+        print("Formula engine: composition, persistence, nesting, numeric fixtures and validation passed")
     }
 }

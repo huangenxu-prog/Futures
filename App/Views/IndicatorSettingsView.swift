@@ -5,6 +5,7 @@ struct IndicatorSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: ChartDisplaySettings
     @State private var editingFormula: FormulaDefinition?
+    @State private var composingFormula: FormulaDefinition?
     let onSave: (ChartDisplaySettings) -> Void
 
     init(settings: ChartDisplaySettings, onSave: @escaping (ChartDisplaySettings) -> Void) {
@@ -111,14 +112,28 @@ struct IndicatorSettingsView: View {
                     ForEach($draft.formulas) { $formula in
                         HStack {
                             Toggle(formula.name, isOn: $formula.enabled)
-                            Button { editingFormula = formula } label: {
-                                Image(systemName: "pencil")
+                            Menu {
+                                if formula.composition != nil {
+                                    Button("编辑组合",systemImage:"slider.horizontal.3") { composingFormula = formula }
+                                }
+                                Button("编辑公式",systemImage:"pencil") { editingFormula = formula }
+                            } label: {
+                                Image(systemName:"pencil")
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("编辑公式")
+                            .accessibilityLabel("编辑指标")
                         }
                     }
                     .onDelete { draft.formulas.remove(atOffsets: $0) }
+                    Button {
+                        var formula = FormulaDefinition()
+                        formula.name = "组合指标"
+                        formula.enabled = true
+                        formula.composition = FormulaComposition()
+                        composingFormula = formula
+                    } label: {
+                        Label("新建组合指标", systemImage:"plus.circle")
+                    }
+                    .disabled(draft.formulas.count >= 12)
                     Button {
                         editingFormula = FormulaDefinition()
                     } label: {
@@ -168,6 +183,15 @@ struct IndicatorSettingsView: View {
         .sheet(item: $editingFormula) { formula in
             FormulaEditorView(draft: formula) { updated in
                 if let i = draft.formulas.firstIndex(where: { $0.id == updated.id }) {
+                    draft.formulas[i] = updated
+                } else if draft.formulas.count < 12 {
+                    draft.formulas.append(updated)
+                }
+            }
+        }
+        .sheet(item: $composingFormula) { formula in
+            FormulaComposerView(draft:formula) { updated in
+                if let i = draft.formulas.firstIndex(where:{$0.id == updated.id}) {
                     draft.formulas[i] = updated
                 } else if draft.formulas.count < 12 {
                     draft.formulas.append(updated)

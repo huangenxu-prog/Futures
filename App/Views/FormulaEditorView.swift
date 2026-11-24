@@ -51,6 +51,11 @@ struct FormulaEditorView: View {
                     Button("保存") {
                         guard check() else { return }
                         draft.name = draft.name.trimmingCharacters(in:.whitespacesAndNewlines)
+                        // Raw edits must never leave stale visual composition metadata.
+                        if let composition = draft.composition,
+                           (try? composition.source()) != draft.source {
+                            draft.composition = nil
+                        }
                         onSave(draft); dismiss()
                     }
                 }

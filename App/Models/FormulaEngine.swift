@@ -18,6 +18,7 @@ struct FormulaDefinition: Codable, Equatable, Identifiable, Sendable {
     var source = "EMA20:EMA(CLOSE,20),COLORBLUE;\nEMA50:EMA(CLOSE,50),COLORYELLOW;"
     var overlay = true
     var enabled = false
+    var composition: FormulaComposition? = nil
 }
 
 private enum FormulaToken: Equatable {
