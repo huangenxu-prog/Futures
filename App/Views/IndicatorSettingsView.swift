@@ -66,6 +66,7 @@ struct IndicatorSettingsView: View {
                 }
 
                 Section("布林带 BOLL") {
+                    Toggle("显示 BOLL", isOn: enabledBinding(.boll))
                     parameter("计算周期", value: $draft.bollPeriod)
                     HStack {
                         Text("标准差倍数")
@@ -77,12 +78,32 @@ struct IndicatorSettingsView: View {
                     }
                 }
                 Section("MACD") {
+                    Toggle("显示 MACD", isOn: enabledBinding(.macd))
                     parameter("快线周期", value: $draft.macdFast)
                     parameter("慢线周期", value: $draft.macdSlow)
                     parameter("信号周期", value: $draft.macdSignal)
                 }
+                Section("KDJ") {
+                    Toggle("显示 KDJ", isOn: enabledBinding(.kdj))
+                    parameter("RSV 周期", value: $draft.kdjPeriod)
+                    parameter("K 平滑周期", value: $draft.kdjK)
+                    parameter("D 平滑周期", value: $draft.kdjD)
+                }
+                Section("ATR") {
+                    Toggle("显示 ATR", isOn: enabledBinding(.atr))
+                    parameter("计算周期", value: $draft.atrPeriod)
+                }
+                Section("SAR") {
+                    Toggle("显示 SAR", isOn: enabledBinding(.sar))
+                    decimalParameter("加速因子", value: $draft.sarStep)
+                    decimalParameter("最大加速因子", value: $draft.sarMaximum)
+                    Text("SAR 采用主图连线显示，计算使用逐根K线的高低价。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("其他指标") {
+                    Toggle("显示 VOL", isOn: enabledBinding(.volume))
                     parameter("成交量均线", value: $draft.volumeMA)
+                    Toggle("显示 RSI", isOn: enabledBinding(.rsi))
                     parameter("RSI 周期", value: $draft.rsi)
                 }
                 Section {
@@ -93,7 +114,7 @@ struct IndicatorSettingsView: View {
                         Text("同类型、同周期的均线不能重复启用，请关闭或调整其中一条。")
                             .foregroundStyle(.red)
                     } else if !draft.isValid {
-                        Text("周期必须在 2～500，MACD 快线小于慢线，BOLL 倍数为 0.1～10。")
+                        Text("周期 2～500；MACD 快线小于慢线；BOLL 倍数 0.1～10；SAR 加速因子大于0且不超过最大值，最大值不超过1。")
                             .foregroundStyle(.red)
                     } else {
                         Text("保存后立即重新计算指标，设置保存在当前设备上。")
@@ -141,6 +162,17 @@ struct IndicatorSettingsView: View {
                 .multilineTextAlignment(.trailing)
                 .frame(width: 70)
                 .accessibilityLabel("\(label) 周期")
+        }
+    }
+
+    private func decimalParameter(_ label: String, value: Binding<Double>) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            TextField("数值", value: value, format: .number)
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 90)
         }
     }
 

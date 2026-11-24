@@ -25,6 +25,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Verify futures indicator calculations
+        run: |
+          swiftc -O App/Models/FuturesIndicatorMath.swift scripts/FuturesIndicatorSelfTest.swift -o /tmp/futures-indicators
+          /tmp/futures-indicators
+
       - name: Verify direct live chart delivery
         run: |
           swiftc App/Models/DirectChartFeed.swift scripts/DirectChartFeedSelfTest.swift -o /tmp/direct-chart-feed-test

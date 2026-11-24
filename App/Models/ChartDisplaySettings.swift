@@ -2,7 +2,7 @@ import Foundation
 import TradingChart
 
 enum ChartIndicatorKind: String, Codable, CaseIterable, Hashable, Identifiable {
-    case sma, emaFast, emaSlow, wma, boll, volume, macd, rsi
+    case sma, emaFast, emaSlow, wma, boll, volume, macd, rsi, kdj, atr, sar
     var id: String { rawValue }
 
     var title: String {
@@ -15,6 +15,9 @@ enum ChartIndicatorKind: String, Codable, CaseIterable, Hashable, Identifiable {
         case .volume: return "VOL"
         case .macd: return "MACD"
         case .rsi: return "RSI"
+        case .kdj: return "KDJ"
+        case .atr: return "ATR"
+        case .sar: return "SAR"
         }
     }
 }
@@ -48,6 +51,12 @@ struct ChartDisplaySettings: Codable, Equatable {
     var macdSlow = 26
     var macdSignal = 9
     var rsi = 14
+    var kdjPeriod = 9
+    var kdjK = 3
+    var kdjD = 3
+    var atrPeriod = 14
+    var sarStep = 0.02
+    var sarMaximum = 0.2
 
     // Preserve the existing key so upgrades retain the old parameters.
     private static let key = "qihui.chart.custom-indicator-settings.v1"
@@ -72,6 +81,12 @@ struct ChartDisplaySettings: Codable, Equatable {
         macdSlow = try c.decodeIfPresent(Int.self, forKey: .macdSlow) ?? macdSlow
         macdSignal = try c.decodeIfPresent(Int.self, forKey: .macdSignal) ?? macdSignal
         rsi = try c.decodeIfPresent(Int.self, forKey: .rsi) ?? rsi
+        kdjPeriod = try c.decodeIfPresent(Int.self, forKey: .kdjPeriod) ?? kdjPeriod
+        kdjK = try c.decodeIfPresent(Int.self, forKey: .kdjK) ?? kdjK
+        kdjD = try c.decodeIfPresent(Int.self, forKey: .kdjD) ?? kdjD
+        atrPeriod = try c.decodeIfPresent(Int.self, forKey: .atrPeriod) ?? atrPeriod
+        sarStep = try c.decodeIfPresent(Double.self, forKey: .sarStep) ?? sarStep
+        sarMaximum = try c.decodeIfPresent(Double.self, forKey: .sarMaximum) ?? sarMaximum
     }
 
     static func load() -> Self {
@@ -103,12 +118,13 @@ struct ChartDisplaySettings: Codable, Equatable {
 
     var isValid: Bool {
         let periods = [sma, emaFast, emaSlow, wma, bollPeriod, volumeMA,
-                       macdFast, macdSlow, macdSignal, rsi]
+                       macdFast, macdSlow, macdSignal, rsi, kdjPeriod, kdjK, kdjD, atrPeriod]
         return periods.allSatisfy { (2...500).contains($0) }
             && additionalAverages.allSatisfy { (2...500).contains($0.period) }
             && Set(additionalAverages.map(\.id)).count == additionalAverages.count
             && !hasDuplicateAverages
             && macdFast < macdSlow
+            && sarStep.isFinite && sarMaximum.isFinite && sarStep > 0 && sarStep <= sarMaximum && sarMaximum <= 1
             && bollMultiplier.isFinite && bollMultiplier >= 0.1 && bollMultiplier <= 10
     }
 
@@ -144,6 +160,9 @@ struct ChartDisplaySettings: Codable, Equatable {
         case .volume: return "VOL"
         case .macd: return "MACD"
         case .rsi: return "RSI"
+        case .kdj: return "KDJ"
+        case .atr: return "ATR"
+        case .sar: return "SAR"
         }
     }
 
@@ -189,6 +208,9 @@ struct ChartDisplaySettings: Codable, Equatable {
             case .volume: result.append(Volume(movingAveragePeriod: volumeMA))
             case .macd: result.append(MACD(fast: macdFast, slow: macdSlow, signal: macdSignal))
             case .rsi: result.append(RSI(period: rsi))
+            case .kdj: result.append(QihuiKDJ(period: kdjPeriod, kPeriod: kdjK, dPeriod: kdjD))
+            case .atr: result.append(QihuiATR(period: atrPeriod))
+            case .sar: result.append(QihuiSAR(step: sarStep, maximum: sarMaximum))
             }
         }
         for average in additionalAverages where average.enabled {
