@@ -130,7 +130,7 @@ enum MarketDataService {
         return try JSONDecoder().decode([String: MainContract].self, from: data)
     }
 
-    struct MainContract: Codable, Equatable {
+    struct MainContract: Codable, Equatable, Sendable {
         let code: String
         let month: String
         let last, settlement, bid, ask, volume, interest, previousInterest: Double?
@@ -211,8 +211,8 @@ enum MarketDataService {
         return try JSONDecoder().decode([String: MainContract].self, from: data)
     }
 
-    struct CandlePush: Decodable {
-        struct Timing: Decodable {
+    struct CandlePush: Decodable, Sendable {
+        struct Timing: Decodable, Sendable {
             let version: Int
             let received_at: Double
             let sent_at: Double
@@ -228,7 +228,7 @@ enum MarketDataService {
 
     // Reads real server-sent events. Heartbeats carry no data and are ignored.
     // Ending the connection throws so the caller can reconnect or fall back to HTTP.
-    private static func events<T: Decodable>(
+    private static func events<T: Decodable & Sendable>(
         from endpoint: URL,
         stamp: ((T, Double, Double) -> T)? = nil,
         onEvent: @MainActor @escaping (T) -> Void
@@ -239,16 +239,21 @@ enum MarketDataService {
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
 
-        // Read actual URLSession data callbacks rather than waiting on the
-        // AsyncBytes.lines adapter. The serial delegate can receive subsequent
-        // chunks while the main actor is applying a previous event.
-        let (chunks, continuation) = AsyncThrowingStream<SSEReceivedChunk, Error>.makeStream()
-        let receiver = SSEChunkReceiver(continuation: continuation)
+        // Parse and decode on the serial network delegate, independently
+        // of the main actor. Keep every decoded delta in arrival order.
+        let label = endpoint.path + "?" + (endpoint.query ?? "")
+        let streamID = String(UUID().uuidString.prefix(8))
+        let (frames, continuation) = AsyncThrowingStream<SSEDecodedFrame<T>, Error>.makeStream()
+        let receiver = SSEEventReceiver<T>(continuation: continuation, label: label, streamID: streamID)
+        let delegateQueue = OperationQueue()
+        delegateQueue.name = "qihui.sse.receive." + streamID
+        delegateQueue.maxConcurrentOperationCount = 1
+        delegateQueue.qualityOfService = .userInitiated
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 45
-        let session = URLSession(configuration: configuration, delegate: receiver, delegateQueue: nil)
+        let session = URLSession(configuration: configuration, delegate: receiver, delegateQueue: delegateQueue)
         let task = session.dataTask(with: request)
         defer {
             task.cancel()
@@ -256,16 +261,17 @@ enum MarketDataService {
             continuation.finish()
         }
         task.resume()
-        var parser = SSELineBuffer()
-        let decoder = JSONDecoder()
-        for try await chunk in chunks {
+        for try await frame in frames {
             try Task.checkCancellation()
-            for payload in parser.append(chunk.data) {
-                try Task.checkCancellation()
-                let epoch = chunk.epoch
-                let uptime = chunk.uptime
-                let value = try decoder.decode(T.self, from: payload)
-                await onEvent(stamp?(value, epoch, uptime) ?? value)
+            let value = stamp?(frame.value, frame.epoch, frame.uptime) ?? frame.value
+            // Preserve order, and measure the actual start of main-actor work
+            // instead of when the background consumer schedules that work.
+            await MainActor.run {
+                guard !Task.isCancelled else { return }
+                let started = ProcessInfo.processInfo.systemUptime
+                onEvent(value)
+                let ended = ProcessInfo.processInfo.systemUptime
+                SSEReceiveTrace.record("apply id=\(streamID) seq=\(frame.sequence) queue_ms=\(SSEReceiveTrace.ms(started - frame.decodedUptime)) receive_to_apply_ms=\(SSEReceiveTrace.ms(started - frame.uptime)) apply_ms=\(SSEReceiveTrace.ms(ended - started))")
             }
         }
         try Task.checkCancellation()
@@ -361,19 +367,20 @@ enum MarketDataService {
     }
 }
 
-// Delegate receives raw transport chunks on a private serial operation queue.
-// Finishing the continuation releases a waiting reader on disconnect/error.
-private struct SSEReceivedChunk: Sendable {
-    let data: Data
-    let epoch: Double
-    let uptime: Double
-}
+// The delegate queue is explicitly serial; its parser and decoder never
+// touch SwiftUI state. Network chunks can be decoded while UI work is pending.
+private final class SSEEventReceiver<T: Decodable & Sendable>: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let continuation: AsyncThrowingStream<SSEDecodedFrame<T>, Error>.Continuation
+    private let label: String
+    private let streamID: String
+    private var parser = SSEFrameDecoder<T>()
+    private var chunkSequence = 0
 
-private final class SSEChunkReceiver: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    private let continuation: AsyncThrowingStream<SSEReceivedChunk, Error>.Continuation
-
-    init(continuation: AsyncThrowingStream<SSEReceivedChunk, Error>.Continuation) {
+    init(continuation: AsyncThrowingStream<SSEDecodedFrame<T>, Error>.Continuation,
+         label: String, streamID: String) {
         self.continuation = continuation
+        self.label = label
+        self.streamID = streamID
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
@@ -381,19 +388,41 @@ private final class SSEChunkReceiver: NSObject, URLSessionDataDelegate, @uncheck
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200,
               (http.value(forHTTPHeaderField: "Content-Type") ?? "").hasPrefix("text/event-stream") else {
+            SSEReceiveTrace.record("invalid_response id=\(streamID) endpoint=\(label) status=\((response as? HTTPURLResponse)?.statusCode ?? 0)")
             continuation.finish(throwing: MarketDataError.invalidResponse)
             completionHandler(.cancel)
             return
         }
+        SSEReceiveTrace.record("connected id=\(streamID) endpoint=\(label)")
         completionHandler(.allow)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        continuation.yield(SSEReceivedChunk(data: data, epoch: Date().timeIntervalSince1970,
-                                            uptime: ProcessInfo.processInfo.systemUptime))
+        let epoch = Date().timeIntervalSince1970
+        let uptime = ProcessInfo.processInfo.systemUptime
+        chunkSequence += 1
+        let chunkID = chunkSequence
+        SSEReceiveTrace.record("chunk id=\(streamID) chunk=\(chunkID) epoch=\(String(format: "%.3f", epoch)) bytes=\(data.count)")
+        do {
+            try parser.append(data, epoch: epoch, uptime: uptime) { frame in
+                var details = ""
+                if let push = frame.value as? MarketDataService.CandlePush,
+                   let bar = push.bar ?? push.bars?.last {
+                    details = " symbol=\(push.symbol) candle=\(bar.time) close=\(bar.close) volume=\(bar.volume)"
+                }
+                SSEReceiveTrace.record("decoded id=\(streamID) chunk=\(chunkID) seq=\(frame.sequence) decode_ms=\(SSEReceiveTrace.ms(frame.decodedUptime - frame.uptime))" + details)
+                continuation.yield(frame)
+            }
+        } catch {
+            SSEReceiveTrace.record("decode_error id=\(streamID) chunk=\(chunkID)")
+            continuation.finish(throwing: error)
+            dataTask.cancel()
+        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let code = error.map { ($0 as NSError).code } ?? 0
+        SSEReceiveTrace.record("disconnected id=\(streamID) endpoint=\(label) error_code=\(code)")
         continuation.finish(throwing: error)
     }
 }

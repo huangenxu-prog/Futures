@@ -3,6 +3,18 @@ import Foundation
 @main
 struct SSELineBufferSelfTest {
     static func main() {
+        struct Tick: Codable, Sendable { let price: Int }
+        var frames = SSEFrameDecoder<Tick>()
+        var received: [SSEDecodedFrame<Tick>] = []
+        try! frames.append(Data("data: {\"pri".utf8), epoch: 1, uptime: 10) { received.append($0) }
+        precondition(received.isEmpty)
+        try! frames.append(Data("ce\":1}\n\ndata: {\"price\":2}\r\n\n".utf8),
+                           epoch: 2, uptime: 20) { received.append($0) }
+        precondition(received.map { $0.value.price } == [1, 2])
+        precondition(received.map(\.sequence) == [1, 2])
+        precondition(received.allSatisfy { $0.epoch == 2 && $0.uptime == 20 })
+        print("Decoded SSE frames preserve arrival order and final-chunk timestamps")
+
         var buffer = SSELineBuffer()
         precondition(buffer.append(Data(": connected\n\nda".utf8)).isEmpty)
         precondition(buffer.append(Data("ta: {\"a\":".utf8)).isEmpty)

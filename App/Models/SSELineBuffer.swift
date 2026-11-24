@@ -18,3 +18,29 @@ struct SSELineBuffer {
         return messages
     }
 }
+
+struct SSEDecodedFrame<Value: Sendable>: Sendable {
+    let value: Value
+    let sequence: Int
+    let epoch: Double
+    let uptime: Double
+    let decodedUptime: Double
+}
+
+/// Delivers each complete JSON frame at the time its final chunk arrives.
+/// Called exclusively from a serial URLSession delegate queue.
+struct SSEFrameDecoder<Value: Decodable & Sendable> {
+    private var lines = SSELineBuffer()
+    private let decoder = JSONDecoder()
+    private var sequence = 0
+
+    mutating func append(_ chunk: Data, epoch: Double, uptime: Double,
+                         onFrame: (SSEDecodedFrame<Value>) -> Void) throws {
+        for payload in lines.append(chunk) {
+            let value = try decoder.decode(Value.self, from: payload)
+            sequence += 1
+            onFrame(SSEDecodedFrame(value: value, sequence: sequence, epoch: epoch,
+                                    uptime: uptime, decodedUptime: ProcessInfo.processInfo.systemUptime))
+        }
+    }
+}
