@@ -233,8 +233,14 @@ def option_chain(underlying):
             for code, quote in zip(batch, api.get_quote_list(batch)):
                 if (quote.underlying_symbol == underlying and math.isfinite(quote.strike_price)
                         and quote.option_class in ("CALL", "PUT")):
-                    result.append(dict(snapshot(quote), code=code, strike=quote.strike_price,
-                                       side=quote.option_class))
+                    row = dict(snapshot(quote), code=code, strike=quote.strike_price,
+                               side=quote.option_class)
+                    for field, key in (("price_tick", "priceTick"),
+                                       ("volume_multiple", "volumeMultiple")):
+                        value = getattr(quote, field, None)
+                        if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
+                            row[key] = float(value)
+                    result.append(row)
         return sorted(result, key=lambda row: (row["strike"], row["side"], row["code"]))
     finally:
         api.close()

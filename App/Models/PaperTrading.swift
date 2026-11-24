@@ -10,7 +10,23 @@ struct PaperContract: Codable, Equatable, Sendable {
     let last:Double?
     let bid:Double?
     let ask:Double?
+    // Optional for backwards-compatible decoding of existing futures ledgers.
+    let option:PaperOptionDetails?
 
+    init(symbol:String,name:String,tick:Double?,multiplier:Double?,last:Double?,bid:Double?,ask:Double?,option:PaperOptionDetails? = nil) {
+        self.symbol = symbol;self.name = name;self.tick = tick;self.multiplier = multiplier
+        self.last = last;self.bid = bid;self.ask = ask;self.option = option
+    }
+    var isOption:Bool {option != nil}
+    var displayName:String {
+        guard let option else {return name}
+        let side = option.side == "CALL" ? "看涨" : "看跌"
+        return name+" "+side+" "+option.strike.formatted(.number.grouping(.never))
+    }
+    var productCode:String {
+        let future = option?.underlying ?? symbol
+        return String(future.dropLast(future.reversed().prefix{$0.isNumber}.count))
+    }
     var isConcreteFuture:Bool {
         let parts = symbol.split(separator:".",omittingEmptySubsequences:false)
         guard parts.count == 2, ["SHFE","DCE","CZCE","GFEX","INE","CFFEX"].contains(String(parts[0])) else { return false }
@@ -21,9 +37,20 @@ struct PaperContract: Codable, Equatable, Sendable {
     }
 
     var hasMetadata:Bool {
-        guard isConcreteFuture,let tick,let multiplier else { return false }
-        return tick.isFinite && tick > 0 && multiplier.isFinite && multiplier > 0
+        guard let tick,let multiplier,tick.isFinite,tick > 0,multiplier.isFinite,multiplier > 0 else {return false}
+        if let option {
+            let underlying = PaperContract(symbol:option.underlying,name:name,tick:nil,multiplier:nil,last:nil,bid:nil,ask:nil)
+            return underlying.isConcreteFuture && symbol.hasPrefix(option.underlying)
+                && symbol != option.underlying && ["CALL","PUT"].contains(option.side)
+                && option.strike.isFinite && option.strike > 0
+        }
+        return isConcreteFuture
     }
+}
+struct PaperOptionDetails:Codable,Equatable,Sendable {
+    let underlying:String
+    let side:String
+    let strike:Double
 }
 
 enum PaperDirection:String,Codable,CaseIterable,Sendable {
@@ -75,7 +102,7 @@ struct PaperPosition:Identifiable,Codable,Equatable,Sendable {
     var reservedMargin:Double
     var id:String { contract.symbol+"/"+side.rawValue }
     func unrealized(at price:Double?) -> Double? {
-        guard let price,price.isFinite,price > 0,
+        guard let price,price.isFinite,(contract.isOption ? price >= 0 : price > 0),
               let multiplier = contract.multiplier,multiplier.isFinite,multiplier > 0 else {return nil}
         let change = side == .long ? price-averagePrice : averagePrice-price
         let result = change*Double(quantity)*multiplier
@@ -119,6 +146,11 @@ struct PaperLedger:Codable,Equatable,Sendable {
     private(set) var fills:[PaperFill] = []
     private(set) var cash:Double = initialCapital
     var margin:Double { positions.reduce(0){$0+$1.reservedMargin} }
+    var optionPremiumCost:Double {
+        positions.filter{$0.contract.isOption && $0.side == .long}.reduce(0) {
+            $0+$1.averagePrice*Double($1.quantity)*($1.contract.multiplier ?? 0)
+        }
+    }
     var frozen:Double { orders.filter{$0.status == .pending}.reduce(0){$0+Self.reserve($1)} }
     var available:Double { cash-margin-frozen }
     var realized:Double { fills.reduce(0){$0+$1.realized} }
@@ -133,14 +165,17 @@ struct PaperLedger:Codable,Equatable,Sendable {
     }
     func equity(prices:[String:Double])->Double? {
         guard let pnl = unrealized(prices:prices) else {return nil}
-        let value = cash+pnl
+        // Long-option premiums were debited from cash at open; add cost
+        // basis plus floating PnL (market value), not just floating PnL.
+        let value = cash+pnl+optionPremiumCost
         return value.isFinite ? value : nil
     }
 
     static func reserve(_ order:PaperOrder)->Double {
         let fee = Double(order.quantity)*feePerLot
         guard order.offset == .open,let multiplier = order.contract.multiplier else { return fee }
-        return order.price*Double(order.quantity)*multiplier*marginRate+fee
+        let notional = order.price*Double(order.quantity)*multiplier
+        return notional*(order.contract.isOption ? 1 : marginRate)+fee
     }
     func closable(symbol:String,side:PaperPositionSide)->Int {
         let held = positions.first{$0.contract.symbol == symbol && $0.side == side}?.quantity ?? 0
@@ -149,17 +184,24 @@ struct PaperLedger:Codable,Equatable,Sendable {
     }
     @discardableResult mutating func submit(contract:PaperContract,direction:PaperDirection,offset:PaperOffset,price:Double,quantity:Int,now:Date = Date()) throws -> UUID {
         guard contract.hasMetadata,let tick = contract.tick else { throw PaperFailure("请选择具备真实最小价位和合约乘数的具体月份期货合约") }
+        if contract.isOption && offset == .open && direction == .sell {
+            throw PaperFailure("期权卖方开仓暂未接入保证金规则")
+        }
         guard price.isFinite,price > 0,(1...999).contains(quantity) else { throw PaperFailure("价格或手数无效") }
         let units = price/tick
         guard units.isFinite,units <= 1e12,abs(units-units.rounded()) < 0.000001 else { throw PaperFailure("价格必须符合合约最小变动价位") }
         guard orders.count < 10_000 else { throw PaperFailure("模拟记录已达上限，请重置模拟账户") }
         let order = PaperOrder(id:UUID(),contract:contract,direction:direction,offset:offset,price:units.rounded()*tick,quantity:quantity,created:now,status:.pending)
         if let position = positions.first(where:{$0.contract.symbol == contract.symbol && $0.side == order.side}),
-           position.contract.multiplier != contract.multiplier || position.contract.tick != contract.tick {
+           position.contract.multiplier != contract.multiplier || position.contract.tick != contract.tick || position.contract.option != contract.option {
             throw PaperFailure("合约参数已变化，不能混合计算模拟持仓")
         }
         if offset == .close && quantity > closable(symbol:contract.symbol,side:order.side) { throw PaperFailure("可平手数不足（含已冻结的平仓委托）") }
-        guard Self.reserve(order).isFinite,Self.reserve(order) <= available+0.000001 else { throw PaperFailure("模拟可用资金不足") }
+        let reservation = Self.reserve(order)
+        // Selling a held long option releases premium proceeds. Do not
+        // trap liquidation merely because its account has no spare cash.
+        let optionLiquidation = contract.isOption && offset == .close && direction == .sell
+        guard reservation.isFinite,optionLiquidation || reservation <= available+0.000001 else { throw PaperFailure("模拟可用资金不足") }
         orders.append(order)
         return order.id
     }
@@ -175,11 +217,15 @@ struct PaperLedger:Codable,Equatable,Sendable {
         guard let multiplier = order.contract.multiplier else { throw PaperFailure("缺少合约乘数") }
         let qty = Double(order.quantity),fee = qty*Self.feePerLot
         var pnl = 0.0
+        var cashChange = 0.0
         let pos = positions.firstIndex{$0.contract.symbol == order.contract.symbol && $0.side == order.side}
         if order.offset == .open {
-            let extra = order.price*qty*multiplier*Self.marginRate
+            guard !order.contract.isOption || order.direction == .buy else {throw PaperFailure("期权卖方开仓未启用")}
+            let notional = order.price*qty*multiplier
+            let extra = order.contract.isOption ? 0 : notional*Self.marginRate
+            if order.contract.isOption {cashChange = -notional}
             if let pos {
-                guard positions[pos].contract.multiplier == order.contract.multiplier && positions[pos].contract.tick == order.contract.tick else { throw PaperFailure("合约参数不一致") }
+                guard positions[pos].contract.multiplier == order.contract.multiplier && positions[pos].contract.tick == order.contract.tick && positions[pos].contract.option == order.contract.option else { throw PaperFailure("合约参数不一致") }
                 let old = positions[pos]
                 let total = old.quantity+order.quantity
                 positions[pos].averagePrice = (old.averagePrice*Double(old.quantity)+order.price*qty)/Double(total)
@@ -193,13 +239,14 @@ struct PaperLedger:Codable,Equatable,Sendable {
             let old = positions[pos]
             let change = order.side == .long ? order.price-old.averagePrice : old.averagePrice-order.price
             pnl = change*qty*multiplier
+            cashChange = order.contract.isOption ? order.price*qty*multiplier : pnl
             if old.quantity == order.quantity { positions.remove(at:pos) }
             else {
                 positions[pos].quantity -= order.quantity
                 positions[pos].reservedMargin *= Double(positions[pos].quantity)/Double(old.quantity)
             }
         }
-        cash += pnl-fee
+        cash += cashChange-fee
         orders[index].status = .filled
         fills.append(PaperFill(id:UUID(),orderID:id,symbol:order.contract.symbol,action:order.actionTitle,price:order.price,quantity:order.quantity,realized:pnl,fee:fee,time:now))
     }

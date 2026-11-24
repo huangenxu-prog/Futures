@@ -183,13 +183,18 @@ enum MarketDataService {
         let code, side: String
         let strike: Double
         let last, ask, bid, volume, interest: Double?
+        let priceTick, volumeMultiple: Double?
         var id: String { code }
+        func paperContract(underlying:String,name:String)->PaperContract {
+            PaperContract(symbol:code,name:name,tick:priceTick,multiplier:volumeMultiple,last:last,bid:bid,ask:ask,
+                          option:PaperOptionDetails(underlying:underlying,side:side,strike:strike))
+        }
     }
 
     static func options(for code: String) async throws -> [OptionQuote] {
         let url = try baseURL().appendingPathComponent("v1/options")
             .appending(queryItems: [URLQueryItem(name: "symbol", value: code)])
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await URLSession.shared.data(for:URLRequest(url:url,timeoutInterval:35))
         if (response as? HTTPURLResponse)?.statusCode == 404 {
             throw NSError(domain: "Futures", code: 404, userInfo: [NSLocalizedDescriptionKey: "请升级行情网关以查看期权"])
         }

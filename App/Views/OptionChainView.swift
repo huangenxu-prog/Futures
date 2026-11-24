@@ -1,14 +1,16 @@
 import SwiftUI
 
-/// A read-only T-shaped options chain. Values are genuine TqSdk quotes.
+/// T-shaped options chain and exact-contract quick order entry.
 /// Missing prices are shown as "--"; no fabricated IV or Greeks.
 struct OptionChainView: View {
     let code: String
     let underlyingLast: Double?
+    let underlyingName:String
 
-    init(code: String, underlyingLast: Double? = nil) {
+    init(code: String, underlyingLast: Double? = nil,underlyingName:String? = nil) {
         self.code = code
         self.underlyingLast = underlyingLast
+        self.underlyingName = underlyingName ?? code
     }
 
     @Environment(\.dismiss) private var dismiss
@@ -17,6 +19,7 @@ struct OptionChainView: View {
     @State private var error: String?
     @State private var displayVolume = false
     @State private var side: Side = .both
+    @State private var selectedOption:MarketDataService.OptionQuote?
 
     private enum Side {
         case both, call, put
@@ -112,11 +115,11 @@ struct OptionChainView: View {
 
                         HStack(spacing: 0) {
                             if side != .put {
-                                headerCell(displayVolume ? "成交量" : "买价")
+                                headerCell(displayVolume ? "成交量" : "买一")
                                 headerCell("最新")
                             }
                             Text("行权价")
-                                .frame(width: 84)
+                                .frame(width: 72)
                                 .foregroundStyle(MarketPalette.ink)
                             if side != .call {
                                 headerCell("最新")
@@ -133,19 +136,17 @@ struct OptionChainView: View {
                                 ForEach(visiblePairs) { pair in
                                     HStack(spacing: 0) {
                                         if side != .put {
-                                            valueCell(displayVolume ? pair.call?.volume : pair.call?.bid)
-                                            valueCell(pair.call?.last)
+                                            optionCells(pair.call,isCall:true)
                                         }
                                         Text(label(pair.strike))
                                             .font(.system(size: 13, weight: .bold, design: .rounded))
                                             .foregroundStyle(MarketPalette.ink)
-                                            .frame(width: 84, height: 48)
+                                            .frame(width: 72, height: 48)
                                             .background(underlyingLast.map {
                                                 abs($0 - pair.strike) < max(1, $0 * 0.0025)
                                             } == true ? MarketPalette.accent.opacity(0.08) : .clear)
                                         if side != .call {
-                                            valueCell(pair.put?.last)
-                                            valueCell(displayVolume ? pair.put?.volume : pair.put?.ask)
+                                            optionCells(pair.put,isCall:false)
                                         }
                                     }
                                     .padding(.horizontal, 8)
@@ -155,6 +156,7 @@ struct OptionChainView: View {
                                 }
                             }
                         }
+                        .refreshable {await load()}
                         HStack(spacing: 8) {
                             Button(displayVolume ? "查看买卖报价" : "查看成交量") {
                                 displayVolume.toggle()
@@ -170,7 +172,7 @@ struct OptionChainView: View {
                     }
                 }
 
-                Text("报价仅供行情分析；隐含波动率与希腊值尚未接入，不展示估算值。")
+                Text("点击看涨或看跌报价即可下单 · 模拟买方交易")
                     .font(.system(size: 10))
                     .foregroundStyle(MarketPalette.muted)
                     .padding(.horizontal, 16)
@@ -187,6 +189,11 @@ struct OptionChainView: View {
                 }
                 .frame(height: 28)
                 .background(MarketPalette.surface)
+            }
+            .sheet(item:$selectedOption) { option in
+                QuickTradeSheet(contract:option.paperContract(underlying:code,name:underlyingName))
+                    .presentationDetents([.height(420),.large])
+                    .presentationDragIndicator(.visible)
             }
             .task(id: code) { await load() }
         }
@@ -213,6 +220,22 @@ struct OptionChainView: View {
         Text(title).frame(maxWidth: .infinity)
     }
 
+    private func optionCells(_ option:MarketDataService.OptionQuote?,isCall:Bool)->some View {
+        Button {
+            if let option {selectedOption = option}
+        } label:{
+            HStack(spacing:0) {
+                if isCall {
+                    valueCell(displayVolume ? option?.volume : option?.bid)
+                    valueCell(option?.last)
+                } else {
+                    valueCell(option?.last)
+                    valueCell(displayVolume ? option?.volume : option?.ask)
+                }
+            }.frame(maxWidth:.infinity).frame(height:48).contentShape(Rectangle())
+        }.buttonStyle(.plain).disabled(option == nil)
+            .accessibilityLabel(option.map{(isCall ? "看涨 " : "看跌 ")+label($0.strike)+" 下单"} ?? "无合约")
+    }
     private func valueCell(_ value: Double?) -> some View {
         Text(label(value))
             .font(.system(size: 12, weight: .medium, design: .rounded))

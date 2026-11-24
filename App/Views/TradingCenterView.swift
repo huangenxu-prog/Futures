@@ -115,10 +115,16 @@ struct TradingCenterView:View {
             } message:{ order in Text("\(order.contract.symbol) · \(order.actionTitle)") }
             .task(id:markTaskKey) {
                 guard scenePhase == .active else {return}
-                marks = [:];markReceived = [:]
                 while !Task.isCancelled {
                     await refreshMarks()
                     do {try await Task.sleep(for:.seconds(10))} catch {return}
+                }
+            }
+            .task(id:optionMarkTaskKey) {
+                guard scenePhase == .active else {return}
+                while !Task.isCancelled {
+                    await refreshOptionMarks()
+                    do {try await Task.sleep(for:.seconds(30))} catch {return}
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for:.qihuiLiveQuotes)) { notification in
@@ -175,15 +181,14 @@ struct TradingCenterView:View {
     private var currentMarks:[String:Double] {
         marks.filter { symbol,_ in
             guard let received = markReceived[symbol] else {return false}
-            return markClock.timeIntervalSince(received) <= 45
+            return Date().timeIntervalSince(received) <= 60 && markClock.timeIntervalSince(received) <= 60
         }
     }
     @MainActor private func refreshMarks() async {
         let symbols = Set(ledger.positions.map{$0.contract.symbol})
         guard !symbols.isEmpty else {marks = [:];markReceived = [:];return}
-        let products = Set(symbols.map{symbol in
-            String(symbol.dropLast(symbol.reversed().prefix{$0.isNumber}.count))
-        })
+        let futures = ledger.positions.filter{!$0.contract.isOption}
+        let products = Set(futures.map{$0.contract.productCode})
         // Only held products, and exact month match. Never use entry cost
         // or another month's main-contract quote for valuation.
         for product in products.sorted() {
@@ -195,6 +200,30 @@ struct TradingCenterView:View {
                 for q in quotes where symbols.contains(q.code) {
                     guard (markReceived[q.code] ?? .distantPast) <= started else {continue}
                     if let p = q.last,p.isFinite,p>0 {
+                        marks[q.code] = p;markReceived[q.code] = Date()
+                    } else {
+                        marks.removeValue(forKey:q.code);markReceived.removeValue(forKey:q.code)
+                    }
+                }
+            } catch is CancellationError {return} catch {}
+            markClock = Date()
+        }
+    }
+    private var optionMarkTaskKey:String {
+        let symbols = Set(ledger.positions.filter{$0.contract.isOption}.map{$0.contract.symbol}).sorted().joined(separator:"|")
+        return symbols+(scenePhase == .active ? "/active" : "/paused")
+    }
+    @MainActor private func refreshOptionMarks() async {
+        let held = ledger.positions.filter{$0.contract.isOption}.map{$0.contract}
+        let underlying = Set(held.compactMap{$0.option?.underlying})
+        for code in underlying.sorted() {
+            guard !Task.isCancelled else {return}
+            let symbols = Set(held.filter{$0.option?.underlying == code}.map{$0.symbol})
+            do {
+                let quotes = try await MarketDataService.options(for:code)
+                try Task.checkCancellation()
+                for q in quotes where symbols.contains(q.code) {
+                    if let p = q.last,p.isFinite,p>=0 {
                         marks[q.code] = p;markReceived[q.code] = Date()
                     } else {
                         marks.removeValue(forKey:q.code);markReceived.removeValue(forKey:q.code)
@@ -274,11 +303,12 @@ struct TradingCenterView:View {
                 LabeledContent("可用资金（估算）",value:money(ledger.available))
                 LabeledContent("持仓占用（估算）",value:money(ledger.margin))
                 LabeledContent("委托冻结（估算）",value:money(ledger.frozen))
+                LabeledContent("期权买方权利金成本",value:money(ledger.optionPremiumCost))
                 LabeledContent("累计平仓盈亏",value:money(ledger.realized))
                 LabeledContent("模拟手续费",value:money(ledger.fees))
             }
             Section {
-                Text("模拟参数：保证金15%，每手每边5元。权益按最近行情估值，可用资金仍按账面资金计算；未做逐日结算。成交需手动确认。")
+                Text("模拟参数：期货保证金15%，期权买方全额权利金，每手每边5元。期权卖方、行权及到期结算暂未启用。权益按最近行情估值；成交需手动确认。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -307,7 +337,7 @@ struct TradingCenterView:View {
         let pnl = pos.unrealized(at:price)
         return VStack(alignment:.leading,spacing:7) {
             HStack {
-                Text(pos.contract.name).fontWeight(.semibold)
+                Text(pos.contract.displayName).fontWeight(.semibold)
                 Text(pos.contract.symbol).font(.caption).foregroundStyle(MarketPalette.muted)
                 Spacer(minLength:4)
                 Text(signedMoney(pnl)).font(.headline.monospacedDigit())
@@ -331,7 +361,7 @@ struct TradingCenterView:View {
         guard !storageFailed else {return}
         // Never reuse an old entry quote as a current closing quote.
         let c = pos.contract
-        ticket = PaperContract(symbol:c.symbol,name:c.name,tick:c.tick,multiplier:c.multiplier,last:nil,bid:nil,ask:nil)
+        ticket = PaperContract(symbol:c.symbol,name:c.name,tick:c.tick,multiplier:c.multiplier,last:nil,bid:nil,ask:nil,option:c.option)
     }
     private var displayedOrders:[PaperOrder] {
         let all = pendingOnly ? ledger.orders.filter{$0.status == .pending} : ledger.orders
@@ -451,9 +481,13 @@ private struct PaperOrderTicket:View {
                     Spacer()
                     Text("可平 多 \(longAvailable) / 空 \(shortAvailable)")
                 }.font(.caption).monospacedDigit().foregroundStyle(MarketPalette.muted)
+                if contract.isOption {optionCostRow}
                 actionRow
+                if contract.isOption && !closeOnly {
+                    Text("开多＝买入期权；卖方开仓暂未启用").font(.caption2).foregroundStyle(MarketPalette.muted)
+                }
                 if !contract.hasMetadata {
-                    Text("合约参数未就绪，禁止委托").foregroundStyle(.red).font(.caption)
+                    Text(contract.isOption ? "期权交易参数未获取，请升级行情网关" : "合约参数未就绪，禁止委托").foregroundStyle(.red).font(.caption)
                 }
                 if let error {Text(error).font(.caption).foregroundStyle(.red)}
             }.padding(.horizontal,16).padding(.top,18).padding(.bottom,12)
@@ -483,7 +517,7 @@ private struct PaperOrderTicket:View {
     private var header:some View {
         HStack {
             VStack(alignment:.leading,spacing:3) {
-                Text(closeOnly ? (preferredDirection == .sell ? "平多" : "平空") : contract.name).font(.headline)
+                Text(closeOnly ? (preferredDirection == .sell ? "平多" : "平空") : contract.displayName).font(.headline)
                 Text(contract.symbol).font(.caption).foregroundStyle(MarketPalette.muted)
             }
             Spacer()
@@ -531,6 +565,15 @@ private struct PaperOrderTicket:View {
             Button {changeQuantity(1)} label:{Image(systemName:"plus.circle").font(.title3)}.buttonStyle(.plain)
         }
     }
+    private var optionCostRow:some View {
+        let premium = numericPrice.flatMap{p in numericQuantity.flatMap{q in contract.multiplier.map{p*Double(q)*$0}}}
+        return HStack {
+            Text(closeOnly ? "预计权利金收入" : "权利金")
+            Spacer()
+            Text(premium.flatMap{$0.isFinite && $0 >= 0 ? $0.formatted(.number.precision(.fractionLength(2))) : nil} ?? "--")
+                .fontWeight(.semibold).monospacedDigit()
+        }.font(.caption).foregroundStyle(MarketPalette.muted)
+    }
     private var actionRow:some View {
         HStack(spacing:7) {
             if closeOnly {
@@ -544,7 +587,8 @@ private struct PaperOrderTicket:View {
         }
     }
     private func actionButton(_ direction:PaperDirection,_ offset:PaperOffset,_ title:String,_ tint:Color)->some View {
-        let eligible = contract.hasMetadata && (offset == .open || (direction == .buy ? shortAvailable : longAvailable)>0)
+        let optionAllowed = !contract.isOption || offset == .close || direction == .buy
+        let eligible = contract.hasMetadata && optionAllowed && (offset == .open || (direction == .buy ? shortAvailable : longAvailable)>0)
         let emphasized = preferredOffset == offset && preferredDirection == direction
         return Button {prepare(direction,offset)} label:{
             Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
@@ -563,16 +607,24 @@ private struct PaperOrderTicket:View {
         } catch {self.error = error.localizedDescription}
     }
     @MainActor private func refreshCloseQuote() async {
-        let product = contract.symbol.dropLast(contract.symbol.reversed().prefix{$0.isNumber}.count)
+        let product = contract.productCode
         guard !product.isEmpty else {return}
         refreshing = true
         defer {refreshing = false}
         do {
-            let quotes = try await MarketDataService.listedContracts(for:String(product))
+            let quote:PaperContract
+            if let option = contract.option {
+                let quotes = try await MarketDataService.options(for:option.underlying)
+                guard let q = quotes.first(where:{$0.code == contract.symbol}) else {throw PaperFailure("当前期权报价未获取")}
+                quote = q.paperContract(underlying:option.underlying,name:contract.name)
+            } else {
+                let quotes = try await MarketDataService.listedContracts(for:product)
+                guard let q = quotes.first(where:{$0.code == contract.symbol}) else {throw PaperFailure("当前合约报价未获取")}
+                quote = PaperContract(symbol:q.code,name:contract.name,tick:q.priceTick,multiplier:q.volumeMultiple,last:q.last,bid:q.bid,ask:q.ask)
+            }
             try Task.checkCancellation()
-            guard let q = quotes.first(where:{$0.code == contract.symbol}) else {throw PaperFailure("当前合约报价未获取")}
-            refreshedQuote = PaperContract(symbol:q.code,name:contract.name,tick:q.priceTick,multiplier:q.volumeMultiple,last:q.last,bid:q.bid,ask:q.ask)
-            if price.isEmpty,let p = (preferredDirection == .sell ? q.bid : q.ask) ?? q.last,p.isFinite,p>0 {price = String(p)}
+            refreshedQuote = quote
+            if price.isEmpty,let p = (preferredDirection == .sell ? quote.bid : quote.ask) ?? quote.last,p.isFinite,p>0 {price = String(p)}
         } catch is CancellationError {} catch {
             self.error = "未获取当前报价，请手动输入限价"
         }

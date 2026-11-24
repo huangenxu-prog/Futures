@@ -159,7 +159,7 @@ struct InstrumentDetailView: View {
             }
         }
         .sheet(isPresented: $showOptions) {
-            OptionChainView(code: chartSymbol, underlyingLast: rawBars.last?.close ?? selectedContract?.last ?? quote?.last)
+            OptionChainView(code: chartSymbol, underlyingLast: rawBars.last?.close ?? selectedContract?.last ?? quote?.last,underlyingName:instrument.name)
         }
         .sheet(isPresented: $showContracts) { ContractListView(instrument: instrument) }
         .sheet(isPresented: $showPeriodOrder) {
