@@ -22,6 +22,9 @@ struct StrategyBacktestView: View {
     @State private var target = 2.0
     @State private var protectProfit = true
     @State private var historyCount = 1200
+    @State private var warmupCount = 500
+    @State private var resultTimes: [Int64] = []
+    @State private var phase = ""
     @State private var running = false
     @State private var result: BacktestResult?
     @State private var error: String?
@@ -70,6 +73,12 @@ struct StrategyBacktestView: View {
                         Text("3000根").tag(3000)
                         Text("6000根").tag(6000)
                     }
+                    Picker("指标预热",selection:$warmupCount) {
+                        Text("200根").tag(200)
+                        Text("500根").tag(500)
+                        Text("1000根").tag(1000)
+                    }
+                    Text("预热K线只用于指标和结构计算，不计入模拟交易。实际预热不足会明确提示。").font(.caption)
                     numberField("合约乘数",text:$multiplier)
                     numberField("最小变动价位",text:$tick)
                     numberField("保证金比例（%）",text:$margin)
@@ -95,7 +104,10 @@ struct StrategyBacktestView: View {
                 Section {
                     Button(running ? "正在回测…" : "开始回测") { start() }
                         .disabled(running)
-                    if running { ProgressView() }
+                    if running {
+                        ProgressView(phase)
+                        Button("取消回测",role:.cancel) { task?.cancel() }
+                    }
                     if let error { Text(error).foregroundStyle(.red).font(.caption) }
                 }
                 if let result {
@@ -107,6 +119,8 @@ struct StrategyBacktestView: View {
                         LabeledContent("交易次数",value:String(result.trades.count))
                         LabeledContent("盈利 / 亏损 / 保本",value:"\(result.wins) / \(result.losses) / \(result.breakevens)")
                         LabeledContent("盈利因子",value:result.profitFactor.map{$0.formatted(.number.precision(.fractionLength(2)))} ?? "—")
+                        LabeledContent("累计手续费",value:result.totalFees.formatted(.currency(code:"CNY")))
+                        LabeledContent("平均每笔R",value:result.averageR.map{$0.formatted(.number.precision(.fractionLength(2)))} ?? "—")
                         LabeledContent("最大回撤",value:result.maxDrawdown.formatted(.percent.precision(.fractionLength(2))))
                         LabeledContent("拒绝入场",value:String(result.rejected))
                         LabeledContent("同根止盈止损冲突",value:String(result.ambiguous))
@@ -122,8 +136,12 @@ struct StrategyBacktestView: View {
                         ForEach(result.trades.suffix(50)) { trade in
                             VStack(alignment:.leading) {
                                 Text("\(trade.side > 0 ? "多" : "空") · \(trade.reason)")
-                                Text("第 \(trade.entryIndex+1) → \(trade.exitIndex+1) 根 · \(trade.net.formatted(.currency(code:"CNY")))")
+                                Text("\(barTime(trade.entryIndex)) → \(barTime(trade.exitIndex))")
                                     .font(.caption).foregroundStyle(.secondary)
+                                Text("成交 \(trade.entry.formatted()) → \(trade.exit.formatted()) · \(trade.net.formatted(.currency(code:"CNY")))")
+                                    .font(.caption)
+                                Text("初始止损 \(trade.initialStop.formatted()) · 计划风险 \(trade.plannedRisk.formatted(.currency(code:"CNY"))) · \(trade.realizedR.formatted(.number.precision(.fractionLength(2))))R")
+                                    .font(.caption2).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -138,6 +156,14 @@ struct StrategyBacktestView: View {
             }
             .onDisappear { task?.cancel() }
         }
+    }
+
+    private func barTime(_ index:Int) -> String {
+        guard resultTimes.indices.contains(index) else { return "—" }
+        let formatter = DateFormatter()
+        formatter.timeZone = TimeZone(identifier:"Asia/Shanghai")
+        formatter.dateFormat = "MM-dd HH:mm"
+        return formatter.string(from:Date(timeIntervalSince1970:Double(resultTimes[index])))
     }
 
     private func numberField(_ title:String,text:Binding<String>) -> some View {
@@ -156,20 +182,24 @@ struct StrategyBacktestView: View {
                                    slippageTicks:slip,lots:lots,stopRisk:risk,targetR:target)
         parameters.breakEvenAfterProfit = protectProfit
         let p = parameters
-        let requested = historyCount
+        let requested = historyCount, warmup = warmupCount
         guard p.valid else { error = "回测参数无效"; return }
         let code = source, useHunt = hunt, useMulti = hunt && multiPeriod
         let useFifteen = useMulti && requireFifteen
         let executionPeriod = useMulti ? 300 : period
-        running = true; error = nil; result = nil
+        running = true; error = nil; result = nil; resultTimes = []; phase = "获取历史K线"
         task = Task {
             defer { running = false }
             do {
-                let history = try await MarketDataService.backtestHistory(symbol:symbol,period:executionPeriod,count:requested)
+                let history = try await MarketDataService.backtestHistory(symbol:symbol,period:executionPeriod,count:requested+warmup+1)
                 // Exclude newest bar conservatively, including when market
                 // is closed, to avoid accidental unfinished-bar signals.
                 let closed = Array(history.dropLast())
-                guard closed.count >= 50 else { throw FormulaFailure("有效历史不足50根，请稍后补齐") }
+                guard closed.count >= 50 else { throw FormulaFailure("有效历史不足50根") }
+                // Preserve at least 50 tradable bars when the exchange
+                // returns less history than requested; never invent data.
+                let startIndex = min(warmup,max(0,closed.count-50))
+                let testCount = closed.count-startIndex
                 let bars = closed.map { FormulaBar(open:$0.open,high:$0.high,low:$0.low,close:$0.close,
                     volume:Double($0.volume),openInterest:$0.openInterest,closeInterest:$0.closeInterest) }
                 var thirty: [MultiPeriodHunt.Timed] = []
@@ -182,15 +212,19 @@ struct StrategyBacktestView: View {
                     }
                 }
                 if useMulti {
-                    thirty = timed(try await MarketDataService.backtestHistory(symbol:symbol,period:1800,count:max(1200,requested/6+600)))
-                    hour = timed(try await MarketDataService.backtestHistory(symbol:symbol,period:3600,count:max(1200,requested/12+600)))
+                    phase = "获取30分钟历史"
+                    thirty = timed(try await MarketDataService.backtestHistory(symbol:symbol,period:1800,count:max(1200,(requested+warmup)/6+600)))
+                    phase = "获取60分钟历史"
+                    hour = timed(try await MarketDataService.backtestHistory(symbol:symbol,period:3600,count:max(1200,(requested+warmup)/12+600)))
                     if useFifteen {
-                        fifteen = timed(try await MarketDataService.backtestHistory(symbol:symbol,period:900,count:max(1200,requested/3+600)))
+                        phase = "获取15分钟历史"
+                        fifteen = timed(try await MarketDataService.backtestHistory(symbol:symbol,period:900,count:max(1200,(requested+warmup)/3+600)))
                     }
                     guard thirty.count >= 12,hour.count >= 12,!useFifteen || fifteen.count >= 12 else { throw FormulaFailure("多周期历史不足") }
                 }
                 let thirtyBars = thirty, hourBars = hour, fifteenBars = fifteen
                 let five = zip(closed,bars).map { b,v in MultiPeriodHunt.Timed(time:b.time,bar:v) }
+                phase = "计算信号与模拟成交"
                 let calculation = Task.detached(priority:.userInitiated) {
                     let signals: [BacktestSignal]
                     var researchNote = ""
@@ -223,16 +257,19 @@ struct StrategyBacktestView: View {
                     } else {
                         signals = try FuturesBacktest.formulaSignals(code,bars:bars)
                     }
-                    return (try FuturesBacktest.run(bars:bars,signals:signals,p:p),researchNote)
+                    return (try FuturesBacktest.run(bars:bars,signals:signals,p:p,startIndex:startIndex),researchNote)
                 }
-                let (value,researchNote) = try await calculation.value
+                let (value,researchNote) = try await withTaskCancellationHandler {
+                    try await calculation.value
+                } onCancel: { calculation.cancel() }
                 try Task.checkCancellation()
+                resultTimes = closed.map(\.time)
                 result = value
                 let formatter = DateFormatter()
                 formatter.timeZone = TimeZone(identifier:"Asia/Shanghai")
                 formatter.dateFormat = "yyyy-MM-dd HH:mm"
-                if let first = closed.first, let last = closed.last {
-                    coverage = "目标\(requested)根，实际取得\(history.count)根，\(closed.count) 根用于回测（保守排除最后一根） · \(formatter.string(from:Date(timeIntervalSince1970:Double(first.time)))) 至 \(formatter.string(from:Date(timeIntervalSince1970:Double(last.time))))。样本内结果，不代表未来收益。\(researchNote)"
+                if let first = closed.dropFirst(startIndex).first, let last = closed.last {
+                    coverage = "目标样本\(requested)根，实际\(testCount)根，预热\(startIndex)/\(warmup)根，排除最新一根。\(formatter.string(from:Date(timeIntervalSince1970:Double(first.time)))) 至 \(formatter.string(from:Date(timeIntervalSince1970:Double(last.time))))。样本内结果，不代表未来收益。\(researchNote)"
                 }
             } catch is CancellationError {} catch { self.error = error.localizedDescription }
         }

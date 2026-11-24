@@ -34,6 +34,11 @@ struct BacktestTrade: Sendable, Identifiable {
     let entry: Double
     let exit: Double
     let net: Double
+    let initialStop: Double
+    let initialTarget: Double?
+    let plannedRisk: Double
+    let fees: Double
+    var realizedR: Double { net/plannedRisk }
     let reason: String
 }
 struct BacktestResult: Sendable {
@@ -48,6 +53,8 @@ struct BacktestResult: Sendable {
     var wins: Int { trades.filter { $0.net > 0 }.count }
     var losses: Int { trades.filter { $0.net < 0 }.count }
     var breakevens: Int { trades.count-wins-losses }
+    var totalFees: Double { trades.reduce(0) { $0+$1.fees } }
+    var averageR: Double? { trades.isEmpty ? nil : trades.reduce(0) { $0+$1.realizedR }/Double(trades.count) }
     var profitFactor: Double? {
         let profit = trades.reduce(0.0) { $0+max(0,$1.net) }
         let loss = trades.reduce(0.0) { $0+max(0,-$1.net) }
@@ -59,7 +66,7 @@ struct BacktestResult: Sendable {
 enum FuturesBacktest {
     private struct Position {
         let side, index: Int
-        let entry, target: Double
+        let entry, target, initialStop, plannedRisk: Double
         var stop: Double
         var breakEvenArmed = false
     }
@@ -77,8 +84,8 @@ enum FuturesBacktest {
         }
     }
 
-    static func run(bars: [FormulaBar], signals: [BacktestSignal], p: BacktestParameters) throws -> BacktestResult {
-        guard p.valid, bars.count == signals.count, bars.count >= 2 else {
+    static func run(bars: [FormulaBar], signals: [BacktestSignal], p: BacktestParameters, startIndex: Int = 0) throws -> BacktestResult {
+        guard p.valid, bars.count == signals.count, startIndex >= 0, startIndex < bars.count-1 else {
             throw FormulaFailure("回测参数或历史K线不足")
         }
         let unit = p.multiplier * Double(p.lots)
@@ -104,15 +111,16 @@ enum FuturesBacktest {
             let net = abs(rawNet) < 1e-7 ? 0 : rawNet
             cash += net
             trades.append(BacktestTrade(id:trades.count,side:pos.side,entryIndex:pos.index,
-                exitIndex:i,entry:pos.entry,exit:fill,net:net,reason:reason))
+                exitIndex:i,entry:pos.entry,exit:fill,net:net,initialStop:pos.initialStop,
+                initialTarget:p.targetR > 0 ? pos.target : nil,plannedRisk:pos.plannedRisk,fees:2*cost,reason:reason))
             position = nil
         }
 
-        for i in bars.indices {
+        for i in startIndex..<bars.count {
             let bar = bars[i]
             guard [bar.open,bar.high,bar.low,bar.close].allSatisfy(\.isFinite),
-                  bar.high >= bar.low else { throw FormulaFailure("历史K线含无效价格") }
-            if i > 0 {
+                  bar.high >= max(bar.open,bar.close),bar.low <= min(bar.open,bar.close) else { throw FormulaFailure("历史K线含无效价格") }
+            if i > startIndex {
                 let signal = signals[i-1] // observed only at previous close
                 var exitedAtOpen = false
                 if let pos = position {
@@ -142,7 +150,7 @@ enum FuturesBacktest {
                             // Net target includes both fees and adverse exit slippage.
                             let distance = (netRisk*p.targetR+2*cost)/unit+slip
                             let target = tickRound(entry+Double(side)*distance,up:side > 0)
-                            position = Position(side:side,index:i,entry:entry,target:target,stop:stop)
+                            position = Position(side:side,index:i,entry:entry,target:target,initialStop:stop,plannedRisk:netRisk,stop:stop)
                         } else { rejected += 1 }
                     }
                 }

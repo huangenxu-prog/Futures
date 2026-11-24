@@ -67,6 +67,11 @@ struct StrategySelfTest {
         precondition(invalid.invalidated == 1 && invalid.confirmed == 0)
         let directional = try FuturesBacktest.run(bars:bars,signals:[.init(long:true),.init(exitLong:true),.init(),.init()],p:protect)
         precondition(directional.trades.first?.reason == "结构失效")
-        print("Backtest next-open, net risk, causal retest, invalidation and timeframe alignment checks passed")
+        let warmed = try FuturesBacktest.run(bars:bars,signals:[.init(long:true),.init(),.init(),.init()],p:p,startIndex:1)
+        precondition(warmed.trades.isEmpty && warmed.final == p.initial && warmed.equity.count == 3)
+        precondition(result.trades[0].plannedRisk == 44 && result.trades[0].fees == 4)
+        precondition(result.trades[0].initialStop == 97 && result.trades[0].initialTarget == 106)
+        precondition(abs(result.trades[0].realizedR-46.0/44.0) < 1e-9)
+        print("Backtest warmup exclusion, trade audit, net risk, causal retest and timeframe alignment checks passed")
     }
 }

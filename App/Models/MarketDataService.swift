@@ -344,7 +344,7 @@ enum MarketDataService {
     /// Read-only backtest history, separate from the live chart cache.
     /// The gateway accepts at most 500 recent bars and 300 per older page.
     static func backtestHistory(symbol: String, period: Int, count: Int) async throws -> [MarketBar] {
-        let wanted = min(6000,max(50,count))
+        let wanted = min(7001,max(50,count))
         let recent = try await fetch(symbol:symbol,period:period,count:min(500,wanted),mergeCached:false)
         var indexed: [Int64:MarketBar] = [:]
         for bar in recent { indexed[bar.time] = bar }
