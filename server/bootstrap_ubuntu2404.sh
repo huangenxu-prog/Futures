@@ -34,8 +34,36 @@ fi
 echo "[3/5] 下载网关并校验 Git 文件摘要..."
 TEMP="$(mktemp)"
 trap 'rm -f "$TEMP"' EXIT
-curl --fail --location --silent --show-error --retry 3 --connect-timeout 15 --max-time 90 \
-  "https://raw.githubusercontent.com/huangenxu-prog/Futures/$MARKET_COMMIT/server/market_gateway.py" -o "$TEMP"
+# GitHub Raw can reset TLS handshakes on some Alibaba Cloud routes.
+# Try public CDN first and GitHub Contents API second; the Git blob SHA
+# check below guarantees byte-for-byte identity whichever source succeeds.
+SOURCE_PATH="server/market_gateway.py"
+CDN_URL="https://cdn.jsdelivr.net/gh/huangenxu-prog/Futures@$MARKET_COMMIT/$SOURCE_PATH"
+API_URL="https://api.github.com/repos/huangenxu-prog/Futures/contents/$SOURCE_PATH?ref=$MARKET_COMMIT"
+RAW_URL="https://raw.githubusercontent.com/huangenxu-prog/Futures/$MARKET_COMMIT/$SOURCE_PATH"
+META="$(mktemp)"
+trap 'rm -f "$TEMP" "$META"' EXIT
+if curl -4 -fLsS --connect-timeout 8 --max-time 40 "$CDN_URL" -o "$TEMP"; then
+  echo "网关源码下载成功（jsDelivr）"
+elif curl -4 -fLsS --connect-timeout 8 --max-time 40 \
+  -H 'Accept: application/vnd.github+json' "$API_URL" -o "$META"; then
+  python3 - "$META" "$TEMP" <<'PY'
+import base64
+import json
+import sys
+from pathlib import Path
+meta = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if meta.get("encoding") != "base64" or not meta.get("content"):
+    raise SystemExit("GitHub API 未返回完整源码。")
+Path(sys.argv[2]).write_bytes(base64.b64decode(meta["content"], validate=False))
+PY
+  echo "网关源码下载成功（GitHub API）"
+elif curl -4 -fLsS --connect-timeout 8 --max-time 40 "$RAW_URL" -o "$TEMP"; then
+  echo "网关源码下载成功（GitHub Raw）"
+else
+  echo "源码下载失败：jsDelivr、GitHub API 和 GitHub Raw 均无法访问。" >&2
+  exit 1
+fi
 python3 - "$TEMP" "$MARKET_BLOB" <<'PY'
 import hashlib, sys
 from pathlib import Path
