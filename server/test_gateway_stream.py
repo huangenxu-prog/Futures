@@ -51,7 +51,9 @@ class GatewayStreamingTests(unittest.TestCase):
         hub.publish(key, [{"time": 100, "close": 1}], received_at=1000.0)
         self.assertEqual(hub.timing_for(key, 1), 1000.0)
         self.assertIsNone(hub.timing_for(key, 0))
-        hub.publish(key, [{"time": 100, "close": 2}], history=True)
+        # History at the same timestamp preserves the latest live bar.
+        # A newer historical candle actually advances the published version.
+        hub.publish(key, [{"time": 200, "close": 2}], history=True)
         self.assertIsNone(hub.timing_for(key, 2))
         self.assertIsNone(hub.timing_for(key, 1))
 
