@@ -97,11 +97,13 @@ struct ContentView: View {
             }
         }
         contracts = incoming
+        NotificationCenter.default.post(name: .qihuiLiveQuotes, object: incoming)
     }
 
 }
 
 extension Notification.Name {
     static let qihuiDetailVisibility = Notification.Name("qihuiDetailVisibility")
+    static let qihuiLiveQuotes = Notification.Name("qihuiLiveQuotes")
 }
 

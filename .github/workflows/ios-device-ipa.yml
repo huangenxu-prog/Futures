@@ -25,6 +25,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Verify open candle quote time boundary
+        run: |
+          swiftc App/Models/OpenCandleQuotePolicy.swift scripts/OpenCandleQuoteSelfTest.swift -o /tmp/open-candle-quote-test
+          /tmp/open-candle-quote-test
+
       - name: Verify immediate SSE line parsing
         run: |
           swiftc App/Models/SSELineBuffer.swift scripts/SSELineBufferSelfTest.swift -o /tmp/sse-line-test

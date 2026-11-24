@@ -130,7 +130,7 @@ enum MarketDataService {
         return try JSONDecoder().decode([String: MainContract].self, from: data)
     }
 
-    struct MainContract: Codable {
+    struct MainContract: Codable, Equatable {
         let code: String
         let month: String
         let last, settlement, bid, ask, volume, interest, previousInterest: Double?
