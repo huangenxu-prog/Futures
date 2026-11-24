@@ -28,57 +28,11 @@ struct FormulaComposerView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("指标") {
-                    TextField("指标名称",text:$draft.name)
-                    Picker("绘制位置",selection:$draft.overlay) {
-                        Text("主图").tag(true)
-                        Text("副图").tag(false)
-                    }
-                    Toggle("显示指标",isOn:$draft.enabled)
-                }
-                ForEach($composition.lines) { $line in
-                    Section {
-                        CompositionLineEditor(line:$line,number:index(for:line.id),
-                            canDelete:composition.lines.count > 1) {
-                            let id = line.id
-                            composition.lines.removeAll { $0.id == id }
-                        }
-                    }
-                }
-                Section {
-                    Button {
-                        composition.lines.append(CompositionLine())
-                    } label: {
-                        Label("新增曲线",systemImage:"plus.circle")
-                    }
-                    .disabled(composition.lines.count >= 8)
-                } footer: {
-                    Text("点击曲线名称即可改名，支持中文。继续计算使用上一道计算结果；新增曲线则独立计算。")
-                }
-                Section("效果预览") {
-                    previewContent
-                } footer: {
-                    Text("使用打开编辑器时的真实K线快照，参数变化自动重算。自动配色仅作预览，主图最终配色由图表主题决定。")
-                }
-                Section {
-                    DisclosureGroup("查看生成公式",isExpanded:$showingSource) {
-                        if let source = try? composition.source() {
-                            Text(source)
-                                .font(.system(size:12,design:.monospaced))
-                                .textSelection(.enabled)
-                        } else {
-                            Text("请检查计算参数").foregroundStyle(.secondary)
-                        }
-                    }
-                    Button("检查公式") { checked = validate() != nil }
-                    if checked {
-                        Label("公式检查通过",systemImage:"checkmark.circle")
-                            .font(.caption).foregroundStyle(.green)
-                    }
-                    if let error {
-                        Text(error).font(.caption).foregroundStyle(.red)
-                    }
-                }
+                metadataSection
+                curveSections
+                addCurveSection
+                previewSection
+                sourceSection
             }
             .scrollDismissesKeyboard(.interactively)
             .scrollContentBackground(.hidden)
@@ -108,6 +62,77 @@ struct FormulaComposerView: View {
             .task(id:composition) { await updatePreview() }
         }
         .tint(MarketPalette.accent)
+    }
+
+    private var metadataSection: some View {
+        Section("指标") {
+            TextField("指标名称",text:$draft.name)
+            Picker("绘制位置",selection:$draft.overlay) {
+                Text("主图").tag(true)
+                Text("副图").tag(false)
+            }
+            Toggle("显示指标",isOn:$draft.enabled)
+        }
+    }
+
+    private var curveSections: some View {
+        ForEach($composition.lines) { binding in
+            curveSection(binding)
+        }
+    }
+
+    private func curveSection(_ binding: Binding<CompositionLine>) -> some View {
+        let id = binding.wrappedValue.id
+        let number = index(for:id)
+        let canDelete = composition.lines.count > 1
+        return Section {
+            CompositionLineEditor(line:binding,number:number,canDelete:canDelete,onDelete: {
+                removeCurve(id)
+            })
+        }
+    }
+
+    private func removeCurve(_ id:UUID) {
+        composition.lines.removeAll { $0.id == id }
+    }
+
+    private var addCurveSection: some View {
+        Section {
+            Button { composition.lines.append(CompositionLine()) } label: {
+                Label("新增曲线",systemImage:"plus.circle")
+            }
+            .disabled(composition.lines.count >= 8)
+        } footer: {
+            Text("点击曲线名称即可改名，支持中文。继续计算使用上一道计算结果；新增曲线则独立计算。")
+        }
+    }
+
+    private var previewSection: some View {
+        Section {
+            previewContent
+        } header: {
+            Text("效果预览")
+        } footer: {
+            Text("使用打开编辑器时的真实K线快照，参数变化自动重算。自动配色仅作预览，主图最终配色由图表主题决定。")
+        }
+    }
+
+    private var sourceSection: some View {
+        Section {
+            DisclosureGroup("查看生成公式",isExpanded:$showingSource) {
+                if let source = try? composition.source() {
+                    Text(source).font(.system(size:12,design:.monospaced)).textSelection(.enabled)
+                } else {
+                    Text("请检查计算参数").foregroundStyle(.secondary)
+                }
+            }
+            Button("检查公式") { checked = validate() != nil }
+            if checked {
+                Label("公式检查通过",systemImage:"checkmark.circle")
+                    .font(.caption).foregroundStyle(.green)
+            }
+            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+        }
     }
 
     @ViewBuilder

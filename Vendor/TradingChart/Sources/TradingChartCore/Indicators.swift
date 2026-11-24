@@ -316,6 +316,8 @@ public struct IndicatorOutput: Sendable, Equatable {
     public var sticks: [IndicatorStick]
     public var signals: [IndicatorSignal]
     public var segmentSeries: [IndicatorSegmentSeries]
+    /// Optional presentation-only status, independent of drawable values.
+    public var statusText: String?
 
     /// Creates an output.
     public init(
@@ -326,7 +328,8 @@ public struct IndicatorOutput: Sendable, Equatable {
         fixedRange: ClosedRange<Double>? = nil,
         sticks: [IndicatorStick] = [],
         signals: [IndicatorSignal] = [],
-        segmentSeries: [IndicatorSegmentSeries] = []
+        segmentSeries: [IndicatorSegmentSeries] = [],
+        statusText: String? = nil
     ) {
         self.lines = lines
         self.bands = bands
@@ -336,6 +339,7 @@ public struct IndicatorOutput: Sendable, Equatable {
         self.sticks = sticks
         self.signals = signals
         self.segmentSeries = segmentSeries
+        self.statusText = statusText
     }
 
     /// An output with nothing to draw.

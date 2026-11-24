@@ -140,8 +140,8 @@ struct IndicatorSettingsView: View {
                 }
                 Section("结构指标（试验）") {
                     Toggle("缠论分型、笔与重叠区", isOn: enabledBinding(.chan))
-                    Toggle("猎杀扫回候选", isOn: enabledBinding(.hunt))
-                    Text("结构使用方向包含处理、严格分型及至少5根合并K线的笔距离；中枢为三笔重叠试验口径。猎杀仅单周期候选，不是完整多周期策略。")
+                    Toggle("猎杀结构与提示", isOn: enabledBinding(.hunt))
+                    Text("缠论只显示结构线及重叠区，不显示顶底文字。猎杀显示结构、趋势及猎杀/等/确认状态；图上为本周期研究提示，并非完整多周期交易资格。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("自定义公式指标") {

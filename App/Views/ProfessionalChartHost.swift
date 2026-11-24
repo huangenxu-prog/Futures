@@ -167,6 +167,9 @@ struct ProfessionalChartHost: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if displaySettings.enabled.contains(.hunt) {
+                huntStatusStrip
+            }
             TradingChartView(model: model)
                 .frame(maxHeight: .infinity)
             HStack(spacing: 6) {
@@ -230,6 +233,22 @@ struct ProfessionalChartHost: View {
             historyTask = nil
             model.activeDrawingTool = nil
         }
+    }
+
+    private var huntStatusStrip: some View {
+        let id = QihuiHuntPreview(showStructure:!displaySettings.enabled.contains(.chan)).id
+        let status = model.output(for:id)?.statusText ?? "本周期 · 趋势：数据不足 · 等"
+        return HStack {
+            Text(status)
+                .font(.system(size:11,weight:.medium))
+                .foregroundStyle(MarketPalette.ink)
+                .lineLimit(2)
+            Spacer(minLength:0)
+        }
+        .padding(.horizontal,8)
+        .padding(.vertical,4)
+        .background(MarketPalette.surface)
+        .accessibilityLabel(status+"，单周期研究提示，非多周期交易资格")
     }
 
     private var indicatorToolbar: some View {

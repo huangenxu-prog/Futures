@@ -7,45 +7,53 @@ private func structureBars(_ input: IndicatorInput) -> [FormulaBar] {
     }
 }
 
+private func structureSeries(_ result: ChanStructure.Result, input: IndicatorInput,
+                             strokeColor: String, showZones: Bool) -> [IndicatorSegmentSeries] {
+    func value(_ i:Int,_ p:Double) -> IndicatorValue {
+        IndicatorValue(time:input.candles[i].time,value:p)
+    }
+    let segments = zip(result.pivots,result.pivots.dropFirst()).map { a,b in
+        IndicatorSegment(start:value(a.index,a.price),end:value(b.index,b.price))
+    }
+    var series = [IndicatorSegmentSeries(segments:segments,
+        style:IndicatorLineStyle(color:ChartColor(hex:strokeColor),width:1.6))]
+    if showZones {
+        for zone in result.zones {
+            for p in [zone.low,zone.high] {
+                let segment = IndicatorSegment(start:value(zone.startIndex,p),end:value(zone.endIndex,p))
+                series.append(IndicatorSegmentSeries(segments:[segment],
+                    style:IndicatorLineStyle(color:ChartColor(hex:"4C8DFF"),width:1.2)))
+            }
+        }
+    }
+    return series
+}
+
 struct QihuiChanStructure: ChartIndicator {
-    var id: String { "qihui.chan.experimental.v1" }
+    var id: String { "qihui.chan.experimental.v2" }
     var displayName: String { "缠论结构（试验）" }
     var placement: IndicatorPlacement { .overlay }
     func calculate(_ input: IndicatorInput) -> IndicatorOutput {
         let result = ChanStructure.analyze(structureBars(input))
-        func value(_ i:Int,_ p:Double) -> IndicatorValue {
-            IndicatorValue(time:input.candles[i].time,value:p)
-        }
-        let segments = zip(result.pivots,result.pivots.dropFirst()).map { a,b in
-            IndicatorSegment(start:value(a.index,a.price),end:value(b.index,b.price))
-        }
-        var series = [IndicatorSegmentSeries(segments:segments,style:IndicatorLineStyle(color:ChartColor(hex:"F5A623"),width:1.6))]
-        for zone in result.zones {
-            for p in [zone.low,zone.high] {
-                let segment = IndicatorSegment(start:value(zone.startIndex,p),end:value(zone.endIndex,p))
-                series.append(IndicatorSegmentSeries(segments:[segment],style:IndicatorLineStyle(color:ChartColor(hex:"4C8DFF"),width:1.2)))
-            }
-        }
-        let marks = result.fractals.map { pivot in
-            IndicatorSignal(time:input.candles[pivot.index].time,value:pivot.price,
-                text:pivot.kind == .top ? "顶" : "底",color:ChartColor(hex:"B57CFF"))
-        }
-        return IndicatorOutput(signals:marks.sorted{$0.time < $1.time},segmentSeries:series)
+        // Fractals remain in the algorithm, not on the chart as text.
+        return IndicatorOutput(segmentSeries:structureSeries(result,input:input,strokeColor:"F5A623",showZones:true))
     }
 }
 
 struct QihuiHuntPreview: ChartIndicator {
-    var id: String { "qihui.hunt.single-period.v1" }
-    var displayName: String { "猎杀·扫回候选" }
+    var showStructure = true
+    var id: String { "qihui.hunt.single-period.v2:\(showStructure)" }
+    var displayName: String { "猎杀（本周期研究）" }
     var placement: IndicatorPlacement { .overlay }
     func calculate(_ input: IndicatorInput) -> IndicatorOutput {
         let bars = structureBars(input)
-        let candidates = HuntSignals.calculate(bars)
+        let analysis = HuntSignals.analyze(bars)
+        let candidates = analysis.signals
         let confirmation = HuntConfirmation.calculate(bars,candidates:candidates)
         let rawMarks = candidates.enumerated().compactMap { i,s -> IndicatorSignal? in
             guard let s else { return nil }
             return IndicatorSignal(time:input.candles[i].time,value:s.extreme,
-                text:s.side > 0 ? "扫低↑" : "扫高↓",color:ChartColor(hex:s.side > 0 ? "FF5B5B" : "23C6C8"))
+                text:s.side > 0 ? "猎杀多" : "猎杀空",color:ChartColor(hex:"F5A623"))
         }
         let confirmedMarks = confirmation.signals.enumerated().compactMap { i,s -> IndicatorSignal? in
             guard let s else { return nil }
@@ -54,6 +62,17 @@ struct QihuiHuntPreview: ChartIndicator {
                 text:s.side > 0 ? "确认多" : "确认空",
                 color:ChartColor(hex:s.side > 0 ? "FF5B5B" : "23C6C8"))
         }
-        return IndicatorOutput(signals:(rawMarks+confirmedMarks).sorted{$0.time < $1.time})
+        let series = showStructure
+            ? structureSeries(ChanStructure.analyze(bars),input:input,strokeColor:"F5A623",showZones:true)
+            : []
+        let trend: String
+        switch analysis.trend.last ?? 0 {
+        case 1: trend = "多头"
+        case -1: trend = "空头"
+        default: trend = analysis.hasDirectionData ? "不明确" : "数据不足"
+        }
+        let status = "本周期 · 趋势：\(trend) · \(confirmation.latestStatus)"
+        return IndicatorOutput(signals:(rawMarks+confirmedMarks).sorted{$0.time < $1.time},
+                               segmentSeries:series,statusText:status)
     }
 }

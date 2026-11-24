@@ -20,7 +20,7 @@ enum ChartIndicatorKind: String, Codable, CaseIterable, Hashable, Identifiable {
         case .sar: return "SAR"
         case .opi: return "OPI"
         case .chan: return "缠论"
-        case .hunt: return "猎杀候选"
+        case .hunt: return "猎杀"
         }
     }
 }
@@ -157,7 +157,7 @@ struct ChartDisplaySettings: Codable, Equatable {
         case .sar: return "SAR"
         case .opi: return "OPI"
         case .chan: return "缠论"
-        case .hunt: return "猎杀候选"
+        case .hunt: return "猎杀"
         }
     }
 
@@ -230,7 +230,7 @@ struct ChartDisplaySettings: Codable, Equatable {
             case .sar: result.append(QihuiSAR(step: sarStep, maximum: sarMaximum))
             case .opi: result.append(QihuiOpenInterest())
             case .chan: result.append(QihuiChanStructure())
-            case .hunt: result.append(QihuiHuntPreview())
+            case .hunt: result.append(QihuiHuntPreview(showStructure:!enabled.contains(.chan)))
             }
         }
         for average in additionalAverages where average.enabled {

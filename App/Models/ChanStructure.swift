@@ -119,10 +119,18 @@ enum HuntSignals {
         let level: Double
         let extreme: Double
     }
-    static func calculate(_ bars:[FormulaBar]) -> [Signal?] {
+    struct Analysis: Sendable {
+        let signals: [Signal?]
+        let trend: [Int]
+        let hasDirectionData: Bool
+    }
+    static func calculate(_ bars:[FormulaBar]) -> [Signal?] { analyze(bars).signals }
+    static func analyze(_ bars:[FormulaBar]) -> Analysis {
         var high: Double?, priorHigh: Double?, low: Double?, priorLow: Double?
         var usedHigh: Double?, usedLow: Double?
         var result = [Signal?](repeating:nil,count:bars.count)
+        var trends = [Int](repeating:0,count:bars.count)
+        var hasDirectionData = false
         for i in bars.indices {
             // Fractal center i-2 is confirmed by i-1, strictly before the
             // candle being tested. No historical rewriting of signals.
@@ -136,6 +144,8 @@ enum HuntSignals {
                 }
             }
             guard let h = high, let ph = priorHigh, let l = low, let pl = priorLow else { continue }
+            hasDirectionData = true
+            trends[i] = h > ph && l > pl ? 1 : h < ph && l < pl ? -1 : 0
             let b = bars[i]
             if h > ph && l > pl && usedLow != l && b.low < l && b.close > l {
                 result[i] = Signal(side:1,level:l,extreme:b.low); usedLow = l
@@ -143,7 +153,7 @@ enum HuntSignals {
                 result[i] = Signal(side:-1,level:h,extreme:b.high); usedHigh = h
             }
         }
-        return result
+        return Analysis(signals:result,trend:trends,hasDirectionData:hasDirectionData)
     }
 }
 
@@ -161,6 +171,7 @@ enum HuntConfirmation {
         let confirmed: Int
         let invalidated: Int
         let expired: Int
+        let latestStatus: String
     }
     private struct Pivot {
         let kind: Int
@@ -173,7 +184,9 @@ enum HuntConfirmation {
         var signals = [HuntSignals.Signal?](repeating:nil,count:bars.count)
         var reversal = [Int](repeating:0,count:bars.count)
         var total = 0, confirmed = 0, invalidated = 0, expired = 0
+        var latestStatus = "等"
         for i in bars.indices {
+            latestStatus = "等"
             var fractal = 0
             if i >= 2 {
                 let a = bars[i-2], b = bars[i-1], c = bars[i]
@@ -206,14 +219,17 @@ enum HuntConfirmation {
                 let broken = s.side > 0 ? b.low < s.extreme : b.high > s.extreme
                 if broken || reversal[i] == -s.side {
                     pending = nil; invalidated += 1
+                    latestStatus = "失效 · 等"
                 } else if i-active.index > maxWait {
                     pending = nil; expired += 1
+                    latestStatus = "超时 · 等"
                 } else if i-1 > active.index && fractal == -s.side {
                     let center = bars[i-1]
                     let respects = s.side > 0 ? center.low >= s.extreme && b.close > s.level
                                               : center.high <= s.extreme && b.close < s.level
                     if respects {
                         signals[i] = s; pending = nil; confirmed += 1
+                        latestStatus = s.side > 0 ? "确认多（候选）" : "确认空（候选）"
                     }
                 }
             }
@@ -224,9 +240,12 @@ enum HuntConfirmation {
                 if pending != nil { invalidated += 1 }
                 pending = (i,candidate)
             }
+            if let pending {
+                latestStatus = pending.signal.side > 0 ? "猎杀多 · 等确认" : "猎杀空 · 等确认"
+            }
         }
         return Result(signals:signals,reverseN:reversal,candidates:total,
-                      confirmed:confirmed,invalidated:invalidated,expired:expired)
+                      confirmed:confirmed,invalidated:invalidated,expired:expired,latestStatus:latestStatus)
     }
 }
 

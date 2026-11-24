@@ -57,6 +57,11 @@ struct StrategySelfTest {
         let raw: [HuntSignals.Signal?] = [seed,nil,nil,nil,nil]
         let confirmed = HuntConfirmation.calculate(retest,candidates:raw)
         precondition(confirmed.signals[0] == nil && confirmed.signals[2] == nil && confirmed.signals[3] == seed)
+        precondition(HuntConfirmation.calculate(Array(retest.prefix(1)),candidates:[seed]).latestStatus == "猎杀多 · 等确认")
+        precondition(HuntConfirmation.calculate(Array(retest.prefix(4)),candidates:Array(raw.prefix(4))).latestStatus == "确认多（候选）")
+        precondition(confirmed.latestStatus == "等")
+        let direction = HuntSignals.analyze(fixture)
+        precondition(direction.signals == full && direction.trend.count == fixture.count)
         for i in 1...retest.count {
             let prefix = HuntConfirmation.calculate(Array(retest.prefix(i)),candidates:Array(raw.prefix(i)))
             precondition(prefix.signals == Array(confirmed.signals.prefix(i)))
