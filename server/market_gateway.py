@@ -525,6 +525,7 @@ class SharedKlineHub:
         self.background_history = deque()
         self.history_running = set()
         self.warm_until = {}
+        self.history_retry_after = {}
         self.generation = 0
         self.thread = None
         self.history_thread = None
@@ -543,11 +544,16 @@ class SharedKlineHub:
             self.last_history[key] = max(0, saved_at)
 
     def _schedule_locked(self, key, urgent=False):
+        if time.monotonic() < self.history_retry_after.get(key, 0):
+            return
         if key in self.history_running:
             return
         if key in self.pending_history:
             if urgent:
                 self.urgent_history.append(key)  # upgrade priority
+            return
+        # A public cache hint cannot build an unbounded background backlog.
+        if len(self.pending_history) >= 144:
             return
         self.pending_history.add(key)
         (self.urgent_history if urgent else self.background_history).append(key)
@@ -733,12 +739,19 @@ class SharedKlineHub:
                 while time.time() < deadline:
                     api.wait_update(deadline=time.time() + 1)
                     bars = bars_from_serial(serial)
-                    if len(bars) >= 2:
+                    if len(bars) >= 1:
                         break
                 if bars:
                     self.publish(key, bars, history=True)
+                    with self.condition:
+                        self.history_retry_after.pop(key, None)
+                else:
+                    with self.condition:
+                        self.history_retry_after[key] = time.monotonic() + 60
                 batches += 1
             except Exception as exc:
+                with self.condition:
+                    self.history_retry_after[key] = time.monotonic() + 60
                 print("历史K线补齐失败:", key, type(exc).__name__,
                       str(exc)[:120], flush=True)
                 if api is not None:
@@ -950,11 +963,16 @@ class Handler(BaseHTTPRequestHandler):
                                             symbol) for symbol in symbols)):
                 self.reply(400, {"error": "invalid_warm_symbols"})
                 return
-            # Only contracts that the running quote hub currently advertises,
-            # or known listed products, can be requested. This bounds abuse.
+            # Validate against already resolved, genuine contract identifiers.
+            # Arbitrary synthetic delivery months cannot trigger TqSdk traffic.
             current_codes = {item.get("code") for item in LIVE_QUOTES.current().values()}
-            if any(symbol not in current_codes and
-                   contract_product(symbol) not in SYMBOLS for symbol in symbols):
+            with DYNAMIC_QUOTE_LOCK:
+                known_codes = {
+                    quote.get("code") for snapshot in QUOTE_BATCH_CACHE.values()
+                    for quote in snapshot.values()
+                }
+            if any(symbol not in current_codes and symbol not in known_codes
+                   for symbol in symbols):
                 self.reply(400, {"error": "unsupported_warm_symbols"})
                 return
             accepted = KLINE_HUB.warm_symbols(symbols)

@@ -21,11 +21,12 @@ spec.loader.exec_module(gateway)
 
 class GatewayStreamingTests(unittest.TestCase):
     def test_live_history_depth_covers_longest_used_ma(self):
-        # User's longest moving average is 120; don't download 500 bars
-        # for every new timeframe. The history endpoint remains separate.
-        self.assertEqual(gateway.KLINE_DATA_LENGTH, 200)
-        self.assertGreaterEqual(gateway.KLINE_DATA_LENGTH, 120)
-        self.assertEqual(gateway.SharedKlineHub().status()["data_length"], 200)
+        # On the live connection only 2 real bars are subscribed. A separate
+        # one-off history worker acquires 200 bars for MA120 and chart panning.
+        self.assertEqual(gateway.KLINE_DATA_LENGTH, 2)
+        self.assertEqual(gateway.KLINE_HISTORY_LENGTH, 200)
+        self.assertGreaterEqual(gateway.KLINE_HISTORY_LENGTH, 120)
+        self.assertEqual(gateway.SharedKlineHub().status()["data_length"], 2)
 
     def test_continuous_chart_resolution_for_new_products(self):
         self.assertEqual(gateway.quote_symbol("SHFE.zn"), "KQ.m@SHFE.zn")
@@ -69,7 +70,7 @@ class GatewayStreamingTests(unittest.TestCase):
             c = hub.reserve("SHFE.rb2701", 900, listener=True)
         self.assertIn(a, hub.entries)
         self.assertNotIn(b, hub.entries)
-        self.assertNotIn(b, hub.cache)
+        self.assertNotIn(b, hub.entries)
         self.assertEqual(hub.generation, 1)
         with patch.object(hub, "start"):
             with self.assertRaises(gateway.KlineCapacityError):
@@ -77,49 +78,76 @@ class GatewayStreamingTests(unittest.TestCase):
         hub.release(a, listener=True)
         hub.release(c, listener=True)
 
-    def test_first_live_bar_prewarms_all_timeframes(self):
-        hub = gateway.SharedKlineHub(max_series=8)
+    def test_warmup_never_consumes_live_subscription_slots(self):
+        hub = gateway.SharedKlineHub(max_series=2)
         with patch.object(hub, "start"):
-            key = hub.reserve("CZCE.MA701", 900, listener=True)
-        self.assertEqual(len(hub.entries), 1)
-        self.assertEqual(hub.status()["prefetch_pending"], 0)
-        hub.publish(key, [{"time": 100, "open": 3000, "high": 3001,
-                          "low": 2999, "close": 3001, "volume": 1}])
-        self.assertEqual({period for sym, period in hub.entries if sym == "CZCE.MA701"},
-                         gateway.PERIODS)
-        self.assertEqual(len(hub.entries), 6)
-        self.assertEqual(hub.status()["prefetch_pending"], 5)
-        hub.publish(key, [{"time": 100, "open": 3000, "high": 3002,
-                          "low": 2999, "close": 3002, "volume": 2}])
-        self.assertEqual(len(hub.entries), 6)
+            accepted = hub.warm_symbols(["CZCE.MA701"])
+        self.assertEqual(accepted, 1)
+        self.assertEqual(len(hub.entries), 0)
+        self.assertEqual(hub.status()["pending_history"], 6)
+        self.assertEqual(hub.warm_symbols(["CZCE.MA701"]), 0)
 
-    def test_switching_to_prefetched_timeframe_gains_priority(self):
-        hub = gateway.SharedKlineHub(max_series=8)
-        with patch.object(hub, "start"):
-            active = hub.reserve("CZCE.MA701", 900, listener=True)
-            hub.publish(active, [{"time": 100}])
-            sibling = ("CZCE.MA701", 300)
-            self.assertTrue(hub.entries[sibling]["prefetch"])
-            hub.reserve("CZCE.MA701", 300, listener=True)
-        self.assertFalse(hub.entries[sibling]["prefetch"])
-        hub.publish(sibling, [{"time": 100}])
-        hub.release(active, listener=True)
-        hub.release(sibling, listener=True)
+    def test_dedup_merge_history_and_live_candle(self):
+        h = [{"time": 100, "close": 2}, {"time": 200, "close": 3}]
+        live = [{"time": 200, "close": 4}, {"time": 300, "close": 5}]
+        self.assertEqual(gateway.merge_kline_bars(h, live),
+                         [{"time": 100, "close": 2}, {"time": 200, "close": 4},
+                          {"time": 300, "close": 5}])
 
-    def test_prefetch_stays_within_budget_and_never_evicts_active(self):
-        hub = gateway.SharedKlineHub(max_series=3)
-        with patch.object(hub, "start"):
-            active = hub.reserve("CZCE.MA701", 900, listener=True)
-            hub.publish(active, [{"time": 100}])
-        self.assertEqual(len(hub.entries), 3)
-        self.assertIn(active, hub.entries)
-        with patch.object(hub, "start"):
-            other = hub.reserve("CZCE.SR701", 900, listener=True)
-        self.assertIn(active, hub.entries)
-        self.assertIn(other, hub.entries)
-        self.assertLessEqual(len(hub.entries), 3)
-        hub.release(active, listener=True)
-        hub.release(other, listener=True)
+    def test_history_backfill_overrides_disk_not_live(self):
+        hub = gateway.SharedKlineHub(max_series=2)
+        key = ("CZCE.MA701", 900)
+        hub.publish(key, [{"time": 100, "close": 5}])
+        hub.publish(key, [{"time": 200, "close": 9}])
+        hub.publish(key, [{"time": 100, "close": 3},
+                          {"time": 200, "close": 7}], history=True)
+        bars, _ = hub.read(key, timeout=0)
+        self.assertEqual([b["time"] for b in bars], [100, 200])
+        self.assertEqual(bars[-1]["close"], 9)
+
+    def test_persisted_history_loads_immediately_and_reconciles(self):
+        class Store:
+            def __init__(self):
+                self.saved = None
+            def read(self, key):
+                return self.saved or [], 0.0
+            def write(self, key, bars):
+                self.saved = list(bars)
+        store = Store()
+        key = ("CZCE.MA701", 900)
+        first = gateway.SharedKlineHub(store=store)
+        first.publish(key, [{"time": 100, "close": 3000}], history=True)
+        second = gateway.SharedKlineHub(store=store)
+        with patch.object(second, "start"):
+            self.assertEqual(second.snapshot("CZCE.MA701", 900, 200, timeout=0),
+                             [{"time": 100, "close": 3000}])
+        self.assertIn(key, second.pending_history)
+
+    def test_atomic_disk_cache_round_trip_and_rejects_corruption(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as dirname:
+            store = gateway.KlineFileCache(dirname)
+            key = ("CZCE.MA701", 900)
+            bars = [{"time": 100, "open": 10., "high": 11.,
+                     "low": 9., "close": 10.5, "volume": 4}]
+            store.write(key, bars)
+            loaded, saved_at = store.read(key)
+            self.assertEqual(loaded, bars)
+            self.assertGreater(saved_at, 0)
+            store.path(key).write_text("{broken", encoding="utf-8")
+            self.assertEqual(store.read(key)[0], [])
+            with self.assertRaises(ValueError):
+                store.path(("../secret", 900))
+
+    def test_favorites_warm_endpoint_rejects_arbitrary_codes(self):
+        output = []
+        handler = SimpleNamespace(
+            path="/v1/cache/warm?symbol=CZCE.MA999",
+            reply=lambda status, payload: output.append((status, payload)))
+        with patch.object(gateway.LIVE_QUOTES, "current", return_value={
+            "CZCE.MA": {"code": "CZCE.MA701"}}):
+            gateway.Handler.do_GET(handler)
+        self.assertEqual(output[0][0], 400)
 
     def test_kline_endpoint_reads_shared_cache_not_new_sdk(self):
         output = []
