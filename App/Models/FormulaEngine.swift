@@ -11,6 +11,13 @@ struct FormulaFailure: LocalizedError {
 struct FormulaBar: Sendable {
     let open, high, low, close: Double
     let volume: Double?
+    let openInterest: Double?
+    let closeInterest: Double?
+    init(open: Double, high: Double, low: Double, close: Double, volume: Double?,
+         openInterest: Double? = nil, closeInterest: Double? = nil) {
+        self.open = open; self.high = high; self.low = low; self.close = close
+        self.volume = volume; self.openInterest = openInterest; self.closeInterest = closeInterest
+    }
 }
 struct FormulaDefinition: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
@@ -68,6 +75,13 @@ struct FormulaProgram: Sendable {
         env["O"] = env["OPEN"]; env["H"] = env["HIGH"]
         env["L"] = env["LOW"]; env["C"] = env["CLOSE"]; env["V"] = env["VOL"]
         env["VOLUME"] = env["VOL"]
+        env["OPEN_OI"] = bars.map { $0.openInterest }
+        env["OPI"] = bars.map { $0.closeInterest }
+        env["OI"] = env["OPI"]; env["CLOSE_OI"] = env["OPI"]
+        env["OI_CHANGE"] = bars.map { bar in
+            guard let opening = bar.openInterest, let closing = bar.closeInterest else { return nil }
+            return closing - opening
+        }
         env["HL2"] = bars.map { ($0.high+$0.low)/2 }
         env["HLC3"] = bars.map { ($0.high+$0.low+$0.close)/3 }
         env["OHLC4"] = bars.map { ($0.open+$0.high+$0.low+$0.close)/4 }

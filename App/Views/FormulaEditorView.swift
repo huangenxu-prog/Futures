@@ -33,6 +33,7 @@ struct FormulaEditorView: View {
                 Section("语法说明") {
                     Text(":= 定义中间变量，: 绘制输出，每行以 ; 分隔。")
                     Text("行情：OPEN HIGH LOW CLOSE VOL（O H L C V），HL2 HLC3 OHLC4；支持自定义价格表达式。")
+                    Text("持仓：OPI（期末持仓），OPEN_OI（期初持仓），OI_CHANGE（本根K线持仓变化）。旧历史可能缺少持仓数据。")
                     Text("均线：MA EMA SMA WMA EMA2 HMA DEMA TEMA DMA WILDER")
                     Text("其他：HHV LLV SUM STD REF COUNT IF CROSS BARSLAST ABS MAX MIN")
                     Text("EMA2 与 WMA 等价；HMA 半周期、平方根周期向下取整。DMA 支持 0～1 的权重表达式。")

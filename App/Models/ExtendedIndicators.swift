@@ -55,3 +55,19 @@ struct QihuiSAR: ChartIndicator {
             style: IndicatorLineStyle(color: ChartColor(hex: "B57CFF"), width: 1.2, dash: [2,2]))])
     }
 }
+
+
+/// Actual closing open interest, never derived from price or volume.
+struct QihuiOpenInterest: ChartIndicator {
+    var id: String { "qihui.opi" }
+    var displayName: String { "OPI" }
+    var placement: IndicatorPlacement { .pane }
+    func calculate(_ input: IndicatorInput) -> IndicatorOutput {
+        let values = input.candles.compactMap { candle -> IndicatorValue? in
+            guard let value = candle.closeInterest, value.isFinite, value >= 0 else { return nil }
+            return IndicatorValue(time:candle.time,value:value)
+        }
+        return IndicatorOutput(lines:[IndicatorLine(id:id+".line",name:"OPI",values:values,
+            style:IndicatorLineStyle(color:ChartColor(hex:"F18B31")))])
+    }
+}

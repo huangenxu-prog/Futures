@@ -391,14 +391,19 @@ def bars_from_serial(serial):
         fields = (row.open, row.high, row.low, row.close)
         if not all(math.isfinite(float(value)) for value in fields):
             continue
-        bars.append({
+        bar = {
             "time": int(row.datetime) // 1_000_000_000,
             "open": float(row.open),
             "high": float(row.high),
             "low": float(row.low),
             "close": float(row.close),
             "volume": int(row.volume) if math.isfinite(float(row.volume)) else 0,
-        })
+        }
+        for key, field in (("openInterest", "open_oi"), ("closeInterest", "close_oi")):
+            value = getattr(row, field, None)
+            if value is not None and math.isfinite(float(value)) and value >= 0:
+                bar[key] = int(value)
+        bars.append(bar)
     return bars
 
 
@@ -483,8 +488,13 @@ class KlineFileCache:
                            and math.isfinite(bar[field])
                            for field in ("open", "high", "low", "close", "volume")):
                     continue
-                valid.append({name: bar[name] for name in
-                              ("time", "open", "high", "low", "close", "volume")})
+                row = {name: bar[name] for name in
+                       ("time", "open", "high", "low", "close", "volume")}
+                for field in ("openInterest", "closeInterest"):
+                    value = bar.get(field)
+                    if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
+                        row[field] = int(value)
+                valid.append(row)
             return merge_kline_bars([], valid, limit=KLINE_DISK_HISTORY_LENGTH), float(payload.get("saved_at", 0))
         except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
             return [], 0.0

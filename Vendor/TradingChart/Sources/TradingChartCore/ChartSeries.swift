@@ -337,6 +337,8 @@ public struct ChartSeries: Sendable, Equatable {
         result.high = Swift.max(candle.high, candle.open, candle.close, candle.low)
         result.low = Swift.min(candle.low, candle.open, candle.close, candle.high)
         if let volume = candle.volume, !volume.isFinite { result.volume = nil }
+        if let oi = candle.openInterest, !oi.isFinite || oi < 0 { result.openInterest = nil }
+        if let oi = candle.closeInterest, !oi.isFinite || oi < 0 { result.closeInterest = nil }
         return result
     }
 

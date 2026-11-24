@@ -2,7 +2,7 @@ import Foundation
 import TradingChart
 
 enum ChartIndicatorKind: String, Codable, CaseIterable, Hashable, Identifiable {
-    case sma, emaFast, emaSlow, wma, boll, volume, macd, rsi, kdj, atr, sar
+    case sma, emaFast, emaSlow, wma, boll, volume, macd, rsi, kdj, atr, sar, opi
     var id: String { rawValue }
 
     var title: String {
@@ -18,6 +18,7 @@ enum ChartIndicatorKind: String, Codable, CaseIterable, Hashable, Identifiable {
         case .kdj: return "KDJ"
         case .atr: return "ATR"
         case .sar: return "SAR"
+        case .opi: return "OPI"
         }
     }
 }
@@ -166,6 +167,7 @@ struct ChartDisplaySettings: Codable, Equatable {
         case .kdj: return "KDJ"
         case .atr: return "ATR"
         case .sar: return "SAR"
+        case .opi: return "OPI"
         }
     }
 
@@ -214,6 +216,7 @@ struct ChartDisplaySettings: Codable, Equatable {
             case .kdj: result.append(QihuiKDJ(period: kdjPeriod, kPeriod: kdjK, dPeriod: kdjD))
             case .atr: result.append(QihuiATR(period: atrPeriod))
             case .sar: result.append(QihuiSAR(step: sarStep, maximum: sarMaximum))
+            case .opi: result.append(QihuiOpenInterest())
             }
         }
         for average in additionalAverages where average.enabled {

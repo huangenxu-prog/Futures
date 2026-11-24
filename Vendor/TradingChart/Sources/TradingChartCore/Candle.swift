@@ -14,6 +14,9 @@ public struct Candle: Hashable, Sendable, Codable, Identifiable {
     public var close: Double
     /// Traded volume, if known.
     public var volume: Double?
+    /// Actual exchange open interest at the start/end of the candle, if supplied.
+    public var openInterest: Double?
+    public var closeInterest: Double?
 
     /// Identity of a candle is its bucket start.
     public var id: Date { time }
@@ -28,7 +31,9 @@ public struct Candle: Hashable, Sendable, Codable, Identifiable {
         high: Double,
         low: Double,
         close: Double,
-        volume: Double? = nil
+        volume: Double? = nil,
+        openInterest: Double? = nil,
+        closeInterest: Double? = nil
     ) {
         self.time = time
         self.open = open
@@ -36,6 +41,8 @@ public struct Candle: Hashable, Sendable, Codable, Identifiable {
         self.low = low
         self.close = close
         self.volume = volume
+        self.openInterest = openInterest
+        self.closeInterest = closeInterest
     }
 
     /// Creates a candle from `Decimal` prices (converted to `Double`).

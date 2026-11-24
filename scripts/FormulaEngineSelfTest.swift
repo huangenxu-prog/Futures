@@ -24,7 +24,7 @@ struct FormulaEngineSelfTest {
         near(q[0].values[5],3); precondition(q[1].values[1] == nil); near(q[1].values[5],3)
         near(q[2].values[2],0); near(q[2].values[5],6); precondition(q[2].histogram)
         precondition(q[3].values.allSatisfy { $0 == nil }); near(q[4].values[1],4.0/3)
-        for bad in ["A:REF(C,-1);","A:UNKNOWN(C);","A:MA(C,0);","A:=C;","A:OPI;","C:C;","A:C;A:C;","A:MA(C,1),LINETHICK0;","A:IF(C,1);","A:1 @ 2;"] {
+        for bad in ["A:REF(C,-1);","A:UNKNOWN(C);","A:MA(C,0);","A:=C;","A:UNKNOWN_OI;","C:C;","A:C;A:C;","A:MA(C,1),LINETHICK0;","A:IF(C,1);","A:1 @ 2;"] {
             do { _ = try FormulaProgram(bad); preconditionFailure("accepted \(bad)") }
             catch is FormulaFailure {}
         }
@@ -95,6 +95,16 @@ struct FormulaEngineSelfTest {
                 preconditionFailure("accepted invalid expression \(bad)")
             } catch is FormulaFailure {}
         }
-        print("Formula engine: composition, persistence, nesting, numeric fixtures and validation passed")
+        let oiBars = [
+            FormulaBar(open:1,high:2,low:1,close:2,volume:3,openInterest:100,closeInterest:110),
+            FormulaBar(open:2,high:3,low:1,close:2,volume:4),
+            FormulaBar(open:2,high:3,low:1,close:2,volume:5,openInterest:110,closeInterest:0)
+        ]
+        let oi = try FormulaProgram("A:OPI; B:OPEN_OI; D:OI_CHANGE; E:MA(OPI,2);")
+        let o = try oi.evaluate(oiBars)
+        near(o[0].values[0],110); precondition(o[0].values[1] == nil); near(o[0].values[2],0)
+        near(o[1].values[0],100); near(o[2].values[0],10); near(o[2].values[2],-110)
+        precondition(o[3].values.allSatisfy { $0 == nil })
+        print("Formula engine: composition, persistence, nesting, numeric fixtures, open interest and validation passed")
     }
 }

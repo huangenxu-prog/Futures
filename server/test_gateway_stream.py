@@ -20,6 +20,35 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_open_interest_is_genuine_optional_data(self):
+        import tempfile
+        from add_kline_interest import patched
+        rows = [
+            SimpleNamespace(datetime=1000000000, open=10, high=12, low=9,
+                            close=11, volume=3, open_oi=100, close_oi=102),
+            SimpleNamespace(datetime=2000000000, open=11, high=12, low=10,
+                            close=11, volume=4, open_oi=float("nan"), close_oi=0),
+            SimpleNamespace(datetime=3000000000, open=11, high=12, low=10,
+                            close=11, volume=5),
+        ]
+        serial = SimpleNamespace(itertuples=lambda index=False: iter(rows))
+        bars = gateway.bars_from_serial(serial)
+        self.assertEqual(bars[0]["openInterest"], 100)
+        self.assertEqual(bars[0]["closeInterest"], 102)
+        self.assertNotIn("openInterest", bars[1])
+        self.assertEqual(bars[1]["closeInterest"], 0)
+        self.assertNotIn("closeInterest", bars[2])
+        with tempfile.TemporaryDirectory() as dirname:
+            store = gateway.KlineFileCache(dirname)
+            key = ("CZCE.SR701", 900)
+            store.write(key, bars)
+            self.assertEqual(store.read(key)[0], bars)
+        before = bars[:2]
+        after = [before[0], dict(before[1], closeInterest=5)]
+        self.assertEqual(gateway.next_kline_stream_event("CZCE.SR701", before, after, 2)["bar"], after[-1])
+        source = Path(gateway.__file__).read_text(encoding="utf-8")
+        self.assertEqual(patched(source), source)
+
     def test_live_history_depth_covers_longest_used_ma(self):
         # On the live connection only 2 real bars are subscribed. A separate
         # One-off worker warms 1200 real bars; disk retains fetched older pages.

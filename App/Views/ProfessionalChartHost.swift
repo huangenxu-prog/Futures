@@ -444,7 +444,8 @@ struct ProfessionalChartHost: View {
         Candle(time: sessionAxis.chartTime(for: bar.time)
                    ?? Date(timeIntervalSince1970: Double(bar.time)),
                open: bar.open, high: bar.high, low: bar.low, close: bar.close,
-               volume: Double(bar.volume))
+               volume: Double(bar.volume), openInterest: bar.openInterest,
+                closeInterest: bar.closeInterest)
     }
 
     // Unlike chart indicator settings, drawing anchors must be stored with real

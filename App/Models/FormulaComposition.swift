@@ -1,7 +1,7 @@
 import Foundation
 
 enum CompositionSource: String, Codable, CaseIterable, Identifiable, Sendable {
-    case close, open, high, low, hl2, hlc3, ohlc4, weightedClose, volume, custom
+    case close, open, high, low, hl2, hlc3, ohlc4, weightedClose, volume, openInterest, interestChange, custom
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -14,6 +14,8 @@ enum CompositionSource: String, Codable, CaseIterable, Identifiable, Sendable {
         case .ohlc4: return "四价平均 OHLC4"
         case .weightedClose: return "收盘加权 (3C+H+L+O)/6"
         case .volume: return "成交量 VOL"
+        case .openInterest: return "持仓量 OPI"
+        case .interestChange: return "单根增仓 OI_CHANGE"
         case .custom: return "自定义表达式"
         }
     }
@@ -28,6 +30,8 @@ enum CompositionSource: String, Codable, CaseIterable, Identifiable, Sendable {
         case .ohlc4: return "OHLC4"
         case .weightedClose: return "(3*C+H+L+O)/6"
         case .volume: return "VOL"
+        case .openInterest: return "OPI"
+        case .interestChange: return "OI_CHANGE"
         case .custom: return custom
         }
     }

@@ -103,6 +103,9 @@ struct IndicatorSettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("其他指标") {
+                    Toggle("显示 OPI 持仓量", isOn: enabledBinding(.opi))
+                    Text("使用每根K线的实际期末持仓量。旧缓存未包含持仓量时不绘制缺失数据。")
+                        .font(.caption).foregroundStyle(.secondary)
                     Toggle("显示 VOL", isOn: enabledBinding(.volume))
                     parameter("成交量均线", value: $draft.volumeMA)
                     Toggle("显示 RSI", isOn: enabledBinding(.rsi))

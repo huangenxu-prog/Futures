@@ -9,7 +9,8 @@ struct QihuiFormulaIndicator: ChartIndicator {
 
     func calculate(_ input: IndicatorInput) -> IndicatorOutput {
         let bars = input.candles.map {
-            FormulaBar(open:$0.open,high:$0.high,low:$0.low,close:$0.close,volume:$0.volume)
+            FormulaBar(open:$0.open,high:$0.high,low:$0.low,close:$0.close,volume:$0.volume,
+                       openInterest:$0.openInterest,closeInterest:$0.closeInterest)
         }
         guard let outputs = try? program.evaluate(bars) else { return .empty }
         var lines: [IndicatorLine] = []
