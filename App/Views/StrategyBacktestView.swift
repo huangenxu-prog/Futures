@@ -9,6 +9,7 @@ struct StrategyBacktestView: View {
     let priceTick: Double?
     @State private var source = "LONG:CROSS(EMA(C,20),EMA(C,50));\nSHORT:CROSS(EMA(C,50),EMA(C,20));"
     @State private var hunt = false
+    @State private var multiPeriod = true
     @State private var multiplier = ""
     @State private var tick = ""
     @State private var margin = ""
@@ -27,14 +28,20 @@ struct StrategyBacktestView: View {
         NavigationStack {
             Form {
                 Section("回测策略") {
-                    Text("\(symbol) · \(period/60)分钟")
+                    Text("\(symbol) · \(hunt && multiPeriod ? 5 : period/60)分钟")
                     Picker("模式",selection:$hunt) {
                         Text("公式信号").tag(false)
                         Text("猎杀扫回候选").tag(true)
                     }
                     if hunt {
-                        Text("单周期候选：已确认高低点、HH+HL/LH+LL、刺破后收盘收回；不是完整的1小时/30分钟/5分钟猎杀系统。")
-                            .font(.caption)
+                        Toggle("60/30/5分钟联合研究",isOn:$multiPeriod)
+                        if multiPeriod {
+                            Text("固定5分钟执行，60分钟结构方向过滤、30分钟三笔重叠区离开方向过滤；不引用未收盘大周期K线。周五不新开。仍为研究版，未包含完整进入段、15分钟辅助分型与N形态放弃规则。")
+                                .font(.caption)
+                        } else {
+                            Text("单周期候选：已确认高低点、HH+HL/LH+LL、刺破后收盘收回；不是完整猎杀系统。")
+                                .font(.caption)
+                        }
                     } else {
                         if !formulas.isEmpty {
                             Menu("载入已有公式") {
@@ -132,22 +139,46 @@ struct StrategyBacktestView: View {
         let p = BacktestParameters(multiplier:m,tick:t,marginRate:g/100,feePerSide:c,
                                    slippageTicks:slip,lots:lots,stopRisk:risk,targetR:target)
         guard p.valid else { error = "回测参数无效"; return }
-        let code = source, useHunt = hunt
+        let code = source, useHunt = hunt, useMulti = hunt && multiPeriod
+        let executionPeriod = useMulti ? 300 : period
         running = true; error = nil; result = nil
         task = Task {
             defer { running = false }
             do {
-                let history = try await MarketDataService.fetch(symbol:symbol,period:period,count:1200,mergeCached:false)
+                let history = try await MarketDataService.fetch(symbol:symbol,period:executionPeriod,count:1200,mergeCached:false)
                 // Exclude newest bar conservatively, including when market
                 // is closed, to avoid accidental unfinished-bar signals.
                 let closed = Array(history.dropLast())
                 guard closed.count >= 50 else { throw FormulaFailure("有效历史不足50根，请稍后补齐") }
                 let bars = closed.map { FormulaBar(open:$0.open,high:$0.high,low:$0.low,close:$0.close,
                     volume:Double($0.volume),openInterest:$0.openInterest,closeInterest:$0.closeInterest) }
+                var thirty: [MultiPeriodHunt.Timed] = []
+                var hour: [MultiPeriodHunt.Timed] = []
+                func timed(_ items:[MarketBar]) -> [MultiPeriodHunt.Timed] {
+                    items.dropLast().map { b in
+                        MultiPeriodHunt.Timed(time:b.time,bar:FormulaBar(open:b.open,high:b.high,low:b.low,close:b.close,
+                            volume:Double(b.volume),openInterest:b.openInterest,closeInterest:b.closeInterest))
+                    }
+                }
+                if useMulti {
+                    thirty = timed(try await MarketDataService.fetch(symbol:symbol,period:1800,count:1200,mergeCached:false))
+                    hour = timed(try await MarketDataService.fetch(symbol:symbol,period:3600,count:1200,mergeCached:false))
+                    guard thirty.count >= 12,hour.count >= 12 else { throw FormulaFailure("多周期历史不足") }
+                }
+                let thirtyBars = thirty, hourBars = hour
+                let five = zip(closed,bars).map { b,v in MultiPeriodHunt.Timed(time:b.time,bar:v) }
                 let calculation = Task.detached(priority:.userInitiated) {
                     let signals: [BacktestSignal]
+                    var researchNote = ""
                     if useHunt {
-                        signals = HuntSignals.calculate(bars).map { s in
+                        let candidates: [HuntSignals.Signal?]
+                        if useMulti {
+                            let filtered = MultiPeriodHunt.calculate(five:five,thirty:thirtyBars,hour:hourBars)
+                            guard filtered.covered > 0 else { throw FormulaFailure("三周期历史没有足够的共同覆盖") }
+                            candidates = filtered.signals
+                            researchNote = " · 多周期覆盖(filtered.covered)根，扫回候选(filtered.candidates)个，方向过滤通过(filtered.accepted)个"
+                        } else { candidates = HuntSignals.calculate(bars) }
+                        signals = candidates.map { s in
                             guard let s else { return BacktestSignal() }
                             let stop = s.extreme-Double(s.side)*p.tick
                             return BacktestSignal(long:s.side > 0,short:s.side < 0,stopPrice:stop)
@@ -155,16 +186,16 @@ struct StrategyBacktestView: View {
                     } else {
                         signals = try FuturesBacktest.formulaSignals(code,bars:bars)
                     }
-                    return try FuturesBacktest.run(bars:bars,signals:signals,p:p)
+                    return (try FuturesBacktest.run(bars:bars,signals:signals,p:p),researchNote)
                 }
-                let value = try await calculation.value
+                let (value,researchNote) = try await calculation.value
                 try Task.checkCancellation()
                 result = value
                 let formatter = DateFormatter()
                 formatter.timeZone = TimeZone(identifier:"Asia/Shanghai")
                 formatter.dateFormat = "yyyy-MM-dd HH:mm"
                 if let first = closed.first, let last = closed.last {
-                    coverage = "\(closed.count) 根已完成K线（保守排除最后一根） · \(formatter.string(from:Date(timeIntervalSince1970:Double(first.time)))) 至 \(formatter.string(from:Date(timeIntervalSince1970:Double(last.time))))。样本内结果，不代表未来收益。"
+                    coverage = "\(closed.count) 根已完成K线（保守排除最后一根） · \(formatter.string(from:Date(timeIntervalSince1970:Double(first.time)))) 至 \(formatter.string(from:Date(timeIntervalSince1970:Double(last.time))))。样本内结果，不代表未来收益。\(researchNote)"
                 }
             } catch is CancellationError {} catch { self.error = error.localizedDescription }
         }

@@ -31,6 +31,15 @@ struct StrategySelfTest {
             let prefix = HuntSignals.calculate(Array(fixture.prefix(i)))
             precondition(prefix == Array(full.prefix(i)))
         }
-        print("Backtest next-open, fees, stop-first, Chan confirmation and causal hunt prefix checks passed")
+        let timed = fixture.enumerated().map { i,b in
+            MultiPeriodHunt.Timed(time:1_790_000_000 + Int64(i)*300,bar:b)
+        }
+        // A future-only higher timeframe must never authorize an entry.
+        let future = fixture.enumerated().map { i,b in
+            MultiPeriodHunt.Timed(time:1_900_000_000 + Int64(i)*1800,bar:b)
+        }
+        let filtered = MultiPeriodHunt.calculate(five:timed,thirty:future,hour:future)
+        precondition(filtered.covered == 0 && filtered.signals.allSatisfy{$0 == nil})
+        print("Backtest next-open, fees, stop-first, Chan confirmation, causal hunt and timeframe alignment checks passed")
     }
 }
