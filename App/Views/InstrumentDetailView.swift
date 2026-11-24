@@ -302,19 +302,16 @@ struct InstrumentDetailView: View {
             }
             .buttonStyle(.plain)
             Button { showContracts = true } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     Text(instrument.name + (selectedContract?.month ?? quote?.month ?? ""))
                         .font(.system(size: 17, weight: .semibold))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(MarketPalette.muted)
+                        .layoutPriority(1)
                     Text(selectedContract?.code ?? quote?.code ?? (instrument.id + " 主连"))
                         .font(.system(size: 11))
                         .foregroundStyle(MarketPalette.muted)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.65)
+                        .minimumScaleFactor(0.7)
                 }
                 .frame(minHeight: 34)
                 .contentShape(Rectangle())
