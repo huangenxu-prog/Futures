@@ -30,6 +30,11 @@ jobs:
           swiftc App/Models/MarketPricePrecision.swift scripts/MarketPricePrecisionSelfTest.swift -o /tmp/market-price-precision-test
           /tmp/market-price-precision-test
 
+      - name: Verify corrected earlier K-line redraw
+        run: |
+          swiftc App/Models/KlineCorrectionPolicy.swift scripts/KlineCorrectionSelfTest.swift -o /tmp/kline-correction-test
+          /tmp/kline-correction-test
+
       - name: Generate app icon asset
         run: swift scripts/generate-app-icon.swift
 

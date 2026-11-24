@@ -350,8 +350,8 @@ struct ProfessionalChartHost: View {
         // candle without changing the number of bars or the newest candle.
         // Updating only the newest candle here silently leaves the prior
         // candlestick (and all following indicators) rendered from stale data.
-        let earlierCandleChanged = incoming.count == previous.count
-            && zip(previous.dropLast(), incoming.dropLast()).contains { $0 != $1 }
+        let earlierCandleChanged = KlineCorrectionPolicy.hasEarlierCorrection(
+            previous: previous, incoming: incoming)
         let requiresReset = model.series.isEmpty
             || incoming.count < previous.count
             || previous.first?.time != incoming.first?.time
