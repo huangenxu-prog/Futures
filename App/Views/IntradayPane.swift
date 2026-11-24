@@ -8,6 +8,8 @@ struct IntradayPane: View {
     @State private var bars: [MarketBar] = []
     @State private var status = "加载中"
     @State private var selected: Int?
+    @State private var streamTimes: Set<Int64> = []
+    @State private var historyReady = false
     private var session: [MarketBar] { IntradaySession.latest(bars) }
 
     var body: some View {
@@ -33,7 +35,7 @@ struct IntradayPane: View {
                 IntradayCanvas(bars:data,averages:averages,reference:reference,selected:$selected)
                 HStack(spacing:6) {
                     Text("分钟价").foregroundStyle(MarketPalette.accent)
-                    Text("估算均价").foregroundStyle(.orange)
+                    Text(historyReady ? "估算均价" : "样本均价").foregroundStyle(.orange)
                     if let reference { Text("昨结 \(reference.formatted())") }
                     Spacer(minLength:0)
                     if let selected, data.indices.contains(selected) {
@@ -50,10 +52,17 @@ struct IntradayPane: View {
         }
     }
 
-    @MainActor private func merge(_ incoming:[MarketBar]) {
-        var index = Dictionary(bars.map{($0.time,$0)},uniquingKeysWith:{_,new in new})
-        for bar in incoming where bar.close.isFinite && bar.close > 0 { index[bar.time] = bar }
-        bars = Array(index.values.sorted{$0.time < $1.time}.suffix(1000))
+    @MainActor private func merge(_ incoming:[MarketBar], live:Bool = false) {
+        let oldDay = bars.last.map { IntradaySession.day($0.time) }
+        bars = IntradaySession.merge(existing:bars,incoming:incoming,preserve:live ? [] : streamTimes)
+        if live {
+            streamTimes.formUnion(incoming.map(\.time))
+            streamTimes.formIntersection(Set(bars.map(\.time)))
+        }
+        if oldDay != bars.last.map({IntradaySession.day($0.time)}) {
+            selected = nil
+            historyReady = false
+        }
         if let selected, !session.indices.contains(selected) { self.selected = nil }
     }
 
@@ -61,23 +70,36 @@ struct IntradayPane: View {
         merge(MarketDataService.cached(symbol:symbol,period:60) ?? [])
         // The gateway may send a two-bar handshake. Fetch historical minutes
         // separately; then merge SSE updates by timestamp, never replace a day.
-        var history:Task<Void,Never>? = Task { @MainActor in
+        streamTimes.removeAll()
+        historyReady = false
+        let history = Task { @MainActor in
             do {
-                let page = try await MarketDataService.backtestHistory(symbol:symbol,period:60,count:800)
+                let recent = try await MarketDataService.fetch(symbol:symbol,period:60,count:500,mergeCached:false)
                 try Task.checkCancellation()
-                // SSE takes precedence if a minute arrived during HTTP.
-                let existing = bars
-                merge(page); merge(existing)
+                merge(recent)
+                if let first = recent.first, let last = recent.last {
+                    if IntradaySession.day(first.time) != IntradaySession.day(last.time) {
+                        historyReady = true
+                    } else {
+                        let older = try await MarketDataService.fetchOlder(symbol:symbol,period:60,before:first.time,count:300,depth:1200)
+                        try Task.checkCancellation()
+                        merge(older)
+                        if let oldest = older.first {
+                            historyReady = IntradaySession.day(oldest.time) != IntradaySession.day(last.time)
+                        }
+                    }
+                }
             } catch {}
         }
-        defer { history?.cancel(); history = nil }
+        defer { history.cancel() }
         while !Task.isCancelled {
             do {
                 try await MarketDataService.streamCandles(symbol:symbol,period:60,count:500) { event in
                     guard !Task.isCancelled,event.symbol == symbol else { return }
-                    if let full = event.bars { merge(full) }
-                    if let bar = event.bar { merge([bar]) }
-                    status = "实时"
+                    if let full = event.bars { merge(full,live:true) }
+                    if let bar = event.bar { merge([bar],live:true) }
+                    if let first = bars.first,let last = bars.last,IntradaySession.day(first.time) != IntradaySession.day(last.time) { historyReady = true }
+                    status = "已连接"
                 }
             } catch is CancellationError { return }
             catch {

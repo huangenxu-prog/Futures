@@ -109,7 +109,7 @@ enum DrawingLayout {
                     if drawing.kind == .priceMeasure {
                         text = a.price != 0 ? String(format:"%+.4g (%+.2f%%)",delta,delta/abs(a.price)*100) : String(format:"%+.4g",delta)
                     } else {
-                        text = String(format:"%.0f 根K线",bars)
+                        text = String(format:"%.0f 根 · %.0f 周期分钟",bars,bars*interval.seconds/60)
                     }
                     let p = transform.point(for:b)
                     if reach.contains(p) {

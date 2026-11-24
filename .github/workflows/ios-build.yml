@@ -31,6 +31,8 @@ jobs:
         run: |
           swiftc -O App/Models/FormulaEngine.swift App/Models/FormulaComposition.swift App/Models/ChanStructure.swift App/Models/FuturesBacktest.swift scripts/StrategySelfTest.swift -o /tmp/strategy-test
           /tmp/strategy-test
+          swiftc App/Models/MarketBar.swift App/Models/IntradaySession.swift scripts/IntradaySessionSelfTest.swift -o /tmp/intraday-test
+          /tmp/intraday-test
 
       - name: Verify sandboxed formula engine
         run: |
