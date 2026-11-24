@@ -289,7 +289,8 @@ struct InstrumentDetailView: View {
             // The new gateway sends only two live bars at startup. Merge
             // by exchange K-line time so a short frame cannot replace the
             // phone's existing MA120 history with just two candles.
-            var byTime = Dictionary(uniqueKeysWithValues: rawBars.map { ($0.time, $0) })
+            var byTime: [Int64: MarketBar] = [:]
+            for bar in rawBars { byTime[bar.time] = bar }
             for bar in full { byTime[bar.time] = bar }
             updated = Array(byTime.values.sorted { $0.time < $1.time }.suffix(500))
         } else if let bar = event.bar, !rawBars.isEmpty {

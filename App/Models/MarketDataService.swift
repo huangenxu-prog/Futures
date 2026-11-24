@@ -304,8 +304,10 @@ enum MarketDataService {
         guard !bars.isEmpty else { throw MarketDataError.noData }
         // Never destroy a previously hydrated phone history with a short
         // 2-bar HTTP snapshot or a partial first subscription response.
-        var byTime = Dictionary(uniqueKeysWithValues:
-            (cached(symbol: symbol, period: period) ?? []).map { ($0.time, $0) })
+        var byTime: [Int64: MarketBar] = [:]
+        for bar in cached(symbol: symbol, period: period) ?? [] {
+            byTime[bar.time] = bar
+        }
         for bar in bars { byTime[bar.time] = bar }
         let merged = Array(byTime.values.sorted { $0.time < $1.time }.suffix(500))
         save(merged, symbol: symbol, period: period)
