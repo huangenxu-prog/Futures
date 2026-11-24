@@ -283,24 +283,16 @@ def load_bars(symbol, period, count):
     try:
         api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
         serial = api.get_kline_serial(quote_symbol(symbol), period, data_length=count)
-        deadline = time.time() + 15
+        deadline = time.time() + 20
+        bars = []
         while time.time() < deadline:
             api.wait_update(deadline=time.time() + 1)
-            if len(serial.dropna(subset=["open", "high", "low", "close"])) >= 1:
+            bars = bars_from_serial(serial)
+            # Do not cache a partially initialized historical frame.
+            # A cold request can be slower once, but every later page is
+            # returned from the VPS disk cache.
+            if len(bars) >= max(1, count - 2):
                 break
-        bars = []
-        for row in serial.itertuples(index=False):
-            fields = (row.open, row.high, row.low, row.close)
-            if not all(math.isfinite(float(value)) for value in fields):
-                continue
-            bars.append({
-                "time": int(row.datetime) // 1_000_000_000,
-                "open": float(row.open),
-                "high": float(row.high),
-                "low": float(row.low),
-                "close": float(row.close),
-                "volume": int(row.volume) if math.isfinite(float(row.volume)) else 0,
-            })
         return bars
     finally:
         if api is not None:
