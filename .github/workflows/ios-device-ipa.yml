@@ -25,6 +25,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Verify strategy and structure calculations
+        run: |
+          swiftc -O App/Models/FormulaEngine.swift App/Models/FormulaComposition.swift App/Models/ChanStructure.swift App/Models/FuturesBacktest.swift scripts/StrategySelfTest.swift -o /tmp/strategy-test
+          /tmp/strategy-test
+
       - name: Verify sandboxed formula engine
         run: |
           swiftc -O App/Models/FormulaEngine.swift App/Models/FormulaComposition.swift scripts/FormulaEngineSelfTest.swift -o /tmp/formula-engine

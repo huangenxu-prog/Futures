@@ -56,6 +56,7 @@ struct ProfessionalChartHost: View {
     @State private var drawingsRestored = false
     @State private var historyDepth = 1100
     @State private var historyTask: Task<Void, Never>?
+    @State private var showingBacktest = false
 
     private var interval: ChartInterval {
         ChartInterval(seconds: TimeInterval(period))
@@ -214,6 +215,9 @@ struct ProfessionalChartHost: View {
                 displaySettings = updated
             }
         }
+        .sheet(isPresented:$showingBacktest) {
+            StrategyBacktestView(symbol:symbol,period:period,formulas:displaySettings.formulas,priceTick:priceTick)
+        }
         .onDisappear {
             feed.detach(owner: feedOwner)
             model.onEvent = nil
@@ -313,6 +317,7 @@ struct ProfessionalChartHost: View {
 
     private var drawingMenu: some View {
         Menu {
+            Button("指标回测",systemImage:"chart.xyaxis.line") { showingBacktest = true }
             Section("画线工具") {
                 Button("水平线", systemImage: "minus") { choose(.horizontalLine) }
                 Button("趋势线", systemImage: "chart.line.uptrend.xyaxis") { choose(.trendLine) }

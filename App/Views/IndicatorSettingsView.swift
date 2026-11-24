@@ -111,6 +111,12 @@ struct IndicatorSettingsView: View {
                     Toggle("显示 RSI", isOn: enabledBinding(.rsi))
                     parameter("RSI 周期", value: $draft.rsi)
                 }
+                Section("结构指标（试验）") {
+                    Toggle("缠论分型、笔与重叠区", isOn: enabledBinding(.chan))
+                    Toggle("猎杀扫回候选", isOn: enabledBinding(.hunt))
+                    Text("结构使用方向包含处理、严格分型及至少5根合并K线的笔距离；中枢为三笔重叠试验口径。猎杀仅单周期候选，不是完整多周期策略。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("自定义公式指标") {
                     ForEach($draft.formulas) { $formula in
                         HStack {
