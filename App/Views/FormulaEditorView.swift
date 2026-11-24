@@ -32,8 +32,11 @@ struct FormulaEditorView: View {
                 }
                 Section("语法说明") {
                     Text(":= 定义中间变量，: 绘制输出，每行以 ; 分隔。")
-                    Text("行情：OPEN HIGH LOW CLOSE VOL（O H L C V）")
-                    Text("函数：MA EMA SMA WMA HHV LLV SUM STD REF COUNT IF CROSS BARSLAST ABS MAX MIN")
+                    Text("行情：OPEN HIGH LOW CLOSE VOL（O H L C V），HL2 HLC3 OHLC4；支持自定义价格表达式。")
+                    Text("均线：MA EMA SMA WMA EMA2 HMA DEMA TEMA DMA WILDER")
+                    Text("其他：HHV LLV SUM STD REF COUNT IF CROSS BARSLAST ABS MAX MIN")
+                    Text("EMA2 与 WMA 等价；HMA 半周期、平方根周期向下取整。DMA 支持 0～1 的权重表达式。")
+                    Text("嵌套示例：HMA(EMA((3*C+H+L+O)/6,5),20)")
                     Text("样式：COLORRED、COLORGREEN、COLORBLUE、COLORYELLOW、COLORWHITE、COLORCYAN、COLORMAGENTA、LINETHICK1～5、COLORSTICK。")
                     Text("仅支持公式子集；EMA/SMA 从首个有效值递推，MA 等窗口函数需足够历史。缺失值不补零，不支持未来引用或任意代码。")
                 }

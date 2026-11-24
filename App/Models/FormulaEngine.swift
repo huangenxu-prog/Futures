@@ -67,6 +67,9 @@ struct FormulaProgram: Sendable {
         env["O"] = env["OPEN"]; env["H"] = env["HIGH"]
         env["L"] = env["LOW"]; env["C"] = env["CLOSE"]; env["V"] = env["VOL"]
         env["VOLUME"] = env["VOL"]
+        env["HL2"] = bars.map { ($0.high+$0.low)/2 }
+        env["HLC3"] = bars.map { ($0.high+$0.low+$0.close)/3 }
+        env["OHLC4"] = bars.map { ($0.open+$0.high+$0.low+$0.close)/4 }
         var results: [FormulaOutput] = []
         for statement in statements {
             guard env[statement.name] == nil else {
@@ -83,6 +86,34 @@ struct FormulaProgram: Sendable {
     }
 
     private static func finite(_ x: Double) -> Double? { x.isFinite ? x : nil }
+
+    private static func exponential(_ x: [Double?], alpha: Double) -> [Double?] {
+        var previous: Double?
+        return x.map { v in
+            guard let v else { previous = nil; return nil }
+            previous = finite(previous.map { $0 + alpha*(v-$0) } ?? v)
+            return previous
+        }
+    }
+
+    // Weighted rolling sum: each existing sample loses one unit of
+    // weight when the window advances, then the newest gains weight N.
+    private static func weightedAverage(_ x: [Double?], period p: Int) -> [Double?] {
+        var sum = 0.0, weighted = 0.0, missing = 0
+        let denominator = Double(p)*Double(p+1)/2
+        return x.indices.map { i in
+            if i >= p {
+                weighted -= sum
+                if let old = x[i-p] { sum -= old } else { missing -= 1 }
+            }
+            if let value = x[i] {
+                sum += value
+                weighted += Double(min(i+1,p))*value
+            } else { missing += 1 }
+            guard i >= p-1, missing == 0 else { return nil }
+            return finite(weighted/denominator)
+        }
+    }
 
     private static func period(_ expr: FormulaExpr, zero: Bool = false) throws -> Int {
         guard case .constant(let value) = expr, value.isFinite,
@@ -123,9 +154,11 @@ struct FormulaProgram: Sendable {
                 default: return nil
                 }
             }
-        case .call(let fn, let args):
+        case .call(let rawName, let args):
+            let fn = rawName == "EMA2" ? "WMA" : rawName
             let arity: [String:Int] = [
-                "MA":2,"EMA":2,"SMA":3,"WMA":2,"HHV":2,"LLV":2,"SUM":2,"STD":2,
+                "MA":2,"EMA":2,"SMA":3,"WMA":2,"HMA":2,"DEMA":2,"TEMA":2,"DMA":2,"WILDER":2,
+                "HHV":2,"LLV":2,"SUM":2,"STD":2,
                 "REF":2,"COUNT":2,"IF":3,"CROSS":2,"BARSLAST":1,"ABS":1,"MAX":2,"MIN":2
             ]
             guard let expected = arity[fn] else { throw FormulaFailure("暂不支持函数：\(fn)") }
@@ -158,7 +191,63 @@ struct FormulaProgram: Sendable {
                     return fn == "MAX" ? max(a,b) : min(a,b)
                 }
             }
+            if fn == "DMA" {
+                // Accept an arbitrary alpha series in [0,1]. Invalid or
+                // missing samples yield missing output and reset the seed.
+                let alpha = try eval(args[1],env,n)
+                var previous: Double?
+                return zip(x,alpha).map { v,a in
+                    guard let v, let a, a.isFinite, (0...1).contains(a) else {
+                        previous = nil; return nil
+                    }
+                    previous = finite(previous.map { $0 + a*(v-$0) } ?? v)
+                    return previous
+                }
+            }
             let p = try period(args[1],zero: fn == "REF")
+            if fn == "HMA" {
+                let half = max(1,p/2)
+                let root = max(1,Int(sqrt(Double(p))))
+                let short = weightedAverage(x,period:half)
+                let long = weightedAverage(x,period:p)
+                let difference: [Double?] = zip(short,long).map { a,b in
+                    guard let a, let b else { return nil }
+                    return finite(2*a-b)
+                }
+                return weightedAverage(difference,period:root)
+            }
+            if fn == "WMA" {
+                return weightedAverage(x,period:p)
+            }
+            if fn == "DEMA" || fn == "TEMA" {
+                let e1 = exponential(x,alpha:2/Double(p+1))
+                let e2 = exponential(e1,alpha:2/Double(p+1))
+                if fn == "DEMA" {
+                    return zip(e1,e2).map { a,b in
+                        guard let a, let b else { return nil }
+                        return finite(2*a-b)
+                    }
+                }
+                let e3 = exponential(e2,alpha:2/Double(p+1))
+                return e1.indices.map { i in
+                    guard let a = e1[i], let b = e2[i], let c = e3[i] else { return nil }
+                    return finite(3*a-3*b+c)
+                }
+            }
+            if fn == "WILDER" {
+                var count = 0, sum = 0.0
+                var previous: Double?
+                return x.map { v in
+                    guard let v else { count = 0; sum = 0; previous = nil; return nil }
+                    if let old = previous {
+                        previous = finite(old+(v-old)/Double(p))
+                    } else {
+                        count += 1; sum += v
+                        if count == p { previous = finite(sum/Double(p)) }
+                    }
+                    return previous
+                }
+            }
             if fn == "REF" {
                 return x.indices.map { i in i >= p ? x[i-p] : nil }
             }
@@ -171,13 +260,7 @@ struct FormulaProgram: Sendable {
                 }
                 // Formula convention: first defined value initializes the recurrence.
                 // This is distinct from the bundled TA-Lib EMA initialization.
-                var previous: Double?
-                return x.map { v in
-                    guard let v else { previous = nil; return nil }
-                    let next = previous.map { $0 + alpha*(v-$0) } ?? v
-                    previous = finite(next)
-                    return previous
-                }
+                return exponential(x,alpha:alpha)
             }
             if fn == "HHV" || fn == "LLV" {
                 var queue: [Int] = [], head = 0, missing = 0

@@ -37,6 +37,27 @@ struct FormulaEngineSelfTest {
         let cross = try FormulaProgram("X:CROSS(C,3);")
         let crossed = try cross.evaluate(bars)[0].values
         precondition(crossed[0] == nil); near(crossed[3],1); near(crossed[4],0)
-        print("Formula engine: syntax, arithmetic, functions, styles, live replacement and rejection tests passed")
+        let nested = try FormulaProgram("P:=(3*C+H+L+O)/6; A:EMA2(P,3); B:WMA(P,3); HULL:HMA(P,4); X:WMA(2*WMA(P,2)-WMA(P,4),2); D:DEMA(P,3); T:TEMA(P,3); DYN:DMA(P,0.5); E:EMA(P,3); W:WILDER(P,3);")
+        let m = try nested.evaluate(bars)
+        precondition(m[0].values == m[1].values)
+        precondition(m[2].values == m[3].values)
+        precondition(m[2].values[3] == nil)
+        near(m[2].values[4],5)
+        near(m[4].values[1],1.75)
+        near(m[5].values[1],1.875)
+        precondition(m[6].values == m[7].values)
+        precondition(m[8].values[1] == nil)
+        near(m[8].values[2],2); near(m[8].values[3],8.0/3)
+        let prices = [FormulaBar(open:8,high:12,low:6,close:10,volume:100)]
+        let priceProgram = try FormulaProgram("P:(3*C+H+L+O)/6; A:HL2; B:HLC3; D:OHLC4; E:HMA(C,1);")
+        let v = try priceProgram.evaluate(prices)
+        near(v[0].values[0],56.0/6); near(v[1].values[0],9)
+        near(v[2].values[0],28.0/3); near(v[3].values[0],9); near(v[4].values[0],10)
+        let gaps = try FormulaProgram("A:WMA(IF(C=3,C/0,C),2);")
+        let g = try gaps.evaluate(bars)[0].values
+        near(g[1],5.0/3); precondition(g[2] == nil && g[3] == nil); near(g[4],14.0/3)
+        let dynamic = try FormulaProgram("A:DMA(C,IF(C>3,1,0.5));")
+        near(try dynamic.evaluate(bars)[0].values[3],4)
+        print("Formula engine: nested averages, weighted price sources, warm-up, gaps and live replacement passed")
     }
 }
