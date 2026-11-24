@@ -59,7 +59,7 @@ for i in $(seq 1 20); do
 done
 if [[ "$READY" != "1" ]]; then
   echo "新网关未能在20秒内确认天勤连接。" >&2
-  exit 1
+  false  # invoke ERR trap to restore the working gateway before exiting
 fi
 trap - ERR
 echo "升级成功：天勤连接正常、systemd仍管理期汇行情网关。"
