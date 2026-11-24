@@ -29,10 +29,10 @@ struct FormulaDefinition: Codable, Equatable, Identifiable, Sendable {
 }
 
 private enum FormulaToken: Equatable {
-    case name(String), number(Double), symbol(String), end
+    case name(String), number(Double), symbol(String), text(String), end
 }
 private indirect enum FormulaExpr: Sendable {
-    case constant(Double), variable(String), unary(String, FormulaExpr)
+    case constant(Double), variable(String), text(String), unary(String, FormulaExpr)
     case binary(String, FormulaExpr, FormulaExpr)
     case call(String, [FormulaExpr])
 }
@@ -43,6 +43,12 @@ private struct FormulaStatement: Sendable {
     let color: String?
     let width: Double
     let histogram: Bool
+    let drawing: Bool
+}
+
+enum FormulaDrawing: Sendable {
+    case stick(starts: [Double?], width: Double, hollow: Bool)
+    case signal(text: String)
 }
 
 struct FormulaOutput: Sendable {
@@ -51,6 +57,7 @@ struct FormulaOutput: Sendable {
     let color: String?
     let width: Double
     let histogram: Bool
+    var drawing: FormulaDrawing? = nil
 }
 
 struct FormulaProgram: Sendable {
@@ -75,6 +82,7 @@ struct FormulaProgram: Sendable {
         env["O"] = env["OPEN"]; env["H"] = env["HIGH"]
         env["L"] = env["LOW"]; env["C"] = env["CLOSE"]; env["V"] = env["VOL"]
         env["VOLUME"] = env["VOL"]
+        env["DRAWNULL"] = Array(repeating: nil, count: n)
         env["OPEN_OI"] = bars.map { $0.openInterest }
         env["OPI"] = bars.map { $0.closeInterest }
         env["OI"] = env["OPI"]; env["CLOSE_OI"] = env["OPI"]
@@ -87,6 +95,10 @@ struct FormulaProgram: Sendable {
         env["OHLC4"] = bars.map { ($0.open+$0.high+$0.low+$0.close)/4 }
         var results: [FormulaOutput] = []
         for statement in statements {
+            if statement.drawing {
+                results.append(try Self.draw(statement, env, n))
+                continue
+            }
             guard env[statement.name] == nil else {
                 throw FormulaFailure("变量重复定义：\(statement.name)")
             }
@@ -98,6 +110,49 @@ struct FormulaProgram: Sendable {
             }
         }
         return results
+    }
+
+    private static func draw(_ statement: FormulaStatement, _ env: [String:[Double?]], _ n: Int) throws -> FormulaOutput {
+        guard case .call(let name, let args) = statement.expr else { throw FormulaFailure("无效绘图语句") }
+        let required = name == "STICKLINE" ? 5 : 3
+        guard args.count == required else { throw FormulaFailure("\(name) 需要 \(required) 个参数") }
+        let condition = try eval(args[0],env,n)
+        let first = try eval(args[1],env,n)
+        if name == "STICKLINE" {
+            let second = try eval(args[2],env,n)
+            guard case .constant(let width) = args[3], (0...10).contains(width),
+                  case .constant(let empty) = args[4], empty == 0 || empty == 1 else {
+                throw FormulaFailure("STICKLINE 宽度为0～10，空心参数为0或1")
+            }
+            var ends = [Double?](repeating:nil,count:n)
+            var starts = ends
+            for i in 0..<n {
+                if let c = condition[i], c != 0, let a = first[i], let b = second[i],
+                   a.isFinite, b.isFinite { starts[i] = a; ends[i] = b }
+            }
+            return FormulaOutput(name:name,values:ends,color:statement.color,width:width,histogram:false,
+                                 drawing:.stick(starts:starts,width:width,hollow:empty == 1))
+        }
+        let label: String
+        if name == "DRAWICON" {
+            let icons: [Int:String] = [1:"↑",2:"↓",3:"●",4:"×"]
+            guard case .constant(let code) = args[2], code >= 1, code <= 4,
+                  code.rounded() == code, let icon = icons[Int(code)] else {
+                throw FormulaFailure("DRAWICON 暂支持编号1～4（↑、↓、●、×）")
+            }
+            label = icon
+        } else {
+            guard case .text(let text) = args[2], !text.isEmpty, text.count <= 32 else {
+                throw FormulaFailure("DRAWTEXT 文字需为引号内1～32个字符")
+            }
+            label = text
+        }
+        let values: [Double?] = zip(condition,first).map { c,v in
+            guard let c, c != 0, let v, v.isFinite else { return nil }
+            return v
+        }
+        return FormulaOutput(name:name,values:values,color:statement.color,width:statement.width,
+                             histogram:false,drawing:.signal(text:label))
     }
 
     private static func finite(_ x: Double) -> Double? { x.isFinite ? x : nil }
@@ -141,6 +196,7 @@ struct FormulaProgram: Sendable {
     private static func eval(_ expr: FormulaExpr, _ env: [String:[Double?]], _ n: Int) throws -> [Double?] {
         switch expr {
         case .constant(let x): return Array(repeating: x, count: n)
+        case .text: throw FormulaFailure("文字只能用于 DRAWTEXT")
         case .variable(let name):
             guard let value = env[name] else { throw FormulaFailure("未知变量：\(name)") }
             return value
@@ -331,16 +387,27 @@ private struct FormulaParser {
 
     init(_ source: String) throws {
         guard source.utf8.count <= 8192 else { throw FormulaFailure("公式过长，上限8192字节") }
-        let chars = Array(source.uppercased())
+        let chars = Array(source)
         var result: [FormulaToken] = [], i = 0
         while i < chars.count {
             let c = chars[i]
             if c.isWhitespace { i += 1; continue }
-            if c.isASCII && (c.isLetter || c == "_") {
+            if c == "'" || c == "\"" {
+                let quote = c
+                i += 1
+                let start = i
+                while i < chars.count, chars[i] != quote {
+                    guard !chars[i].isNewline else { throw FormulaFailure("文字不能跨行") }
+                    i += 1
+                }
+                guard i < chars.count else { throw FormulaFailure("文字引号未闭合") }
+                result.append(.text(String(chars[start..<i])))
+                i += 1
+            } else if c.isASCII && (c.isLetter || c == "_") {
                 let start = i; i += 1
                 while i < chars.count, chars[i].isASCII &&
                     (chars[i].isLetter || chars[i].isNumber || chars[i] == "_") { i += 1 }
-                let word = String(chars[start..<i])
+                let word = String(chars[start..<i]).uppercased()
                 result.append(word == "AND" || word == "OR" ? .symbol(word) : .name(word))
             } else if c.isASCII && (c.isNumber || c == ".") {
                 let start = i; i += 1
@@ -379,11 +446,22 @@ private struct FormulaParser {
         var statements: [FormulaStatement] = []
         while token != .end {
             guard case .name(let name) = take() else { throw FormulaFailure("每条公式必须以变量名开头") }
+            let drawing = ["STICKLINE","DRAWICON","DRAWTEXT"].contains(name) && token == .symbol("(")
             let visible: Bool
-            if accept(":") { visible = true }
-            else if accept(":=") { visible = false }
-            else { throw FormulaFailure("\(name) 后需要 : 或 :=") }
-            let expr = try expression()
+            let expr: FormulaExpr
+            if drawing {
+                // Rewind the function name so the ordinary expression parser
+                // handles nested arguments, including quoted label text.
+                index -= 1
+                expr = try expression()
+                guard case .call = expr else { throw FormulaFailure("绘图函数必须独立成句") }
+                visible = true
+            } else {
+                if accept(":") { visible = true }
+                else if accept(":=") { visible = false }
+                else { throw FormulaFailure("\(name) 后需要 : 或 :=") }
+                expr = try expression()
+            }
             var color: String?, width = 1.5, histogram = false
             while accept(",") {
                 guard visible, case .name(let style) = take() else { throw FormulaFailure("绘图属性格式不正确") }
@@ -397,12 +475,13 @@ private struct FormulaParser {
                 else { throw FormulaFailure("暂不支持绘图属性：\(style)") }
             }
             if token != .end { try expect(";") }
-            statements.append(.init(name:name,expr:expr,visible:visible,color:color,width:width,histogram:histogram))
+            if drawing && histogram { throw FormulaFailure("绘图函数不能再加柱状图属性") }
+            statements.append(.init(name:name,expr:expr,visible:visible,color:color,width:width,histogram:histogram,drawing:drawing))
             guard statements.count <= 24, statements.filter(\.visible).count <= 8 else {
                 throw FormulaFailure("最多24条语句、8条绘图输出")
             }
         }
-        guard statements.contains(where: \.visible) else { throw FormulaFailure("至少需要一条使用冒号输出的公式") }
+        guard statements.contains(where: \.visible) else { throw FormulaFailure("至少需要一条绘图输出") }
         return statements
     }
 
@@ -437,6 +516,7 @@ private struct FormulaParser {
         }
         switch take() {
         case .number(let value): return .constant(value)
+        case .text(let value): return .text(value)
         case .name(let name):
             guard accept("(") else { return .variable(name) }
             var args: [FormulaExpr] = []

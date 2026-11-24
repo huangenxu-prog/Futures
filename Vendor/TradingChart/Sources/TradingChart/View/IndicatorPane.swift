@@ -98,6 +98,11 @@ struct IndicatorPane: View {
                 .modifier(YTransform(model: model, state: state, plotHeight: plot.height))
                 .frame(width: plot.width, height: plot.height, alignment: .top)
                 .clipped()
+            if !output.sticks.isEmpty || !output.signals.isEmpty {
+                IndicatorSignalLayer(outputs: [output], visible: model.visibleTimeRange,
+                                     domain: state.yTarget, candleWidth: layout.barWidth)
+                    .frame(width: plot.width,height: plot.height)
+            }
             ChartInputLayer(model: model)
                 .frame(width: plot.width, height: plot.height)
             CrosshairLayer(

@@ -15,9 +15,25 @@ struct QihuiFormulaIndicator: ChartIndicator {
         guard let outputs = try? program.evaluate(bars) else { return .empty }
         var lines: [IndicatorLine] = []
         var histograms: [IndicatorHistogram] = []
+        var sticks: [IndicatorStick] = []
+        var signals: [IndicatorSignal] = []
         for (index,output) in outputs.enumerated() {
             let color = output.color.flatMap { ChartColor(hex:$0) }
-            if output.histogram {
+            if let drawing = output.drawing {
+                switch drawing {
+                case .stick(let starts,let width,let hollow):
+                    for i in bars.indices {
+                        guard let start = starts[i], let end = output.values[i] else { continue }
+                        sticks.append(IndicatorStick(time:input.candles[i].time,start:start,end:end,
+                                                    width:width,hollow:hollow,color:color))
+                    }
+                case .signal(let label):
+                    for (bar,value) in zip(input.candles,output.values) {
+                        guard let value else { continue }
+                        signals.append(IndicatorSignal(time:bar.time,value:value,text:label,color:color))
+                    }
+                }
+            } else if output.histogram {
                 var sticks: [HistogramBar] = []
                 for (bar,value) in zip(input.candles,output.values) {
                     guard let value, value.isFinite else { continue }
@@ -34,6 +50,8 @@ struct QihuiFormulaIndicator: ChartIndicator {
                     style:IndicatorLineStyle(color:color,width:output.width),paletteSlot:index))
             }
         }
-        return IndicatorOutput(lines:lines,histograms:histograms)
+        return IndicatorOutput(lines:lines,histograms:histograms,
+                               sticks:sticks.sorted { $0.time < $1.time },
+                               signals:signals.sorted { $0.time < $1.time })
     }
 }

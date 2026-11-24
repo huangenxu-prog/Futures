@@ -127,6 +127,12 @@ struct MainChartPane: View {
                 .frame(width: plot.width, height: plot.height, alignment: .top)
                 .clipped()
             hollowCandleLayer(layout: layout, plot: plot)
+            let outputs = overlayOutputs(model.renderInput).map { $0.output }
+            if outputs.contains(where: { !$0.sticks.isEmpty || !$0.signals.isEmpty }) {
+                IndicatorSignalLayer(outputs: outputs, visible: model.visibleTimeRange,
+                                     domain: model.mainYTarget, candleWidth: layout.bodyWidth)
+                    .frame(width: plot.width,height: plot.height)
+            }
             ChartInputLayer(model: model, takesDrawingTouches: true)
                 .frame(width: plot.width, height: plot.height)
             MainMarksOverlay(model: model, plot: plot, drawnStyle: layout.drawnStyle)

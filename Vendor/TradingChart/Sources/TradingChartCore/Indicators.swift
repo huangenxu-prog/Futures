@@ -245,6 +245,29 @@ public struct IndicatorLevel: Identifiable, Hashable, Sendable {
     }
 }
 
+/// A conditional vertical segment between two real values at a candle.
+public struct IndicatorStick: Hashable, Sendable {
+    public var time: Date
+    public var start, end, width: Double
+    public var hollow: Bool
+    public var color: ChartColor?
+    public init(time: Date, start: Double, end: Double, width: Double, hollow: Bool, color: ChartColor? = nil) {
+        self.time = time; self.start = start; self.end = end; self.width = width
+        self.hollow = hollow; self.color = color
+    }
+}
+
+/// A text or symbol at an indicator value; sorted by time in the output.
+public struct IndicatorSignal: Hashable, Sendable {
+    public var time: Date
+    public var value: Double
+    public var text: String
+    public var color: ChartColor?
+    public init(time: Date, value: Double, text: String, color: ChartColor? = nil) {
+        self.time = time; self.value = value; self.text = text; self.color = color
+    }
+}
+
 /// Everything an indicator wants drawn.
 public struct IndicatorOutput: Sendable, Equatable {
     /// Lines.
@@ -257,6 +280,8 @@ public struct IndicatorOutput: Sendable, Equatable {
     public var levels: [IndicatorLevel]
     /// A fixed Y range for a pane (e.g. `0...100` for RSI). `nil` autoscales to the visible values.
     public var fixedRange: ClosedRange<Double>?
+    public var sticks: [IndicatorStick]
+    public var signals: [IndicatorSignal]
 
     /// Creates an output.
     public init(
@@ -264,13 +289,17 @@ public struct IndicatorOutput: Sendable, Equatable {
         bands: [IndicatorBand] = [],
         histograms: [IndicatorHistogram] = [],
         levels: [IndicatorLevel] = [],
-        fixedRange: ClosedRange<Double>? = nil
+        fixedRange: ClosedRange<Double>? = nil,
+        sticks: [IndicatorStick] = [],
+        signals: [IndicatorSignal] = []
     ) {
         self.lines = lines
         self.bands = bands
         self.histograms = histograms
         self.levels = levels
         self.fixedRange = fixedRange
+        self.sticks = sticks
+        self.signals = signals
     }
 
     /// An output with nothing to draw.
@@ -282,6 +311,7 @@ public struct IndicatorOutput: Sendable, Equatable {
         lines.allSatisfy { $0.values.isEmpty }
             && bands.allSatisfy { $0.upper.isEmpty && $0.lower.isEmpty }
             && histograms.allSatisfy { $0.bars.isEmpty }
+            && sticks.isEmpty && signals.isEmpty
     }
 
     /// The lowest and highest plotted value whose time falls in `range` (bounds inclusive), for autoscaling.
@@ -322,6 +352,14 @@ public struct IndicatorOutput: Sendable, Equatable {
                 include(bar.value)
             }
         }
+        let stickStart = sticks.partitionPoint { $0.time >= range.lowerBound }
+        let stickEnd = sticks.partitionPoint { $0.time > range.upperBound }
+        for stick in sticks[stickStart..<Swift.max(stickStart,stickEnd)] {
+            include(stick.start); include(stick.end)
+        }
+        let signalStart = signals.partitionPoint { $0.time >= range.lowerBound }
+        let signalEnd = signals.partitionPoint { $0.time > range.upperBound }
+        for signal in signals[signalStart..<Swift.max(signalStart,signalEnd)] { include(signal.value) }
         return low <= high ? low...high : nil
     }
 

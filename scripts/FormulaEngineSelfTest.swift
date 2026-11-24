@@ -105,6 +105,31 @@ struct FormulaEngineSelfTest {
         near(o[0].values[0],110); precondition(o[0].values[1] == nil); near(o[0].values[2],0)
         near(o[1].values[0],100); near(o[2].values[0],10); near(o[2].values[2],-110)
         precondition(o[3].values.allSatisfy { $0 == nil })
-        print("Formula engine: composition, persistence, nesting, numeric fixtures, open interest and validation passed")
+        let drawing = try FormulaProgram("STICKLINE(C>3,L,H,5,1),COLORRED; DRAWICON(CROSS(C,3),L,1); DRAWTEXT(C=3,H,'Buy买'),COLORBLUE; A:IF(C>3,C,DRAWNULL);")
+        let drawn = try drawing.evaluate(bars)
+        precondition(drawn.count == 4)
+        if case .stick(let starts,let width,let hollow)? = drawn[0].drawing {
+            precondition(width == 5 && hollow)
+            precondition(starts[2] == nil)
+            near(starts[3],3); near(drawn[0].values[3],5)
+        } else { preconditionFailure("missing stick") }
+        if case .signal(let text)? = drawn[1].drawing {
+            precondition(text == "↑"); near(drawn[1].values[3],3)
+            precondition(drawn[1].values[4] == nil)
+        } else { preconditionFailure("missing icon") }
+        if case .signal(let text)? = drawn[2].drawing {
+            precondition(text == "Buy买"); near(drawn[2].values[2],4)
+        } else { preconditionFailure("missing text") }
+        precondition(drawn[3].values[2] == nil); near(drawn[3].values[3],4)
+        for bad in ["DRAWICON(C,L,9);","DRAWTEXT(C,H,3);","STICKLINE(C,O,C,20,0);","STICKLINE(C,O,C,5,2);","A:'text';","DRAWTEXT(C,H,'abc);","A:STICKLINE(C,O,C,5,0);"] {
+            do { _ = try FormulaProgram(bad); preconditionFailure("accepted \(bad)") }
+            catch is FormulaFailure {}
+        }
+        let before = try drawing.evaluate(bars)
+        let after = try drawing.evaluate(changed)
+        for i in before.indices {
+            precondition(Array(before[i].values.dropLast()) == Array(after[i].values.dropLast()))
+        }
+        print("Formula engine: conditional drawings, composition, persistence, numeric fixtures and validation passed")
     }
 }
