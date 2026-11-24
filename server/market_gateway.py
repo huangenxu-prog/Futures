@@ -945,9 +945,17 @@ def historical_page(symbol, period, before, count, depth):
             return older_rows(merge_kline_bars(
                 fetched, stored, limit=KLINE_DISK_HISTORY_LENGTH))[-count:]
         with KLINE_HUB.file_write_lock:
-            KLINE_HUB.store.write(key, fetched, older=True)
+            try:
+                KLINE_HUB.store.write(key, fetched, older=True)
+            except OSError as exc:
+                print("历史缓存持久化失败:", type(exc).__name__, flush=True)
             persisted = available()
-        return older_rows(persisted)[-count:]
+        # Storage may be unavailable (read-only volume, exhausted disk).
+        # A valid upstream response must still reach the phone: persistence
+        # is a performance optimization, never a correctness prerequisite.
+        merged = merge_kline_bars(
+            fetched, persisted or stored, limit=KLINE_DISK_HISTORY_LENGTH)
+        return older_rows(merged)[-count:]
 
 
 class Handler(BaseHTTPRequestHandler):

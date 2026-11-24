@@ -274,6 +274,21 @@ class GatewayStreamingTests(unittest.TestCase):
             self.assertEqual(sdk.call_count, 1)
             self.assertEqual(len(gateway.KlineFileCache(dirname).read(key)[0]), 1200)
 
+    def test_history_reply_survives_disk_write_error(self):
+        class BrokenStore:
+            def read(self, key):
+                return [], 0.0
+            def write(self, key, bars, *, older=False):
+                raise OSError("read-only filesystem")
+        rows = [{"time": t, "close": 1} for t in range(101, 501)]
+        hub = gateway.SharedKlineHub(store=BrokenStore())
+        with patch.object(gateway, "KLINE_HUB", hub):
+            with patch.object(gateway, "load_bars", return_value=rows):
+                found = gateway.historical_page(
+                    "CZCE.SR701", 900, before=150, count=5, depth=500)
+        self.assertEqual([row["time"] for row in found],
+                         [145, 146, 147, 148, 149])
+
     def test_rehydrated_disk_uses_bounded_ram(self):
         import tempfile
         with tempfile.TemporaryDirectory() as dirname:
