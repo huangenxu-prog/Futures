@@ -14,7 +14,6 @@ Status:  .venv/bin/python server/prefetch_main_history.py --status
 import argparse
 from datetime import datetime, timezone
 import json
-import math
 import os
 from pathlib import Path
 import re
@@ -38,7 +37,6 @@ FRESH_SECONDS = {
     1800: 12 * 3600, 3600: 12 * 3600,
     60: 12 * 3600, 86400: 24 * 3600,
 }
-MIN_REFRESH_SECONDS = 60 * 60
 MAX_SERIES_PER_RUN = 24
 MAX_RUNTIME_SECONDS = 7 * 60
 MIN_FREE_BYTES = 160 * 1024 * 1024
@@ -158,6 +156,10 @@ def run(limit):
               "组；磁盘已缓存:", coverage["series_cached"],
               "组；尚无缓存:", coverage["series_missing"], "组", flush=True)
         if not jobs:
+            write_status(dict(coverage, products=len(codes),
+                              attempted=0, succeeded=0, failed=0,
+                              pending=0, state="idle", elapsed_seconds=0))
+            print("所有主力合约的六个周期缓存均处于本轮有效期内。", flush=True)
             return
         for i, key in enumerate(jobs):
             if time.monotonic() - start >= MAX_RUNTIME_SECONDS:
