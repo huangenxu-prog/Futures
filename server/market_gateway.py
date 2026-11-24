@@ -3,8 +3,11 @@ import json
 import math
 import os
 import re
+import tempfile
 import threading
 import time
+from collections import deque
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -400,16 +403,99 @@ def bars_from_serial(serial):
 
 
 
-# Shared, bounded live K-line cache. All TqApi methods for this hub run on one
-# dedicated worker thread; HTTP threads only read copied, immutable snapshots.
-# A cold symbol still needs an initial TqSdk subscription. Subsequent HTTP
-# requests and SSE viewers share that subscription and receive cached data.
+# Recent-history snapshots are persisted as ordinary JSON files. Real-time
+# subscriptions are *separate* and request only the last two genuine TqSdk
+# bars. Never synthesize missing bars, even over exchange session breaks.
 KLINE_MAX_SERIES = 24
-KLINE_DATA_LENGTH = 200
-# Warm sibling timeframes only after the requested chart has real bars.
-# Prewarming is opportunistic: it never evicts a subscribed/active chart.
-KLINE_PREWARM_PERIODS = (60, 300, 900, 1800, 3600, 86400)
-KLINE_PREWARM_SPACING = 0.8
+KLINE_DATA_LENGTH = 2
+KLINE_HISTORY_LENGTH = 200
+KLINE_MAX_MEMORY_SERIES = 256
+KLINE_HISTORY_REFRESH_SECONDS = 600
+KLINE_SAVE_INTERVAL = 30
+KLINE_CACHE_DIR = os.environ.get("QIHUI_KLINE_CACHE_DIR", "/root/tq_test/cache/klines")
+KLINE_PERIOD_ORDER = (900, 300, 1800, 3600, 60, 86400)
+
+
+def merge_kline_bars(older, newer, limit=KLINE_HISTORY_LENGTH):
+    # The identity of a K-line is its exchange-provided start timestamp.
+    # This handles overnight sessions and non-trading hours without guessing.
+    indexed = {}
+    for bar in list(older) + list(newer):
+        timestamp = bar.get("time") if isinstance(bar, dict) else None
+        if isinstance(timestamp, int) and timestamp > 0:
+            indexed[timestamp] = bar
+    return [indexed[key] for key in sorted(indexed)[-limit:]]
+
+
+class KlineFileCache:
+    """Atomic, bounded, non-database cache. Never stores account credentials."""
+
+    def __init__(self, directory=KLINE_CACHE_DIR, max_files=720):
+        self.directory = Path(directory)
+        self.max_files = max_files
+        self.writes = 0
+
+    def path(self, key):
+        symbol, period = key
+        if not re.fullmatch(r"[A-Za-z0-9@._-]{1,64}", symbol) or period not in PERIODS:
+            raise ValueError("invalid cache key")
+        return self.directory / (symbol.replace("@", "_") + "_" + str(period) + ".json")
+
+    def read(self, key):
+        try:
+            path = self.path(key)
+            if path.stat().st_size > 128_000:
+                return [], 0.0
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if (payload.get("symbol") != key[0]
+                    or payload.get("period") != key[1]):
+                return [], 0.0
+            valid = []
+            for bar in payload.get("bars", []):
+                if (not isinstance(bar, dict)
+                        or not isinstance(bar.get("time"), int)
+                        or bar["time"] <= 0):
+                    continue
+                if not all(isinstance(bar.get(field), (float, int))
+                           and math.isfinite(bar[field])
+                           for field in ("open", "high", "low", "close", "volume")):
+                    continue
+                valid.append({name: bar[name] for name in
+                              ("time", "open", "high", "low", "close", "volume")})
+            return merge_kline_bars([], valid), float(payload.get("saved_at", 0))
+        except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+            return [], 0.0
+
+    def write(self, key, bars):
+        if not bars:
+            return
+        target = self.path(key)
+        temporary = None
+        try:
+            self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            content = json.dumps({
+                "symbol": key[0], "period": key[1], "saved_at": time.time(),
+                "bars": bars[-KLINE_HISTORY_LENGTH:]
+            }, allow_nan=False, separators=(",", ":")).encode("utf-8")
+            with tempfile.NamedTemporaryFile(dir=self.directory, prefix=".tmp-",
+                                             delete=False) as handle:
+                temporary = Path(handle.name)
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(content)
+            os.replace(temporary, target)
+            temporary = None
+            self.writes += 1
+            if self.writes % 48 == 0:
+                snapshots = sorted(self.directory.glob("*.json"),
+                                   key=lambda file: file.stat().st_mtime)
+                for old in snapshots[:-self.max_files]:
+                    old.unlink(missing_ok=True)
+        except (OSError, ValueError, TypeError) as exc:
+            print("K线缓存写入失败:", type(exc).__name__, str(exc)[:100], flush=True)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
 
 class KlineCapacityError(Exception):
@@ -417,68 +503,90 @@ class KlineCapacityError(Exception):
 
 
 class SharedKlineHub:
-    def __init__(self, max_series=KLINE_MAX_SERIES):
+    """24 live subscriptions; 256 RAM history series; bounded disk snapshots.
+
+    The TqApi for live bars is owned by the live worker. The separate history
+    worker performs bounded 200-bar backfills in small SDK batches. HTTP
+    threads never touch either TqApi. A warmup never reserves a live slot.
+    """
+
+    def __init__(self, max_series=KLINE_MAX_SERIES, store=None):
         self.condition = threading.Condition()
         self.max_series = max_series
-        self.entries = {}  # (sdk_symbol, period): {used, listeners, waiters}
-        self.cache = {}    # key: (list of bars, version)
+        self.store = store
+        self.entries = {}           # active live subscription entries
+        self.cache = {}             # key -> (deduplicated bars, version)
+        self.cached_used = {}       # key -> monotonic LRU clock
+        self.live_tail = {}         # last 2 authoritative live bars
+        self.last_saved = {}
+        self.last_history = {}
+        self.pending_history = set()
+        self.urgent_history = deque()
+        self.background_history = deque()
+        self.history_running = set()
+        self.warm_until = {}
         self.generation = 0
         self.thread = None
+        self.history_thread = None
         self.connected = False
         self.error = None
 
-    def _prefetch_siblings_locked(self, key):
-        # Called only with condition locked, after a foreground series
-        # has yielded valid bars. The active chart is always first.
-        symbol, selected_period = key
-        for period in KLINE_PREWARM_PERIODS:
-            sibling = (symbol, period)
-            if sibling == key or sibling in self.entries:
-                continue
-            if len(self.entries) >= self.max_series:
-                break
-            self.entries[sibling] = {
-                "used": time.monotonic(), "listeners": 0, "waiters": 0,
-                "prefetch": True, "warmup_started": False
-            }
+    def _restore_locked(self, key):
+        if key in self.cache or self.store is None:
+            return
+        bars, saved_at = self.store.read(key)
+        if bars:
+            self.cache[key] = (bars, 1)
+            self.cached_used[key] = time.monotonic()
+            # A disk file is instantly displayable but must be reconciled
+            # before being treated as a current exchange snapshot.
+            self.last_history[key] = max(0, saved_at)
+
+    def _schedule_locked(self, key, urgent=False):
+        if key in self.history_running:
+            return
+        if key in self.pending_history:
+            if urgent:
+                self.urgent_history.append(key)  # upgrade priority
+            return
+        self.pending_history.add(key)
+        (self.urgent_history if urgent else self.background_history).append(key)
         self.condition.notify_all()
 
     def start(self):
         with self.condition:
             if self.thread is None or not self.thread.is_alive():
-                self.thread = threading.Thread(target=self.run, name="kline-feed", daemon=True)
+                self.thread = threading.Thread(target=self.run, name="kline-live",
+                                               daemon=True)
                 self.thread.start()
+            if self.history_thread is None or not self.history_thread.is_alive():
+                self.history_thread = threading.Thread(
+                    target=self.run_history, name="kline-history", daemon=True)
+                self.history_thread.start()
 
     def reserve(self, symbol, period, *, listener=False, waiter=False):
         key = (quote_symbol(symbol), period)
         with self.condition:
+            self._restore_locked(key)
             if key not in self.entries:
                 if len(self.entries) >= self.max_series:
-                    # Do not evict a stream that is being watched or a pending
-                    # HTTP request. Recycling the SDK drops stale subscriptions.
-                    candidates = [((not entry.get("prefetch", False), entry["used"]), old)
-                                  for old, entry in self.entries.items()
-                                  if not entry["listeners"] and not entry["waiters"]]
-                    if not candidates:
+                    inactive = [(row["used"], old) for old, row in self.entries.items()
+                                if not row["listeners"] and not row["waiters"]]
+                    if not inactive:
                         raise KlineCapacityError("kline_subscription_limit")
-                    old_key = min(candidates)[1]
-                    del self.entries[old_key]
-                    self.cache.pop(old_key, None)
-                    self.generation += 1
+                    victim = min(inactive)[1]
+                    del self.entries[victim]
+                    self.generation += 1  # TqSdk cannot unsubscribe old serials
                 self.entries[key] = {
                     "used": time.monotonic(), "listeners": 0, "waiters": 0,
-                    "prefetch": False, "warmup_started": False
                 }
             entry = self.entries[key]
             entry["used"] = time.monotonic()
-            if listener or waiter:
-                # An explicitly requested period supersedes its speculative
-                # prefetch and must be installed before other cold siblings.
-                entry["prefetch"] = False
             if listener:
                 entry["listeners"] += 1
             if waiter:
                 entry["waiters"] += 1
+            self._schedule_locked(key, urgent=True)
             self.condition.notify_all()
         self.start()
         return key
@@ -494,33 +602,55 @@ class SharedKlineHub:
                 entry["used"] = time.monotonic()
             self.condition.notify_all()
 
-    def publish(self, key, bars):
+    def publish(self, key, bars, *, history=False):
         if not bars:
             return
+        to_save = None
         with self.condition:
-            if key not in self.entries:
-                return
-            previous, version = self.cache.get(key, (None, 0))
-            if bars != previous:
-                self.cache[key] = (list(bars), version + 1)
-                entry = self.entries[key]
-                if (not entry.get("prefetch", False)
-                        and not entry.get("warmup_started", False)):
-                    entry["warmup_started"] = True
-                    self._prefetch_siblings_locked(key)
+            self._restore_locked(key)
+            previous, version = self.cache.get(key, ([], 0))
+            if history:
+                # Historical backfill wins against stale disk but not against
+                # a newer live update on a matching candle timestamp.
+                combined = merge_kline_bars(previous, bars)
+                combined = merge_kline_bars(combined, self.live_tail.get(key, []))
+                self.last_history[key] = time.time()
+            else:
+                self.live_tail[key] = list(bars)[-2:]
+                combined = merge_kline_bars(previous, bars)
+            if combined != previous:
+                self.cache[key] = (combined, version + 1)
+                self.cached_used[key] = time.monotonic()
                 self.condition.notify_all()
+            now = time.monotonic()
+            if self.store is not None and (history
+                  or combined != previous and now - self.last_saved.get(key, 0) > KLINE_SAVE_INTERVAL):
+                self.last_saved[key] = now
+                to_save = combined
+            if len(self.cache) > KLINE_MAX_MEMORY_SERIES:
+                evictable = [(self.cached_used.get(old, 0), old)
+                             for old in self.cache if old not in self.entries
+                             and old not in self.pending_history
+                             and old not in self.history_running]
+                if evictable:
+                    oldest = min(evictable)[1]
+                    del self.cache[oldest]
+                    self.cached_used.pop(oldest, None)
+                    self.live_tail.pop(oldest, None)
+        if to_save is not None:
+            self.store.write(key, to_save)
 
     def read(self, key, after_version=-1, timeout=10):
         deadline = time.monotonic() + timeout
         with self.condition:
+            self._restore_locked(key)
             while True:
                 bars, version = self.cache.get(key, ([], 0))
                 if bars and version != after_version:
-                    if key in self.entries:
-                        self.entries[key]["used"] = time.monotonic()
+                    self.cached_used[key] = time.monotonic()
                     return list(bars), version
                 remaining = deadline - time.monotonic()
-                if remaining <= 0 or key not in self.entries:
+                if remaining <= 0:
                     return list(bars), version
                 self.condition.wait(timeout=remaining)
 
@@ -532,12 +662,103 @@ class SharedKlineHub:
         finally:
             self.release(key, waiter=True)
 
+    def warm_symbols(self, symbols):
+        accepted = 0
+        with self.condition:
+            now = time.monotonic()
+            for symbol in list(dict.fromkeys(symbols)):
+                if now < self.warm_until.get(symbol, 0):
+                    continue
+                self.warm_until[symbol] = now + 300
+                accepted += 1
+                for period in KLINE_PERIOD_ORDER:
+                    key = (quote_symbol(symbol), period)
+                    self._restore_locked(key)
+                    # Skip recent, complete snapshots. Old snapshots remain
+                    # immediately readable while fresh bars are fetched.
+                    bars = self.cache.get(key, ([], 0))[0]
+                    if (len(bars) >= KLINE_HISTORY_LENGTH - 2
+                            and time.time() - self.last_history.get(key, 0) < 300):
+                        continue
+                    self._schedule_locked(key)
+        if accepted:
+            self.start()
+        return accepted
+
     def status(self):
         with self.condition:
             return {"connected": self.connected, "tracked": len(self.entries),
                     "ready": len(self.cache), "data_length": KLINE_DATA_LENGTH,
-                    "prefetch_pending": sum(1 for key, entry in self.entries.items()
-                                            if entry.get("prefetch") and key not in self.cache)}
+                    "history_length": KLINE_HISTORY_LENGTH,
+                    "pending_history": len(self.pending_history),
+                    "disk_enabled": self.store is not None}
+
+    def run_history(self):
+        # Keep one TqApi for a small batch to avoid login per contract, but
+        # close it periodically so finished serials release SDK resources.
+        api = None
+        batches = 0
+        while True:
+            with self.condition:
+                while not self.urgent_history and not self.background_history:
+                    self.condition.wait(timeout=5)
+                    if api is not None:
+                        break
+                key = None
+                while self.urgent_history or self.background_history:
+                    candidate = (self.urgent_history.popleft()
+                                 if self.urgent_history else self.background_history.popleft())
+                    if candidate in self.pending_history:
+                        self.pending_history.remove(candidate)
+                        self.history_running.add(candidate)
+                        key = candidate
+                        break
+            if key is None:
+                if api is not None:
+                    try:
+                        api.close()
+                    except Exception:
+                        pass
+                    api = None
+                    batches = 0
+                continue
+            try:
+                if api is None:
+                    with open(AUTH_PATH, encoding="utf-8") as handle:
+                        credentials = json.load(handle)
+                    api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+                serial = api.get_kline_serial(key[0], key[1], data_length=KLINE_HISTORY_LENGTH)
+                deadline = time.time() + 15
+                bars = []
+                while time.time() < deadline:
+                    api.wait_update(deadline=time.time() + 1)
+                    bars = bars_from_serial(serial)
+                    if len(bars) >= 2:
+                        break
+                if bars:
+                    self.publish(key, bars, history=True)
+                batches += 1
+            except Exception as exc:
+                print("历史K线补齐失败:", key, type(exc).__name__,
+                      str(exc)[:120], flush=True)
+                if api is not None:
+                    try:
+                        api.close()
+                    except Exception:
+                        pass
+                api = None
+                batches = 0
+            finally:
+                with self.condition:
+                    self.history_running.discard(key)
+                    self.condition.notify_all()
+            if batches >= 8:
+                try:
+                    api.close()
+                except Exception:
+                    pass
+                api = None
+                batches = 0
 
     def run(self):
         while True:
@@ -547,7 +768,6 @@ class SharedKlineHub:
                     credentials = json.load(handle)
                 api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
                 installed = {}
-                last_prefetch_at = 0.0
                 with self.condition:
                     generation = self.generation
                     self.connected = True
@@ -556,57 +776,30 @@ class SharedKlineHub:
                 while True:
                     with self.condition:
                         if generation != self.generation:
-                            # The bounded subscription set was evicted. Restart
-                            # the SDK session so unsubscribed serials are freed.
                             break
-                        targets = sorted(
-                            self.entries,
-                            key=lambda key: (
-                                self.entries[key]["prefetch"],
-                                -self.entries[key]["used"]
-                            )
-                        )
-                        urgent = any(
-                            key not in installed and not self.entries[key]["prefetch"]
-                            for key in targets
-                        )
+                        targets = sorted(self.entries, key=lambda key: -self.entries[key]["used"])
                     for key in targets:
-                        if key in installed:
-                            continue
-                        with self.condition:
-                            if key not in self.entries:
-                                continue
-                            speculative = self.entries[key]["prefetch"]
-                        if speculative:
-                            # Never delay a requested chart behind optional
-                            # subscriptions. Space speculative work out so
-                            # existing live charts can process updates.
-                            if (urgent or
-                                    time.monotonic() - last_prefetch_at < KLINE_PREWARM_SPACING):
-                                continue
-                            last_prefetch_at = time.monotonic()
-                        # One subscription per event-loop pass; all non-thread
-                        # safe TqSdk operations remain on this worker.
-                        installed[key] = api.get_kline_serial(
-                            key[0], key[1], data_length=KLINE_DATA_LENGTH)
-                        break
+                        if key not in installed:
+                            installed[key] = api.get_kline_serial(
+                                key[0], key[1], data_length=KLINE_DATA_LENGTH)
+                            break
                     updated = api.wait_update(deadline=time.time() + 0.3)
                     for key in targets:
                         serial = installed.get(key)
                         if serial is None:
                             continue
+                        if updated and api.is_changing(serial):
+                            self.publish(key, bars_from_serial(serial))
                         with self.condition:
-                            has_snapshot = key in self.cache
-                        if not has_snapshot or (updated and api.is_changing(serial)):
-                            bars = bars_from_serial(serial)
-                            if bars:
-                                self.publish(key, bars)
+                            last = self.last_history.get(key, 0)
+                            if time.time() - last > KLINE_HISTORY_REFRESH_SECONDS:
+                                self._schedule_locked(key, urgent=True)
             except Exception as exc:
                 with self.condition:
                     self.error = type(exc).__name__ + ": " + str(exc)[:140]
                     self.connected = False
                     self.condition.notify_all()
-                print("K线共享连接异常，准备重连:", self.error, flush=True)
+                print("K线实时连接异常，准备重连:", self.error, flush=True)
                 time.sleep(3)
             finally:
                 with self.condition:
@@ -619,7 +812,7 @@ class SharedKlineHub:
                         pass
 
 
-KLINE_HUB = SharedKlineHub()
+KLINE_HUB = SharedKlineHub(store=KlineFileCache())
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -685,18 +878,26 @@ class Handler(BaseHTTPRequestHandler):
             self.begin_stream()
             self.push_event({"symbol": symbol, "bars": bars[-count:]})
             previous = bars[-1]
+            previous_count = len(bars)
+            first_time = bars[0]["time"]
             last_full = time.monotonic()
             while True:
                 bars, next_version = KLINE_HUB.read(key, after_version=version, timeout=12)
                 now = time.monotonic()
                 if bars and next_version != version:
                     latest = bars[-1]
-                    if now - last_full >= 60:
+                    # A background history backfill can prepend 200 real bars
+                    # without changing the latest bar. Send the full frame
+                    # immediately so the chart gains MA120 and leftward pan.
+                    if (now - last_full >= 60 or
+                            len(bars) != previous_count or bars[0]["time"] != first_time):
                         self.push_event({"symbol": symbol, "bars": bars[-count:]})
                         last_full = now
                     elif latest != previous:
                         self.push_event({"symbol": symbol, "bar": latest})
                     previous = latest
+                    first_time = bars[0]["time"]
+                    previous_count = len(bars)
                     version = next_version
                 else:
                     self.wfile.write(b": heartbeat\n\n")
@@ -738,6 +939,27 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(400, {"error": "invalid_stream_parameters"})
                 return
             self.stream_bars(symbol, period, count)
+            return
+        if url.path == "/v1/cache/warm":
+            # A bounded GET-only cache hint, never an account/favorites write
+            # API. The public gateway cannot delete cache files or set server
+            # credentials. Repeated hints are throttled per contract.
+            symbols = parse_qs(url.query).get("symbol", [])
+            if (not 1 <= len(symbols) <= 16
+                    or any(not re.fullmatch(r"(CFFEX|SHFE|DCE|CZCE|INE|GFEX)\.[A-Za-z]+[0-9]{3,4}",
+                                            symbol) for symbol in symbols)):
+                self.reply(400, {"error": "invalid_warm_symbols"})
+                return
+            # Only contracts that the running quote hub currently advertises,
+            # or known listed products, can be requested. This bounds abuse.
+            current_codes = {item.get("code") for item in LIVE_QUOTES.current().values()}
+            if any(symbol not in current_codes and
+                   contract_product(symbol) not in SYMBOLS for symbol in symbols):
+                self.reply(400, {"error": "unsupported_warm_symbols"})
+                return
+            accepted = KLINE_HUB.warm_symbols(symbols)
+            self.reply(200, {"accepted": accepted,
+                             "pending": KLINE_HUB.status()["pending_history"]})
             return
         if url.path == "/v1/catalog":
             try:
