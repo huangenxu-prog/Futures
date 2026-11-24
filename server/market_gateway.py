@@ -411,6 +411,9 @@ KLINE_DATA_LENGTH = 2
 KLINE_HISTORY_LENGTH = 200
 KLINE_MAX_MEMORY_SERIES = 256
 KLINE_HISTORY_REFRESH_SECONDS = 600
+# The favorites' stored history need not be re-downloaded every 10 minutes.
+# Opening a chart always requests an up-to-date reconciliation separately.
+KLINE_WARM_HISTORY_FRESH_SECONDS = 3600
 KLINE_SAVE_INTERVAL = 30
 KLINE_CACHE_DIR = os.environ.get("QIHUI_KLINE_CACHE_DIR", "/root/tq_test/cache/klines")
 KLINE_PERIOD_ORDER = (900, 300, 1800, 3600, 60, 86400)
@@ -628,6 +631,11 @@ class SharedKlineHub:
                 combined = merge_kline_bars(combined, self.live_tail.get(key, []))
                 self.last_history[key] = time.time()
             else:
+                # Exchange calendar gaps are not automatically filled. A
+                # discontinuity merely schedules a genuine TqSdk backfill.
+                if previous and max(bar["time"] for bar in bars) > (
+                        previous[-1]["time"] + 3 * key[1]):
+                    self._schedule_locked(key, urgent=True)
                 self.live_tail[key] = list(bars)[-2:]
                 combined = merge_kline_bars(previous, bars)
             if combined != previous:
@@ -696,7 +704,8 @@ class SharedKlineHub:
                     # immediately readable while fresh bars are fetched.
                     bars = self.cache.get(key, ([], 0))[0]
                     if (len(bars) >= KLINE_HISTORY_LENGTH - 2
-                            and time.time() - self.last_history.get(key, 0) < 300):
+                            and time.time() - self.last_history.get(key, 0)
+                            < KLINE_WARM_HISTORY_FRESH_SECONDS):
                         continue
                     self._schedule_locked(key)
         if accepted:
