@@ -75,6 +75,28 @@ enum MarketDataService {
         return base
     }
 
+    /// Schedule a bounded VPS history warmup for actual watchlist contracts.
+    /// This never changes the user's favorites or creates an account.
+    static func warmFavoriteHistory(_ symbols: [String]) async throws {
+        let unique = Array(Set(symbols)).sorted()
+        guard !unique.isEmpty else { return }
+        for start in stride(from: 0, to: unique.count, by: 16) {
+            try Task.checkCancellation()
+            let batch = Array(unique[start..<min(start + 16, unique.count)])
+            let url = try baseURL().appendingPathComponent("v1/cache/warm")
+                .appending(queryItems: batch.map {
+                    URLQueryItem(name: "symbol", value: $0)
+                })
+            let (data, response) = try await URLSession.shared.data(
+                for: URLRequest(url: url, timeoutInterval: 12)
+            )
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  (try? JSONSerialization.jsonObject(with: data)) != nil else {
+                throw MarketDataError.invalidResponse
+            }
+        }
+    }
+
     static func catalogProducts() async throws -> [FuturesInstrument] {
         let url = try baseURL().appendingPathComponent("v1/catalog")
         let (data, response) = try await URLSession.shared.data(

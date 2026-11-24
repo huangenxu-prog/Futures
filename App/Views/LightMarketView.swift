@@ -58,6 +58,8 @@ struct LightMarketView: View {
     @State private var selectedCategory = "全部"
     @State private var sortBy = "默认"
     @State private var onDemandQuotes: [String: MarketDataService.MainContract] = [:]
+    @State private var lastWarmedCodes = ""
+    @State private var lastWarmRequest = Date.distantPast
     private let categories = ["全部", "上期所", "大商所", "郑商所", "广期所", "能源中心", "中金所"]
 
     private func exchangeCode(for category: String) -> String? {
@@ -117,6 +119,23 @@ struct LightMarketView: View {
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
+        if scope == .favorites && search.isEmpty {
+            await warmFavoritesIfNeeded()
+        }
+    }
+
+    @MainActor
+    private func warmFavoritesIfNeeded() async {
+        let codes = favorites.ids.compactMap { quote(for: $0)?.code }
+        guard !codes.isEmpty else { return }
+        let signature = Array(Set(codes)).sorted().joined(separator: "|")
+        let now = Date()
+        guard signature != lastWarmedCodes ||
+              now.timeIntervalSince(lastWarmRequest) > 600 else { return }
+        lastWarmedCodes = signature
+        lastWarmRequest = now
+        // Best effort; prefetch failure must not block the quote list.
+        try? await MarketDataService.warmFavoriteHistory(codes)
     }
 
     private func changePercentage(_ item: FuturesInstrument) -> Double? {
