@@ -21,21 +21,12 @@ struct InstrumentDetailView: View {
     @State private var rawBars: [MarketBar] = []
     @State private var chartFeed = DirectChartFeed<[MarketBar]>()
     @State private var liveQuote: MarketDataService.MainContract?
-    @State private var quotePreview: MarketBar?
     @State private var selectedCandleTime: Int64? = nil
     @State private var loadError: String? = nil
     @State private var loading = false
     @State private var currentPriceTick: Double?
     private let periods = ["1分","5分","15分","30分","60分","日线"]
     private var quote: MarketDataService.MainContract? { liveQuote ?? contracts[instrument.id] }
-    // Keep provisional tick prices out of the authoritative history/cache.
-    private var chartBars: [MarketBar] {
-        guard let preview = quotePreview, preview.time == rawBars.last?.time,
-              displayedKey == chartKey else { return rawBars }
-        var display = rawBars
-        display[display.count - 1] = preview
-        return display
-    }
     private var chartSymbol: String { selectedContract?.code ?? quote?.code ?? instrument.id }
     private var chartKey: String { chartSymbol + "/" + period }
     @State private var displayedKey = ""
@@ -43,16 +34,6 @@ struct InstrumentDetailView: View {
     @State private var mostRecentStreamBar: MarketBar?
     @State private var lastCachedCandleAt: Date?
 
-    // TqSdk quote datetimes are exchange-local (China Standard Time).
-    // Use them only to confirm a quote belongs to the currently open bar.
-    private static let exchangeQuoteTimeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = TimeZone(secondsFromGMT: 8 * 3600)
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return formatter
-    }()
     private var displayedChange: Double? { selectedContract?.change ?? quote?.change }
     private var changeColor: Color { MarketPalette.movement(displayedChange) }
     private var changeText: String { selectedContract?.changePercent ?? quote?.changePercent ?? "--" }
@@ -74,7 +55,7 @@ struct InstrumentDetailView: View {
                     Spacer()
                 } else if !rawBars.isEmpty && displayedKey == chartKey {
                     ProfessionalChartHost(
-                        symbol: chartSymbol, period: periodSeconds, bars: chartBars,
+                        symbol: chartSymbol, period: periodSeconds, bars: rawBars,
                         feed: chartFeed, feedKey: chartKey,
                         priceTick: selectedContract?.priceTick ?? currentPriceTick,
                         showingIndicatorSettings: $showChartIndicatorSettings,
@@ -116,25 +97,28 @@ struct InstrumentDetailView: View {
             if displayedKey != key {
                 prepareCachedCandles(symbol: symbol, period: seconds)
             }
-            // The VPS has already prefetched the historical series. Request
-            // that snapshot immediately and independently of the SSE setup.
-            // The phone's own cache was displayed above with no network wait.
-            let initialSnapshot = Task { @MainActor in
-                await loadCandles(reset: false)
-            }
-            defer { initialSnapshot.cancel() }
+            // The SSE handshake already contains an authoritative history page.
+            // Only hydrate by HTTP if it is incomplete or the stream fails.
+            // Never put that request in the live update's critical path.
+            var hydration: Task<Void, Never>?
+            defer { hydration?.cancel() }
             while !Task.isCancelled {
                 do {
                     try await MarketDataService.streamCandles(symbol: symbol, period: seconds) { event in
-                        guard chartSymbol == symbol, periodSeconds == seconds else { return }
+                        guard !Task.isCancelled, chartSymbol == symbol, periodSeconds == seconds else { return }
                         applyLiveCandle(event)
+                        if event.bars != nil, rawBars.count < KlineStartupMerge.initialCount,
+                           hydration == nil {
+                            hydration = Task { @MainActor in await loadCandles(reset: false) }
+                        }
                     }
                 } catch is CancellationError {
                     return
                 } catch {
-                    // The independent HTTP snapshot is already in progress.
-                    // Retry SSE without creating a duplicate 25-second request.
-                    do { try await Task.sleep(for: .seconds(3)) } catch { return }
+                    if hydration == nil, rawBars.count < KlineStartupMerge.initialCount {
+                        hydration = Task { @MainActor in await loadCandles(reset: false) }
+                    }
+                    do { try await Task.sleep(for: .seconds(1)) } catch { return }
                 }
             }
         }
@@ -145,7 +129,6 @@ struct InstrumentDetailView: View {
             // A navigation destination may have captured an older environment
             // dictionary. Consume the actual shared live feed directly.
             liveQuote = incoming
-            applyLiveQuoteToOpenCandle(incoming)
         }
         .sheet(isPresented: $showOptions) {
             OptionChainView(code: chartSymbol, underlyingLast: rawBars.last?.close ?? selectedContract?.last ?? quote?.last)
@@ -161,12 +144,11 @@ struct InstrumentDetailView: View {
     @MainActor
     private func prepareCachedCandles(symbol: String, period: Int) {
         displayedKey = chartKey
-        quotePreview = nil
         lastStreamCandleKey = nil
         mostRecentStreamBar = nil
         lastCachedCandleAt = nil
         rawBars = MarketDataService.cached(symbol: symbol, period: period) ?? []
-        chartFeed.publish(key: chartKey, snapshot: chartBars)
+        chartFeed.publish(key: chartKey, snapshot: rawBars)
         selectedCandleTime = nil
         loadError = nil
         loading = rawBars.isEmpty
@@ -188,14 +170,15 @@ struct InstrumentDetailView: View {
             // SSE may have delivered newer ticks while HTTP was in flight.
             // History wins over an older phone cache, but a newer live bar
             // must not be rolled back by the later HTTP completion.
+            let hasLive = lastStreamCandleKey == requestedKey
             let merged = KlineStartupMerge.combine(
-                server: bars, existing: rawBars,
-                live: lastStreamCandleKey == requestedKey ? mostRecentStreamBar : nil,
+                server: hasLive ? rawBars : bars,
+                existing: hasLive ? bars : rawBars,
+                live: hasLive ? mostRecentStreamBar : nil,
                 timestamp: { $0.time })
             guard !merged.isEmpty else { return }
-            if rawBars.last != merged.last { quotePreview = nil }
             if rawBars != merged { rawBars = merged }
-            chartFeed.publish(key: requestedKey, snapshot: chartBars)
+            chartFeed.publish(key: requestedKey, snapshot: rawBars)
             MarketDataService.cache(merged, symbol: symbol, period: requestedPeriod)
         } catch is CancellationError {
             return
@@ -207,33 +190,11 @@ struct InstrumentDetailView: View {
         }
     }
     @MainActor
-    private func applyLiveQuoteToOpenCandle(_ live: MarketDataService.MainContract) {
-        guard live.code == chartSymbol, displayedKey == chartKey,
-              let price = live.last, price.isFinite,
-              let time = live.time, time.count >= 19,
-              let quoteDate = Self.exchangeQuoteTimeFormatter.date(from: String(time.prefix(19))),
-              let last = rawBars.last,
-              OpenCandleQuotePolicy.accepts(quoteTime: quoteDate.timeIntervalSince1970,
-                                           barTime: last.time, period: periodSeconds) else { return }
-        // React immediately to the real quote, even if a K-line frame arrived
-        // a moment ago. Never invent a new bucket or derive bar volume from
-        // the exchange's cumulative daily volume.
-        let earlier = quotePreview?.time == last.time ? quotePreview : nil
-        let candidate = MarketBar(time: last.time, open: last.open,
-                                  high: max(last.high, earlier?.high ?? last.high, price),
-                                  low: min(last.low, earlier?.low ?? last.low, price),
-                                  close: price, preSettlement: last.preSettlement,
-                                  volume: last.volume)
-        if candidate != (quotePreview ?? last) {
-            quotePreview = candidate
-            chartFeed.publish(key: chartKey, snapshot: chartBars)
-        }
-    }
-
-    @MainActor
     private func applyLiveCandle(_ event: MarketDataService.CandlePush) {
         guard event.symbol == chartSymbol, displayedKey == chartKey else { return }
+        let applyStarted = ProcessInfo.processInfo.systemUptime
         let updated: [MarketBar]
+        var tailOnly = false
         if let full = event.bars, !full.isEmpty {
             // The new gateway sends only two live bars at startup. Merge
             // by exchange K-line time so a short frame cannot replace the
@@ -242,13 +203,17 @@ struct InstrumentDetailView: View {
             for bar in rawBars { byTime[bar.time] = bar }
             for bar in full { byTime[bar.time] = bar }
             updated = Array(byTime.values.sorted { $0.time < $1.time }.suffix(500))
-        } else if let bar = event.bar, !rawBars.isEmpty {
+        } else if let bar = event.bar, let last = rawBars.last {
             var next = rawBars
-            if let index = next.lastIndex(where: { $0.time == bar.time }) {
-                next[index] = bar
-            } else if let last = next.last, bar.time > last.time {
+            if bar.time == last.time {
+                next[next.count - 1] = bar
+                tailOnly = true
+            } else if bar.time > last.time {
                 next.append(bar)
                 if next.count > 500 { next.removeFirst(next.count - 500) }
+                tailOnly = true
+            } else if let index = next.lastIndex(where: { $0.time == bar.time }) {
+                next[index] = bar
             } else {
                 return
             }
@@ -257,14 +222,11 @@ struct InstrumentDetailView: View {
             return
         }
 
-        let applyStarted = ProcessInfo.processInfo.systemUptime
-        // Authoritative changes reconcile any provisional quote. An identical
-        // snapshot or an older-history correction cannot erase a newer preview.
-        if rawBars.last != updated.last { quotePreview = nil }
         if rawBars != updated { rawBars = updated }
         KlineDiagnostics.record(event, period: periodSeconds, newest: updated.last, started: applyStarted)
-        // Direct synchronous delivery, independent of SwiftUI body/onChange.
-        chartFeed.publish(key: chartKey, snapshot: chartBars)
+        // The original TradingChart incremental API consumes each genuine
+        // tail update immediately. Only snapshots/history use reconciliation.
+        chartFeed.publish(key: chartKey, snapshot: updated, tailOnly: tailOnly)
         lastStreamCandleKey = chartKey
         // Retain the freshest authoritative bar while the parallel history
         // request is pending; never let a late HTTP result roll it back.
@@ -300,7 +262,7 @@ struct InstrumentDetailView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Spacer(minLength: 1)
-            Text((selectedContract == nil ? quote?.last : chartBars.last?.close ?? selectedContract?.last)?.formatted() ?? "--")
+            Text(((displayedKey == chartKey ? rawBars.last?.close : nil) ?? selectedContract?.last ?? quote?.last)?.formatted() ?? "--")
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
                 .foregroundStyle(changeColor)
                 .monospacedDigit()
@@ -336,7 +298,7 @@ struct InstrumentDetailView: View {
     private var indicatorRow: some View {
             HStack(spacing: 5) {
                 if let timestamp = selectedCandleTime,
-                   let candle = chartBars.first(where: { $0.time == timestamp }) {
+                   let candle = rawBars.first(where: { $0.time == timestamp }) {
                     selectedCandleInfo(candle)
                 } else {
                     Text("技术分析").foregroundStyle(MarketPalette.muted)

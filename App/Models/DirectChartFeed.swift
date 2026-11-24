@@ -9,22 +9,28 @@ final class DirectChartFeed<Snapshot: Equatable> {
     private var owner: UUID?
     private var subscribedKey: String?
     private var receive: ((Snapshot?, Snapshot) -> Void)?
+    private var receiveTail: ((Snapshot) -> Void)?
 
     @MainActor
-    func publish(key: String, snapshot: Snapshot) {
+    func publish(key: String, snapshot: Snapshot, tailOnly: Bool = false) {
         let previous = self.key == key ? latest : nil
         if previous == snapshot { return }
         self.key = key
         latest = snapshot
-        if subscribedKey == key { receive?(previous, snapshot) }
+        if subscribedKey == key {
+            if tailOnly, previous != nil, let receiveTail { receiveTail(snapshot) }
+            else { receive?(previous, snapshot) }
+        }
     }
 
     @MainActor
     func attach(key: String, owner: UUID, fallback: Snapshot,
+                receiveTail: ((Snapshot) -> Void)? = nil,
                 receive: @escaping (Snapshot?, Snapshot) -> Void) {
         self.owner = owner
         subscribedKey = key
         self.receive = receive
+        self.receiveTail = receiveTail
         // The new view may appear before the first network frame.
         let initial = self.key == key ? (latest ?? fallback) : fallback
         self.key = key
@@ -38,5 +44,6 @@ final class DirectChartFeed<Snapshot: Equatable> {
         self.owner = nil
         subscribedKey = nil
         receive = nil
+        receiveTail = nil
     }
 }

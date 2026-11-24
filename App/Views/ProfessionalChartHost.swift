@@ -58,7 +58,6 @@ struct ProfessionalChartHost: View {
     @State private var drawingsRestored = false
     @State private var historyDepth = 1100
     @State private var historyTask: Task<Void, Never>?
-    @State private var didScheduleInitialHistory = false
 
     private var interval: ChartInterval {
         ChartInterval(seconds: TimeInterval(period))
@@ -149,10 +148,12 @@ struct ProfessionalChartHost: View {
         value.legendLabel = MarketPalette.muted
         value.candleCornerRadius = 0
         value.candleBodyWidthFactor = 0.75
-        value.hollowRisingCandles = true
+        // Production uses the original TradingChart candle renderer.
+        value.hollowRisingCandles = false
         #if DEBUG
-        if isReplay && ProcessInfo.processInfo.arguments.contains("-qihui-native-candles") {
-            value.hollowRisingCandles = false
+        // Keep the isolated renderer A/B regression test available.
+        if isReplay && !ProcessInfo.processInfo.arguments.contains("-qihui-native-candles") {
+            value.hollowRisingCandles = true
         }
         #endif
         value.hollowCandleFill = MarketPalette.surface
@@ -198,9 +199,11 @@ struct ProfessionalChartHost: View {
         .onAppear {
             model.indicators = displaySettings.indicators()
             configureChart()
-            feed.attach(key: feedKey, owner: feedOwner, fallback: bars) { previous, incoming in
+            feed.attach(key: feedKey, owner: feedOwner, fallback: bars,
+                        receiveTail: { incoming in
+                synchronizeTail(incoming)
+            }) { previous, incoming in
                 synchronizeBars(previous: previous ?? [], incoming: incoming)
-                scheduleInitialHistoryIfNeeded(count: incoming.count)
             }
         }
         .onChange(of: displaySettings) { _, current in
@@ -350,6 +353,31 @@ struct ProfessionalChartHost: View {
         }
     }
 
+    /// Real SSE deltas replace or append a single candle, using the upstream
+    /// API directly. No full-series comparison, history scan or quote synthesis.
+    @MainActor
+    private func synchronizeTail(_ incoming: [MarketBar]) {
+        guard let last = incoming.last else { return }
+        guard !model.series.isEmpty else {
+            synchronizeBars(previous: [], incoming: incoming)
+            return
+        }
+        let started = ProcessInfo.processInfo.systemUptime
+        if sessionAxis.chartTime(for: last.time) == nil {
+            sessionAxis.register([last.time], period: period)
+        }
+        guard sessionAxis.chartTime(for: last.time) != nil,
+              model.update(chartCandle(last), interval: interval) != .ignored else {
+            synchronizeBars(previous: [], incoming: incoming)
+            return
+        }
+        model.currentPrice = last.close
+        KlineDiagnostics.chartUpdated(symbol: symbol, period: period, newest: last, started: started)
+        if isReplay, model.series.candles?.last == chartCandle(last) {
+            onReplayApplied?(last, (ProcessInfo.processInfo.systemUptime - started) * 1000)
+        }
+    }
+
     @MainActor
     private func synchronizeBars(previous: [MarketBar], incoming: [MarketBar]) {
         guard !incoming.isEmpty else { return }
@@ -444,24 +472,8 @@ struct ProfessionalChartHost: View {
         }
     }
 
-    // Once the first page is visible, warm one older page without blocking
-    // the SSE stream or requesting the same page twice during a user pan.
     @MainActor
-    private func scheduleInitialHistoryIfNeeded(count: Int) {
-        guard !isReplay, !didScheduleInitialHistory, historyTask == nil,
-              count >= KlineStartupMerge.initialCount,
-              (model.series.candles?.count ?? 0) < KlineStartupMerge.initialCount + KlineStartupMerge.historyPageCount,
-              model.hasMoreHistory else { return }
-        didScheduleInitialHistory = true
-        historyTask = Task { @MainActor in
-            defer { historyTask = nil }
-            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
-            await fetchOlderHistory(prefetch: true)
-        }
-    }
-
-    @MainActor
-    private func fetchOlderHistory(prefetch: Bool = false) async {
+    private func fetchOlderHistory() async {
         guard !model.isLoadingHistory, model.hasMoreHistory,
               let first = model.series.firstTime else { return }
         model.isLoadingHistory = true
@@ -489,9 +501,6 @@ struct ProfessionalChartHost: View {
                     }
                     return
                 }
-                // Speculative warmup never widens the upstream window or
-                // declares history exhausted; explicit scrolling still can.
-                if prefetch { return }
                 if historyDepth >= 8964 {
                     model.hasMoreHistory = false
                     model.isLoadingHistory = false
@@ -505,7 +514,7 @@ struct ProfessionalChartHost: View {
             // A legacy VPS gateway may not yet support paging. Stop repeated
             // retries rather than freezing the chart's working interactions.
             model.isLoadingHistory = false
-            if !prefetch && !Task.isCancelled { model.hasMoreHistory = false }
+            if !Task.isCancelled { model.hasMoreHistory = false }
         }
     }
 }

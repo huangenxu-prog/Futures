@@ -36,7 +36,7 @@ struct ChartReplayView: View {
                     next[next.count-1] = MarketBar(time: last.time, open: last.open,
                         high: last.high, low: last.low, close: close, preSettlement: nil,
                         volume: last.volume + Int64(i))
-                    feed.publish(key: key, snapshot: next)
+                    feed.publish(key: key, snapshot: next, tailOnly: true)
                     try await Task.sleep(for: .milliseconds(350))
                 }
                 let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]

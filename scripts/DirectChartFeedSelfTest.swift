@@ -22,6 +22,16 @@ struct DirectChartFeedSelfTest {
         feed.detach(owner: b)
         feed.publish(key: "CF/900", snapshot: [4, 7])
         precondition(deliveries.count == 4)
-        print("Direct chart delivery, replay, dedupe and lifecycle: OK")
+        let c = UUID()
+        var tails: [[Int]] = []
+        var full: [[Int]] = []
+        feed.attach(key: "CF/900", owner: c, fallback: [], receiveTail: { tails.append($0) }) { _, incoming in full.append(incoming) }
+        feed.publish(key: "CF/900", snapshot: [4, 8], tailOnly: true)
+        feed.publish(key: "CF/900", snapshot: [4, 8], tailOnly: true)
+        feed.publish(key: "CF/900", snapshot: [5, 8, 9])
+        precondition(tails == [[4, 8]])
+        precondition(full == [[4, 7], [5, 8, 9]])
+        feed.detach(owner: c)
+        print("Direct chart delivery, replay, dedupe, explicit tail path and lifecycle: OK")
     }
 }
