@@ -18,6 +18,13 @@ struct PaperContract: Codable, Equatable, Sendable {
         self.last = last;self.bid = bid;self.ask = ask;self.option = option
     }
     var isOption:Bool {option != nil}
+    var optionTitle:String? {
+        option.map{$0.side == "CALL" ? "看涨期权" : "看跌期权"}
+    }
+    func actionTitle(direction:PaperDirection,offset:PaperOffset)->String {
+        guard let optionTitle else {return PaperOrder.actionTitle(direction:direction,offset:offset)}
+        return direction.title+optionTitle+"（"+offset.title+"）"
+    }
     var displayName:String {
         guard let option else {return name}
         let side = option.side == "CALL" ? "看涨" : "看跌"
@@ -85,7 +92,7 @@ struct PaperOrder:Identifiable,Codable,Equatable,Sendable {
     let quantity:Int
     let created:Date
     var status:PaperOrderStatus
-    var actionTitle:String { PaperOrder.actionTitle(direction:direction,offset:offset) }
+    var actionTitle:String { contract.actionTitle(direction:direction,offset:offset) }
     static func actionTitle(direction:PaperDirection,offset:PaperOffset)->String {
         let long = offset == .open ? direction == .buy : direction == .sell
         return (offset == .open ? "开" : "平") + (long ? "多" : "空")

@@ -344,7 +344,7 @@ struct TradingCenterView:View {
                     .foregroundStyle(MarketPalette.movement(pnl))
             }
             HStack {
-                Text("\(pos.side.title) \(pos.quantity)手").foregroundStyle(pos.side == .long ? MarketPalette.up : MarketPalette.down)
+                Text("\(pos.contract.isOption ? (pos.side == .long ? "买方" : "卖方") : pos.side.title) \(pos.quantity)手").foregroundStyle(pos.side == .long ? MarketPalette.up : MarketPalette.down)
                 Text("成本 \(pos.averagePrice.formatted())")
                 Spacer(minLength:4)
                 Text("最新 \(price.map{$0.formatted()} ?? "--")")
@@ -352,7 +352,7 @@ struct TradingCenterView:View {
             HStack {
                 Text("可平 \(ledger.closable(symbol:pos.contract.symbol,side:pos.side))手").font(.caption).foregroundStyle(MarketPalette.muted)
                 Spacer()
-                Text(pos.side == .long ? "平多" : "平空").font(.caption.weight(.semibold)).foregroundStyle(MarketPalette.accent)
+                Text(pos.contract.isOption ? (pos.side == .long ? "卖出平仓" : "买入平仓") : (pos.side == .long ? "平多" : "平空")).font(.caption.weight(.semibold)).foregroundStyle(MarketPalette.accent)
                 Image(systemName:"chevron.right").font(.caption2).foregroundStyle(MarketPalette.muted)
             }
         }
@@ -400,7 +400,7 @@ struct TradingCenterView:View {
             if ledger.fills.isEmpty {Text("暂无成交").foregroundStyle(.secondary)}
             ForEach(ledger.fills.reversed()){fill in
                 VStack(alignment:.leading,spacing:5){
-                    HStack{Text(fill.symbol).fontWeight(.semibold);Spacer();Text(fill.displayAction)}
+                    HStack{Text(fill.symbol).fontWeight(.semibold);Spacer();Text(ledger.orders.first(where:{$0.id == fill.orderID})?.actionTitle ?? fill.displayAction)}
                     Text("\(fill.quantity)手 @ \(fill.price.formatted()) · 手续费 \(money(fill.fee))").font(.caption)
                     Text("平仓盈亏 \(money(fill.realized)) · \(fill.time.formatted(date:.omitted,time:.standard))").font(.caption).foregroundStyle(.secondary)
                 }
@@ -454,7 +454,7 @@ private struct PaperOrderTicket:View {
         let price:Double
         let quantity:Int
         var id:String { direction.rawValue+offset.rawValue }
-        var title:String { PaperOrder.actionTitle(direction:direction,offset:offset) }
+        let title:String
     }
 
     init(contract:PaperContract,ledger:PaperLedger,preferredDirection:PaperDirection,preferredOffset:PaperOffset,onSubmit:@escaping(PaperDirection,PaperOffset,Double,Int)throws->Void) {
@@ -479,12 +479,12 @@ private struct PaperOrderTicket:View {
                 HStack {
                     Text("可用 \(ledger.available.formatted(.number.precision(.fractionLength(0))))")
                     Spacer()
-                    Text("可平 多 \(longAvailable) / 空 \(shortAvailable)")
+                    Text(contract.isOption ? "可卖出 \(longAvailable)手" : "可平 多 \(longAvailable) / 空 \(shortAvailable)")
                 }.font(.caption).monospacedDigit().foregroundStyle(MarketPalette.muted)
                 if contract.isOption {optionCostRow}
                 actionRow
                 if contract.isOption && !closeOnly {
-                    Text("开多＝买入期权；卖方开仓暂未启用").font(.caption2).foregroundStyle(MarketPalette.muted)
+                    Text("卖出仅平已有买方持仓；暂不支持卖方开仓").font(.caption2).foregroundStyle(MarketPalette.muted)
                 }
                 if !contract.hasMetadata {
                     Text(contract.isOption ? "期权交易参数未获取，请升级行情网关" : "合约参数未就绪，禁止委托").foregroundStyle(.red).font(.caption)
@@ -517,7 +517,7 @@ private struct PaperOrderTicket:View {
     private var header:some View {
         HStack {
             VStack(alignment:.leading,spacing:3) {
-                Text(closeOnly ? (preferredDirection == .sell ? "平多" : "平空") : contract.displayName).font(.headline)
+                Text(contract.isOption ? contract.displayName : (closeOnly ? (preferredDirection == .sell ? "平多" : "平空") : contract.displayName)).font(.headline)
                 Text(contract.symbol).font(.caption).foregroundStyle(MarketPalette.muted)
             }
             Spacer()
@@ -576,7 +576,14 @@ private struct PaperOrderTicket:View {
     }
     private var actionRow:some View {
         HStack(spacing:7) {
-            if closeOnly {
+            if let title = contract.optionTitle {
+                if !closeOnly {
+                    optionActionButton(.buy,.open,"买入"+title,"开仓",MarketPalette.up)
+                    optionActionButton(.sell,.close,"卖出"+title,"平仓",MarketPalette.down)
+                } else {
+                    optionActionButton(preferredDirection,.close,preferredDirection.title+title,"平仓",MarketPalette.accent)
+                }
+            } else if closeOnly {
                 actionButton(preferredDirection,.close,preferredDirection == .sell ? "平多" : "平空",MarketPalette.accent)
             } else {
                 actionButton(.buy,.open,"开多",MarketPalette.up)
@@ -585,6 +592,17 @@ private struct PaperOrderTicket:View {
                 actionButton(.buy,.close,"平空",MarketPalette.up)
             }
         }
+    }
+    private func optionActionButton(_ direction:PaperDirection,_ offset:PaperOffset,_ title:String,_ subtitle:String,_ tint:Color)->some View {
+        let eligible = contract.hasMetadata && ((offset == .open && direction == .buy) || (offset == .close && (direction == .sell ? longAvailable : shortAvailable)>0))
+        return Button {prepare(direction,offset)} label:{
+            VStack(spacing:3) {
+                Text(title).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.75)
+                Text(subtitle).font(.caption2).opacity(0.9)
+            }.foregroundStyle(.white)
+                .frame(maxWidth:.infinity).frame(height:50)
+                .background(tint,in:RoundedRectangle(cornerRadius:7))
+        }.buttonStyle(.plain).disabled(!eligible).opacity(eligible ? 1 : 0.35)
     }
     private func actionButton(_ direction:PaperDirection,_ offset:PaperOffset,_ title:String,_ tint:Color)->some View {
         let optionAllowed = !contract.isOption || offset == .close || direction == .buy
@@ -603,7 +621,7 @@ private struct PaperOrderTicket:View {
         var copy = ledger
         do {
             try copy.submit(contract:contract,direction:direction,offset:offset,price:p,quantity:q)
-            error = nil;pending = TradeIntent(direction:direction,offset:offset,price:p,quantity:q)
+            error = nil;pending = TradeIntent(direction:direction,offset:offset,price:p,quantity:q,title:contract.actionTitle(direction:direction,offset:offset))
         } catch {self.error = error.localizedDescription}
     }
     @MainActor private func refreshCloseQuote() async {
