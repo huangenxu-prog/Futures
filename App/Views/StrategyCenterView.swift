@@ -51,9 +51,10 @@ struct StrategyCenterView: View {
                 }
             }
             .searchable(text:$search,prompt:"搜索回测品种")
+            .scrollDismissesKeyboard(.immediately)
             .navigationTitle("策略中心")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement:.cancellationAction) { Button("关闭"){ dismiss() } } }
+            .toolbar { ToolbarItem(placement:.cancellationAction) { Button("关闭"){ IndicatorKeyboard.dismiss(); dismiss() } } }
         }
         .tint(MarketPalette.accent)
     }

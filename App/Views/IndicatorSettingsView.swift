@@ -3,6 +3,7 @@ import SwiftUI
 /// Edit visibility and period independently for every moving average.
 struct IndicatorSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var focusedField: String?
     @State private var draft: ChartDisplaySettings
     @State private var editingFormula: FormulaDefinition?
     @State private var composingFormula: FormulaDefinition?
@@ -48,18 +49,21 @@ struct IndicatorSettingsView: View {
                                 .fixedSize(horizontal:true,vertical:false)
                                 if average.type == .dma {
                                     TextField("权重",value:$average.dynamicAlpha,format:.number)
+    .focused($focusedField,equals:"alpha-\(average.id)")
                                         .keyboardType(.decimalPad)
                                         .multilineTextAlignment(.trailing)
                                         .frame(width:64)
                                         .accessibilityLabel("DMA 权重")
                                 } else {
                                     TextField("周期", value: $average.period, format: .number)
+    .focused($focusedField,equals:"period-\(average.id)")
                                         .keyboardType(.numberPad)
                                         .multilineTextAlignment(.trailing)
                                         .frame(width:52)
                                         .accessibilityLabel("均线周期")
                                 }
                                 Button {
+                                    dismissInput()
                                     let id = average.id
                                     draft.additionalAverages.removeAll { $0.id == id }
                                 } label: {
@@ -73,6 +77,7 @@ struct IndicatorSettingsView: View {
                                     Text("平滑权重 M").font(.caption).foregroundStyle(.secondary)
                                     Spacer()
                                     TextField("M",value:$average.smoothingWeight,format:.number)
+    .focused($focusedField,equals:"weight-\(average.id)")
                                         .keyboardType(.numberPad)
                                         .multilineTextAlignment(.trailing)
                                         .frame(width:58)
@@ -84,6 +89,7 @@ struct IndicatorSettingsView: View {
                         }
                     }
                     Button {
+                        dismissInput()
                         draft.addAverage()
                     } label: {
                         Label("新增均线", systemImage: "plus.circle")
@@ -96,11 +102,12 @@ struct IndicatorSettingsView: View {
 
                 Section("布林带 BOLL") {
                     Toggle("显示 BOLL", isOn: enabledBinding(.boll))
-                    parameter("计算周期", value: $draft.bollPeriod)
+                    parameter("计算周期", value: $draft.bollPeriod, id:"bollPeriod")
                     HStack {
                         Text("标准差倍数")
                         Spacer()
                         TextField("倍数", value: $draft.bollMultiplier, format: .number)
+    .focused($focusedField,equals:"boll-multiplier")
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 90)
@@ -108,19 +115,19 @@ struct IndicatorSettingsView: View {
                 }
                 Section("MACD") {
                     Toggle("显示 MACD", isOn: enabledBinding(.macd))
-                    parameter("快线周期", value: $draft.macdFast)
-                    parameter("慢线周期", value: $draft.macdSlow)
-                    parameter("信号周期", value: $draft.macdSignal)
+                    parameter("快线周期", value: $draft.macdFast, id:"macdFast")
+                    parameter("慢线周期", value: $draft.macdSlow, id:"macdSlow")
+                    parameter("信号周期", value: $draft.macdSignal, id:"macdSignal")
                 }
                 Section("KDJ") {
                     Toggle("显示 KDJ", isOn: enabledBinding(.kdj))
-                    parameter("RSV 周期", value: $draft.kdjPeriod)
-                    parameter("K 平滑周期", value: $draft.kdjK)
-                    parameter("D 平滑周期", value: $draft.kdjD)
+                    parameter("RSV 周期", value: $draft.kdjPeriod, id:"kdjPeriod")
+                    parameter("K 平滑周期", value: $draft.kdjK, id:"kdjK")
+                    parameter("D 平滑周期", value: $draft.kdjD, id:"kdjD")
                 }
                 Section("ATR") {
                     Toggle("显示 ATR", isOn: enabledBinding(.atr))
-                    parameter("计算周期", value: $draft.atrPeriod)
+                    parameter("计算周期", value: $draft.atrPeriod, id:"atrPeriod")
                 }
                 Section("SAR") {
                     Toggle("显示 SAR", isOn: enabledBinding(.sar))
@@ -134,9 +141,9 @@ struct IndicatorSettingsView: View {
                     Text("使用每根K线的实际期末持仓量。旧缓存未包含持仓量时不绘制缺失数据。")
                         .font(.caption).foregroundStyle(.secondary)
                     Toggle("显示 VOL", isOn: enabledBinding(.volume))
-                    parameter("成交量均线", value: $draft.volumeMA)
+                    parameter("成交量均线", value: $draft.volumeMA, id:"volumeMA")
                     Toggle("显示 RSI", isOn: enabledBinding(.rsi))
-                    parameter("RSI 周期", value: $draft.rsi)
+                    parameter("RSI 周期", value: $draft.rsi, id:"rsi")
                 }
                 Section("结构指标（试验）") {
                     Toggle("缠论分型、笔与重叠区", isOn: enabledBinding(.chan))
@@ -150,17 +157,18 @@ struct IndicatorSettingsView: View {
                             Toggle(formula.name, isOn: $formula.enabled)
                             Menu {
                                 if formula.composition != nil {
-                                    Button("编辑组合",systemImage:"slider.horizontal.3") { composingFormula = formula }
+                                    Button("编辑组合",systemImage:"slider.horizontal.3") { dismissInput(); composingFormula = formula }
                                 }
-                                Button("编辑公式",systemImage:"pencil") { editingFormula = formula }
+                                Button("编辑公式",systemImage:"pencil") { dismissInput(); editingFormula = formula }
                             } label: {
                                 Image(systemName:"pencil")
                             }
                             .accessibilityLabel("编辑指标")
                         }
                     }
-                    .onDelete { draft.formulas.remove(atOffsets: $0) }
+                    .onDelete { dismissInput(); draft.formulas.remove(atOffsets: $0) }
                     Button {
+                        dismissInput()
                         var formula = FormulaDefinition()
                         formula.name = "组合指标"
                         formula.enabled = true
@@ -171,6 +179,7 @@ struct IndicatorSettingsView: View {
                     }
                     .disabled(draft.formulas.count >= 12)
                     Button {
+                        dismissInput()
                         editingFormula = FormulaDefinition()
                     } label: {
                         Label("新建公式指标", systemImage: "plus.circle")
@@ -179,6 +188,7 @@ struct IndicatorSettingsView: View {
                 }
                 Section {
                     Button("恢复默认参数") {
+                        dismissInput()
                         let formulas = draft.formulas
                         draft = ChartDisplaySettings()
                         draft.formulas = formulas
@@ -196,17 +206,23 @@ struct IndicatorSettingsView: View {
                     }
                 }
             }
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.immediately)
+            .onSubmit { dismissInput() }
             .scrollContentBackground(.hidden)
             .background(MarketPalette.background.ignoresSafeArea())
             .navigationTitle("指标参数")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItemGroup(placement:.keyboard) {
+                    Spacer()
+                    Button("完成") { dismissInput() }.fontWeight(.semibold)
+                }
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("取消") { dismiss() }
+                    Button("取消") { dismissInput(); dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("保存") {
+                        dismissInput()
                         guard draft.isValid else { return }
                         onSave(draft)
                         dismiss()
@@ -237,6 +253,11 @@ struct IndicatorSettingsView: View {
         .tint(MarketPalette.accent)
     }
 
+    private func dismissInput() {
+        focusedField = nil
+        IndicatorKeyboard.dismiss()
+    }
+
     private func enabledBinding(_ kind: ChartIndicatorKind) -> Binding<Bool> {
         Binding(
             get: { draft.enabled.contains(kind) },
@@ -251,6 +272,7 @@ struct IndicatorSettingsView: View {
         HStack {
             Toggle(label, isOn: enabledBinding(kind))
             TextField("周期", value: value, format: .number)
+                .focused($focusedField,equals:"average-\(kind.rawValue)")
                 .keyboardType(.numberPad)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 70)
@@ -263,17 +285,19 @@ struct IndicatorSettingsView: View {
             Text(label)
             Spacer()
             TextField("数值", value: value, format: .number)
+    .focused($focusedField,equals:"decimal-\(label)")
                 .keyboardType(.decimalPad)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 90)
         }
     }
 
-    private func parameter(_ label: String, value: Binding<Int>) -> some View {
+    private func parameter(_ label: String, value: Binding<Int>, id: String) -> some View {
         HStack {
             Text(label)
             Spacer()
             TextField("周期", value: value, format: .number)
+                .focused($focusedField,equals:id)
                 .keyboardType(.numberPad)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 80)

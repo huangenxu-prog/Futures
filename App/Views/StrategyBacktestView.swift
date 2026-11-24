@@ -3,6 +3,7 @@ import Charts
 
 struct StrategyBacktestView: View {
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var focusedField: String?
     let symbol: String
     let period: Int
     let formulas: [FormulaDefinition]
@@ -54,11 +55,12 @@ struct StrategyBacktestView: View {
                         if !formulas.isEmpty {
                             Menu("载入已有公式") {
                                 ForEach(formulas) { formula in
-                                    Button(formula.name) { source = formula.source }
+                                    Button(formula.name) { dismissInput(); source = formula.source }
                                 }
                             }
                         }
                         TextEditor(text:$source).font(.system(size:12,design:.monospaced))
+    .focused($focusedField,equals:"source")
                             .frame(minHeight:110).autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
                         Text("LONG/SHORT：多空信号，EXIT：平仓，STOP：可选结构止损价。信号在收盘确认，下一根开盘成交。")
@@ -89,12 +91,14 @@ struct StrategyBacktestView: View {
                         Text("计划净亏损上限（元）")
                         Spacer()
                         TextField("风险",value:$risk,format:.number).keyboardType(.decimalPad)
+    .focused($focusedField,equals:"risk")
                             .multilineTextAlignment(.trailing).frame(width:100)
                     }
                     HStack {
                         Text("止盈倍数（0关闭）")
                         Spacer()
                         TextField("倍数",value:$target,format:.number).keyboardType(.decimalPad)
+    .focused($focusedField,equals:"target")
                             .multilineTextAlignment(.trailing).frame(width:90)
                     }
                     Toggle("盈利回撤归零离场",isOn:$protectProfit)
@@ -147,15 +151,29 @@ struct StrategyBacktestView: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.immediately)
+            .onSubmit { dismissInput() }
             .navigationTitle("指标回测")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement:.cancellationAction) { Button("关闭"){ dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement:.cancellationAction) { Button("关闭") { dismissInput(); dismiss() } }
+                ToolbarItemGroup(placement:.keyboard) {
+                    Spacer()
+                    Button("完成") { dismissInput() }.fontWeight(.semibold)
+                }
+            }
             .onAppear {
                 if tick.isEmpty, let priceTick, priceTick > 0 { tick = String(priceTick) }
                 if multiplier.isEmpty, let contractMultiplier, contractMultiplier > 0 { multiplier = String(contractMultiplier) }
             }
+            .onChange(of:hunt) { _,_ in dismissInput() }
             .onDisappear { task?.cancel() }
         }
+    }
+
+    private func dismissInput() {
+        focusedField = nil
+        IndicatorKeyboard.dismiss()
     }
 
     private func barTime(_ index:Int) -> String {
@@ -171,10 +189,12 @@ struct StrategyBacktestView: View {
             Text(title)
             Spacer()
             TextField("填写",text:text).keyboardType(.decimalPad)
+    .focused($focusedField,equals:title)
                 .multilineTextAlignment(.trailing).frame(width:95)
         }
     }
     private func start() {
+        dismissInput()
         guard let m = Double(multiplier), let t = Double(tick),let g = Double(margin),let c = Double(fee) else {
             error = "请填写合约乘数、最小价位、保证金比例和单边手续费。"; return
         }

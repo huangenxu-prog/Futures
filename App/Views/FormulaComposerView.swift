@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FormulaComposerView: View {
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var focusedField: String?
     @State private var draft: FormulaDefinition
     @State private var composition: FormulaComposition
     @State private var error: String?
@@ -34,17 +35,23 @@ struct FormulaComposerView: View {
                 previewSection
                 sourceSection
             }
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.immediately)
+            .onSubmit { dismissInput() }
             .scrollContentBackground(.hidden)
             .background(MarketPalette.background.ignoresSafeArea())
             .navigationTitle("组合指标")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItemGroup(placement:.keyboard) {
+                    Spacer()
+                    Button("完成") { dismissInput() }.fontWeight(.semibold)
+                }
                 ToolbarItem(placement:.cancellationAction) {
-                    Button("取消") { dismiss() }
+                    Button("取消") { dismissInput(); dismiss() }
                 }
                 ToolbarItem(placement:.confirmationAction) {
                     Button("保存") {
+                        dismissInput()
                         guard let source = validate() else {
                             showingSource = true
                             return
@@ -64,9 +71,15 @@ struct FormulaComposerView: View {
         .tint(MarketPalette.accent)
     }
 
+    private func dismissInput() {
+        focusedField = nil
+        IndicatorKeyboard.dismiss()
+    }
+
     private var metadataSection: some View {
         Section("指标") {
             TextField("指标名称",text:$draft.name)
+    .focused($focusedField,equals:"indicator-name")
             Picker("绘制位置",selection:$draft.overlay) {
                 Text("主图").tag(true)
                 Text("副图").tag(false)
@@ -86,19 +99,20 @@ struct FormulaComposerView: View {
         let number = index(for:id)
         let canDelete = composition.lines.count > 1
         return Section {
-            CompositionLineEditor(line:binding,number:number,canDelete:canDelete,onDelete: {
+            CompositionLineEditor(line:binding,number:number,canDelete:canDelete,focusedField:$focusedField,onDelete: {
                 removeCurve(id)
             })
         }
     }
 
     private func removeCurve(_ id:UUID) {
+        dismissInput()
         composition.lines.removeAll { $0.id == id }
     }
 
     private var addCurveSection: some View {
         Section {
-            Button { composition.lines.append(CompositionLine()) } label: {
+            Button { dismissInput(); composition.lines.append(CompositionLine()) } label: {
                 Label("新增曲线",systemImage:"plus.circle")
             }
             .disabled(composition.lines.count >= 8)
@@ -126,7 +140,7 @@ struct FormulaComposerView: View {
                     Text("请检查计算参数").foregroundStyle(.secondary)
                 }
             }
-            Button("检查公式") { checked = validate() != nil }
+            Button("检查公式") { dismissInput(); checked = validate() != nil }
             if checked {
                 Label("公式检查通过",systemImage:"checkmark.circle")
                     .font(.caption).foregroundStyle(.green)
@@ -216,6 +230,7 @@ private struct CompositionLineEditor: View {
     @Binding var line: CompositionLine
     let number: Int
     let canDelete: Bool
+    var focusedField: FocusState<String?>.Binding
     let onDelete: () -> Void
     @State private var showingStyle = false
 
@@ -228,12 +243,14 @@ private struct CompositionLineEditor: View {
                     get:{ line.name ?? "" },
                     set:{ line.name = $0.isEmpty ? nil : $0 }
                 ))
+                .focused(focusedField,equals:"name-\(line.id)")
                 .font(.headline)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .accessibilityLabel("曲线 \(number) 名称")
                 Spacer()
                 Button {
+                    dismissInput()
                     withAnimation(.easeInOut(duration:0.18)) { showingStyle.toggle() }
                 } label: {
                     Image(systemName:"slider.horizontal.3")
@@ -252,6 +269,7 @@ private struct CompositionLineEditor: View {
             }
             if line.source == .custom {
                 TextField("价格表达式",text:$line.custom)
+    .focused(focusedField,equals:"custom-\(line.id)")
                     .font(.system(size:13,design:.monospaced))
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -272,6 +290,7 @@ private struct CompositionLineEditor: View {
                     .fixedSize(horizontal:true,vertical:false)
                     if layer.function != .abs && layer.function != .dma {
                         TextField("周期",value:$layer.period,format:.number)
+    .focused(focusedField,equals:"period-\(layer.id)")
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width:48)
@@ -279,14 +298,17 @@ private struct CompositionLineEditor: View {
                     }
                     Menu {
                         Button("向前移动",systemImage:"arrow.up") {
+                            dismissInput()
                             let i = index(for:layer.id)-1
                             if i > 0 { line.layers.swapAt(i,i-1) }
                         }.disabled(position <= 1)
                         Button("向后移动",systemImage:"arrow.down") {
+                            dismissInput()
                             let i = index(for:layer.id)-1
                             if i >= 0 && i+1 < line.layers.count { line.layers.swapAt(i,i+1) }
                         }.disabled(position >= line.layers.count)
                         Button("删除这次计算",systemImage:"trash",role:.destructive) {
+                            dismissInput()
                             let id = layer.id
                             line.layers.removeAll {$0.id == id}
                         }
@@ -298,6 +320,7 @@ private struct CompositionLineEditor: View {
                 }
                 if layer.function == .dma {
                     TextField("权重表达式（0～1）",text:$layer.alpha)
+    .focused(focusedField,equals:"alpha-\(layer.id)")
                         .font(.system(size:13,design:.monospaced))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -306,6 +329,7 @@ private struct CompositionLineEditor: View {
                         Text("平滑权重 M").font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         TextField("权重",value:$layer.weight,format:.number)
+    .focused(focusedField,equals:"weight-\(layer.id)")
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width:58)
@@ -313,6 +337,7 @@ private struct CompositionLineEditor: View {
                 }
             }
             Button {
+                dismissInput()
                 line.layers.append(CompositionLayer(period:5))
             } label: {
                 Label(line.layers.isEmpty ? "添加计算" : "继续计算",systemImage:"plus.circle")
@@ -345,6 +370,11 @@ private struct CompositionLineEditor: View {
             }
         }
         .padding(.vertical,5)
+    }
+
+    private func dismissInput() {
+        focusedField.wrappedValue = nil
+        IndicatorKeyboard.dismiss()
     }
 
     private func index(for id: UUID) -> Int {

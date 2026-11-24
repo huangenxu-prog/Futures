@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FormulaEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var focusedField: String?
     @State var draft: FormulaDefinition
     let onSave: (FormulaDefinition) -> Void
     @State private var result: String?
@@ -12,6 +13,7 @@ struct FormulaEditorView: View {
             Form {
                 Section("名称与位置") {
                     TextField("指标名称",text:$draft.name)
+    .focused($focusedField,equals:"name")
                     Picker("绘制位置",selection:$draft.overlay) {
                         Text("主图").tag(true)
                         Text("副图").tag(false)
@@ -20,11 +22,12 @@ struct FormulaEditorView: View {
                 }
                 Section("公式源码") {
                     TextEditor(text:$draft.source)
+    .focused($focusedField,equals:"source")
                         .font(.system(size:13,design:.monospaced))
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                         .frame(minHeight:220)
-                    Button("检查公式") { check() }
+                    Button("检查公式") { dismissInput(); check() }
                     if let result {
                         Text(result).font(.caption)
                             .foregroundStyle(passed ? Color.green : Color.red)
@@ -53,13 +56,19 @@ struct FormulaEditorView: View {
                 }
                 .font(.caption)
             }
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.immediately)
+            .onSubmit { dismissInput() }
             .navigationTitle("公式指标")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement:.cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItemGroup(placement:.keyboard) {
+                    Spacer()
+                    Button("完成") { dismissInput() }.fontWeight(.semibold)
+                }
+                ToolbarItem(placement:.cancellationAction) { Button("取消") { dismissInput(); dismiss() } }
                 ToolbarItem(placement:.confirmationAction) {
                     Button("保存") {
+                        dismissInput()
                         guard check() else { return }
                         draft.name = draft.name.trimmingCharacters(in:.whitespacesAndNewlines)
                         // Raw edits must never leave stale visual composition metadata.
@@ -74,6 +83,11 @@ struct FormulaEditorView: View {
             .onChange(of:draft.source) { _,_ in result = nil }
             .onChange(of:draft.name) { _,_ in result = nil }
         }
+    }
+
+    private func dismissInput() {
+        focusedField = nil
+        IndicatorKeyboard.dismiss()
     }
 
     @discardableResult private func check() -> Bool {
