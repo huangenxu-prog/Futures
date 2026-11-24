@@ -649,9 +649,15 @@ class SharedKlineHub:
                 # completed candle with a stale live-tail copy.
                 combined = merge_kline_bars(previous, bars)
                 newest_history_time = max(bar["time"] for bar in bars)
-                still_live = [bar for bar in self.live_tail.get(key, [])
-                              if bar["time"] >= newest_history_time]
-                combined = merge_kline_bars(combined, still_live)
+                live_tail = self.live_tail.get(key, [])
+                newest_live = max(live_tail, key=lambda bar: bar["time"],
+                                  default=None)
+                # Preserve only the current/live-most-recent candle.
+                # The preceding candle may have finalized since a 2-bar
+                # subscription captured it, even when the history snapshot
+                # itself has not received the new candle yet.
+                if newest_live is not None and newest_live["time"] >= newest_history_time:
+                    combined = merge_kline_bars(combined, [newest_live])
                 self.last_history[key] = time.time()
             else:
                 # Exchange calendar gaps are not automatically filled. A

@@ -127,6 +127,21 @@ class GatewayStreamingTests(unittest.TestCase):
         self.assertEqual(bars[0]["close"], 5026)
         self.assertEqual(bars[-1]["close"], 5040)
 
+    def test_backfill_finalizes_previous_when_history_lags_one_bar(self):
+        hub = gateway.SharedKlineHub(max_series=2)
+        key = ("CZCE.SR701", 900)
+        hub.publish(key, [
+            {"time": 100, "open": 5060, "close": 5070},
+            {"time": 200, "open": 5070, "close": 5071}])
+        # The historical worker has the finalized 09:15 candle, but its
+        # page does not yet contain the new 09:30 forming candle.
+        hub.publish(key, [
+            {"time": 100, "open": 5070, "close": 5068}], history=True)
+        actual, _ = hub.read(key, timeout=0)
+        self.assertEqual(actual[0]["open"], 5070)
+        self.assertEqual(actual[0]["close"], 5068)
+        self.assertEqual(actual[1]["close"], 5071)
+
     def test_dedup_merge_history_and_live_candle(self):
         h = [{"time": 100, "close": 2}, {"time": 200, "close": 3}]
         live = [{"time": 200, "close": 4}, {"time": 300, "close": 5}]
