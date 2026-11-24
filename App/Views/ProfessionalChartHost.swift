@@ -346,20 +346,28 @@ struct ProfessionalChartHost: View {
             restoreDrawings()
             drawingsRestored = true
         }
+        // A TqSdk history reconciliation can revise the *previous* closed
+        // candle without changing the number of bars or the newest candle.
+        // Updating only the newest candle here silently leaves the prior
+        // candlestick (and all following indicators) rendered from stale data.
+        let earlierCandleChanged = incoming.count == previous.count
+            && zip(previous.dropLast(), incoming.dropLast()).contains { $0 != $1 }
         let requiresReset = model.series.isEmpty
             || incoming.count < previous.count
             || previous.first?.time != incoming.first?.time
             || (previous.last?.time ?? 0) > (incoming.last?.time ?? 0)
             || incoming.count > previous.count + 1
+            || earlierCandleChanged
 
         if requiresReset {
-            // A fresh 500-bar snapshot must not discard older pages that the
-            // user has already scrolled into.
+            // A corrected history snapshot must not discard older pages that
+            // the user has already scrolled into; preserve the viewport when
+            // only OHLCV values of existing candles were corrected.
             guard let incomingStart = sessionAxis.chartTime(for: incoming[0].time) else { return }
             let retained = model.series.candles?.filter { $0.time < incomingStart } ?? []
             let combined = retained + incoming.map(chartCandle)
             model.setSeries(ChartSeries(candles: combined, interval: interval),
-                            scroll: .automatic)
+                            scroll: earlierCandleChanged ? .preserve : .automatic)
             model.currentPrice = incoming.last?.close
             // A shorter first live page still supports older K-line paging.
             model.hasMoreHistory = historyDepth < 8964

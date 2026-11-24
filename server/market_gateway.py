@@ -430,6 +430,24 @@ def merge_kline_bars(older, newer, limit=KLINE_HISTORY_LENGTH):
     return [indexed[key] for key in sorted(indexed)[-limit:]]
 
 
+def next_kline_stream_event(symbol, previous, incoming, count, force_full=False):
+    """Return a full correction whenever an earlier candle changed.
+
+    A last-bar-only SSE event is safe only if every preceding displayed
+    candle has identical OHLCV. Otherwise the TradingChart must be told to
+    replace the corrected series, not just update the current price.
+    """
+    current = incoming[-count:]
+    if not current:
+        return None
+    before = previous[-count:]
+    if force_full or len(current) != len(before) or current[:-1] != before[:-1]:
+        return {"symbol": symbol, "bars": current}
+    if current[-1] != before[-1]:
+        return {"symbol": symbol, "bar": current[-1]}
+    return None
+
+
 class KlineFileCache:
     """Atomic, bounded, non-database cache. Never stores account credentials."""
 
@@ -625,10 +643,15 @@ class SharedKlineHub:
             self._restore_locked(key)
             previous, version = self.cache.get(key, ([], 0))
             if history:
-                # Historical backfill wins against stale disk but not against
-                # a newer live update on a matching candle timestamp.
+                # A completed candle is authoritative after backfill. The
+                # live two-bar subscription may have captured the *previous*
+                # candle before it was finalized; do not overwrite that
+                # completed candle with a stale live-tail copy.
                 combined = merge_kline_bars(previous, bars)
-                combined = merge_kline_bars(combined, self.live_tail.get(key, []))
+                newest_history_time = max(bar["time"] for bar in bars)
+                still_live = [bar for bar in self.live_tail.get(key, [])
+                              if bar["time"] >= newest_history_time]
+                combined = merge_kline_bars(combined, still_live)
                 self.last_history[key] = time.time()
             else:
                 # Exchange calendar gaps are not automatically filled. A
@@ -916,27 +939,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.begin_stream()
             self.push_event({"symbol": symbol, "bars": bars[-count:]})
-            previous = bars[-1]
-            previous_count = len(bars)
-            first_time = bars[0]["time"]
+            previous_frame = bars[-count:]
             last_full = time.monotonic()
             while True:
                 bars, next_version = KLINE_HUB.read(key, after_version=version, timeout=12)
                 now = time.monotonic()
                 if bars and next_version != version:
-                    latest = bars[-1]
-                    # A background history backfill can prepend 200 real bars
-                    # without changing the latest bar. Send the full frame
-                    # immediately so the chart gains MA120 and leftward pan.
-                    if (now - last_full >= 60 or
-                            len(bars) != previous_count or bars[0]["time"] != first_time):
-                        self.push_event({"symbol": symbol, "bars": bars[-count:]})
-                        last_full = now
-                    elif latest != previous:
-                        self.push_event({"symbol": symbol, "bar": latest})
-                    previous = latest
-                    first_time = bars[0]["time"]
-                    previous_count = len(bars)
+                    event = next_kline_stream_event(
+                        symbol, previous_frame, bars, count,
+                        force_full=(now - last_full >= 60))
+                    if event is not None:
+                        self.push_event(event)
+                        if "bars" in event:
+                            last_full = now
+                    previous_frame = bars[-count:]
                     version = next_version
                 else:
                     self.wfile.write(b": heartbeat\n\n")

@@ -87,6 +87,46 @@ class GatewayStreamingTests(unittest.TestCase):
         self.assertEqual(hub.status()["pending_history"], 6)
         self.assertEqual(hub.warm_symbols(["CZCE.MA701"]), 0)
 
+    def test_stream_sends_full_frame_for_corrected_previous_candle(self):
+        previous = [
+            {"time": 100, "open": 5000, "high": 5010, "low": 4995,
+             "close": 5005, "volume": 10},
+            {"time": 200, "open": 5005, "high": 5085, "low": 5005,
+             "close": 5070, "volume": 20},
+            {"time": 300, "open": 5070, "high": 5072, "low": 5069,
+             "close": 5071, "volume": 2},
+        ]
+        revised = [dict(row) for row in previous]
+        revised[1] = {**revised[1], "open": 5074, "close": 5068}
+        event = gateway.next_kline_stream_event(
+            "CZCE.SR701", previous, revised, 3)
+        self.assertEqual(event["bars"][1]["close"], 5068)
+        self.assertNotIn("bar", event)
+        latest_only = [dict(row) for row in previous]
+        latest_only[-1] = {**latest_only[-1], "close": 5072}
+        event = gateway.next_kline_stream_event(
+            "CZCE.SR701", previous, latest_only, 3)
+        self.assertEqual(event["bar"]["close"], 5072)
+        self.assertNotIn("bars", event)
+        self.assertIsNone(gateway.next_kline_stream_event(
+            "CZCE.SR701", previous, previous, 3))
+
+    def test_history_backfill_overwrites_stale_completed_live_tail(self):
+        hub = gateway.SharedKlineHub(max_series=2)
+        key = ("CZCE.SR701", 900)
+        hub.publish(key, [
+            {"time": 100, "open": 5020, "close": 5028},
+            {"time": 200, "open": 5030, "close": 5040}])
+        # A 200-bar history response contains the finalized previous candle,
+        # while the latest live candle still has a more recent partial close.
+        hub.publish(key, [
+            {"time": 100, "open": 5030, "close": 5026},
+            {"time": 200, "open": 5030, "close": 5035}], history=True)
+        bars, _ = hub.read(key, timeout=0)
+        self.assertEqual(bars[0]["open"], 5030)
+        self.assertEqual(bars[0]["close"], 5026)
+        self.assertEqual(bars[-1]["close"], 5040)
+
     def test_dedup_merge_history_and_live_candle(self):
         h = [{"time": 100, "close": 2}, {"time": 200, "close": 3}]
         live = [{"time": 200, "close": 4}, {"time": 300, "close": 5}]
