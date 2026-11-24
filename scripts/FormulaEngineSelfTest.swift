@@ -37,7 +37,7 @@ struct FormulaEngineSelfTest {
         let cross = try FormulaProgram("X:CROSS(C,3);")
         let crossed = try cross.evaluate(bars)[0].values
         precondition(crossed[0] == nil); near(crossed[3],1); near(crossed[4],0)
-        let nested = try FormulaProgram("P:=(3*C+H+L+O)/6; A:EMA2(P,3); B:WMA(P,3); HULL:HMA(P,4); X:WMA(2*WMA(P,2)-WMA(P,4),2); D:DEMA(P,3); T:TEMA(P,3); DYN:DMA(P,0.5); E:EMA(P,3); W:WILDER(P,3);")
+        let nested = try FormulaProgram("P:=(3*C+H+L+O)/6; A:EMA2(P,3); B:WMA(P,3); HULL:HMA(P,4); X:WMA(2*WMA(P,2)-WMA(P,4),2); D:DEMA(P,3); T:TEMA(P,3); DYN:DMA(P,0.5); E:EMA(P,3);")
         let m = try nested.evaluate(bars)
         precondition(m[0].values == m[1].values)
         precondition(m[2].values == m[3].values)
@@ -46,8 +46,10 @@ struct FormulaEngineSelfTest {
         near(m[4].values[1],1.75)
         near(m[5].values[1],1.875)
         precondition(m[6].values == m[7].values)
-        precondition(m[8].values[1] == nil)
-        near(m[8].values[2],2); near(m[8].values[3],8.0/3)
+        let wilder = try FormulaProgram("W:WILDER(C,3);")
+        let w = try wilder.evaluate(bars)[0].values
+        precondition(w[1] == nil)
+        near(w[2],2); near(w[3],8.0/3)
         let prices = [FormulaBar(open:8,high:12,low:6,close:10,volume:100)]
         let priceProgram = try FormulaProgram("P:(3*C+H+L+O)/6; A:HL2; B:HLC3; D:OHLC4; E:HMA(C,1);")
         let v = try priceProgram.evaluate(prices)
