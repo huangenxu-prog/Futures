@@ -1,4 +1,5 @@
 """Read-only TqSdk K-line HTTP gateway. Bind to loopback; expose only behind authenticated HTTPS reverse proxy."""
+import fcntl
 import json
 import math
 import os
@@ -450,7 +451,7 @@ def next_kline_stream_event(symbol, previous, incoming, count, force_full=False)
 class KlineFileCache:
     """Atomic, bounded, non-database cache. Never stores account credentials."""
 
-    def __init__(self, directory=KLINE_CACHE_DIR, max_files=720):
+    def __init__(self, directory=KLINE_CACHE_DIR, max_files=1800):
         self.directory = Path(directory)
         self.max_files = max_files
         self.writes = 0
@@ -490,6 +491,24 @@ class KlineFileCache:
     def write(self, key, bars, *, older=False):
         if not bars:
             return
+        # A separate systemd historical prefetch job also writes these files.
+        # A per-series OS lock prevents lost updates across two processes.
+        try:
+            target = self.path(key)
+            self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            lock_path = target.with_suffix(".lock")
+            with lock_path.open("a+b") as lock_file:
+                os.fchmod(lock_file.fileno(), 0o600)
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    self._write_locked(key, bars, older=older)
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except (OSError, ValueError) as exc:
+            print("K线缓存跨进程写入失败:", type(exc).__name__,
+                  str(exc)[:100], flush=True)
+
+    def _write_locked(self, key, bars, *, older=False):
         target = self.path(key)
         temporary = None
         try:
@@ -532,11 +551,11 @@ class KlineCapacityError(Exception):
 
 
 class SharedKlineHub:
-    """24 live subscriptions; 256 RAM history series; bounded disk snapshots.
+    """24 live subscriptions, bounded RAM, persistent K-line disk cache.
 
-    The TqApi for live bars is owned by the live worker. The separate history
-    worker performs bounded 200-bar backfills in small SDK batches. HTTP
-    threads never touch either TqApi. A warmup never reserves a live slot.
+    The live and interactive history workers use separate TqApi instances.
+    A scheduled systemd job prefetches all active main contracts through a
+    third low-priority process and shares only the locked disk files.
     """
 
     def __init__(self, max_series=KLINE_MAX_SERIES, store=None):

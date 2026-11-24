@@ -301,6 +301,25 @@ class GatewayStreamingTests(unittest.TestCase):
                 hub._restore_locked(key)
                 self.assertEqual(len(hub.cache[key][0]), 1200)
 
+    def test_multi_writer_persistence_preserves_older_bars(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as dirname:
+            key = ("SHFE.ao2701", 900)
+            a = gateway.KlineFileCache(dirname)
+            b = gateway.KlineFileCache(dirname)
+            def row(t, close):
+                return {"time": t, "open": close, "high": close,
+                        "low": close, "close": close, "volume": 1}
+            a.write(key, [row(t, float(t)) for t in range(1, 20)])
+            b.write(key, [row(t, float(t) + 10) for t in range(20, 30)])
+            a.write(key, [row(30, 1000.)])
+            result, _ = b.read(key)
+            self.assertEqual(len(result), 30)
+            self.assertEqual(result[0]["time"], 1)
+            self.assertEqual(result[-1]["close"], 1000.)
+            lockfile = a.path(key).with_suffix(".lock")
+            self.assertTrue(lockfile.is_file())
+
     def test_favorites_warm_endpoint_rejects_arbitrary_codes(self):
         output = []
         handler = SimpleNamespace(
