@@ -699,7 +699,14 @@ struct TradingCenterView: View {
                     if p.long > 0 { positionRow(p, long: true) }
                     if p.short > 0 { positionRow(p, long: false) }
                 }
-                if session.snapshot?.positions.isEmpty == true { Text("暂无持仓").font(.caption).foregroundStyle(.secondary) }
+                if let snapshot = session.snapshot {
+                    let held = snapshot.positions.filter { $0.long > 0 || $0.short > 0 }
+                    if held.isEmpty {
+                        Text("暂无持仓").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        positionSummary(held)
+                    }
+                }
             } else if tab == "成交" {
                 ForEach((session.snapshot?.fills ?? []).sorted { $0.time_ns > $1.time_ns }) { f in
                     VStack(alignment: .leading, spacing: 5) {
@@ -874,6 +881,43 @@ struct TradingCenterView: View {
         let price = order.price?.formatted() ?? "--"
         let filled = order.quantity - order.remaining
         return "\(price) · \(filled)/\(order.quantity)手"
+    }
+    private func positionSummary(_ positions: [CloudSnapshot.Position]) -> some View {
+        let lots = positions.reduce(0) { $0 + $1.long + $1.short }
+        let rows = positions.reduce(0) { $0 + ($1.long > 0 ? 1 : 0) + ($1.short > 0 ? 1 : 0) }
+        var closable = 0
+        var completeClosable = true
+        var profit = 0.0
+        var completeProfit = true
+        for p in positions {
+            for long in [true, false] {
+                let qty = long ? p.long : p.short
+                guard qty > 0 else { continue }
+                if let frozen = long ? p.frozen_long : p.frozen_short {
+                    closable += max(0, qty - frozen)
+                } else { completeClosable = false }
+                let sideProfit = (long ? p.float_profit_long : p.float_profit_short)
+                    ?? ((p.long == 0 || p.short == 0) ? p.float_profit : nil)
+                if let sideProfit, sideProfit.isFinite {
+                    profit += sideProfit
+                } else { completeProfit = false }
+            }
+        }
+        let totalProfit: Double? = completeProfit && profit.isFinite ? profit : nil
+        return VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 4) {
+                Text("合计(" + String(rows) + ")").frame(maxWidth: .infinity, alignment: .leading)
+                Text(String(lots) + "/" + (completeClosable ? String(closable) : "--")).frame(width: 65)
+                Text("—").frame(width: 67, alignment: .trailing).foregroundStyle(.secondary)
+                Text(money(totalProfit, suffix: false))
+                    .foregroundStyle(MarketPalette.movement(totalProfit))
+                    .minimumScaleFactor(0.65)
+                    .lineLimit(1)
+                    .frame(width: 65, alignment: .trailing)
+            }.font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(MarketPalette.ink)
+                .padding(.vertical, 9)
+        }
     }
     private func positionRow(_ p: CloudSnapshot.Position, long: Bool) -> some View {
         let qty = long ? p.long : p.short
