@@ -10,6 +10,7 @@ struct InstrumentDetailView: View {
     @State private var visibleID: String?
     @State private var activeID: String
     @State private var scrolling = false
+    @State private var userHasScrolled = false
 
     init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote? = nil, sequence: [FuturesInstrument] = []) {
         initial = instrument
@@ -22,6 +23,7 @@ struct InstrumentDetailView: View {
     }
 
     private var activeIndex: Int { pages.firstIndex { $0.id == activeID } ?? 0 }
+    private var shownID: String { userHasScrolled ? (visibleID ?? activeID) : initial.id }
 
     var body: some View {
         Group {
@@ -33,7 +35,7 @@ struct InstrumentDetailView: View {
                         VStack(spacing: 0) {
                             ForEach(Array(pages.enumerated()), id: \.element.id) { index, item in
                                 Group {
-                                    if abs(index - activeIndex) <= 1 || item.id == visibleID {
+                                    if abs(index - activeIndex) <= 1 || item.id == shownID {
                                         detail(item, active: item.id == activeID)
                                     } else {
                                         MarketPalette.surface
@@ -46,22 +48,39 @@ struct InstrumentDetailView: View {
                             }
                         }.scrollTargetLayout()
                     }
-                    // Keep the native paging stride; only constrain the viewport
-                    // and eliminate scroll-content margins.
-                    .contentMargins(.vertical, 0, for: .scrollContent)
                     .scrollIndicators(.hidden)
                     .scrollTargetBehavior(.paging)
                     .scrollPosition(id: $visibleID, anchor: .top)
                     .onScrollPhaseChange { _, phase in
                         scrolling = phase != .idle
-                        if phase == .idle, let id = visibleID { activeID = id }
+                        if phase == .interacting { userHasScrolled = true }
+                        if phase == .idle, userHasScrolled, let id = visibleID, id != activeID {
+                            activeID = id
+                        }
                     }
                     .onChange(of: visibleID) { _, id in
-                        if !scrolling, let id { activeID = id }
+                        if userHasScrolled, !scrolling, let id, id != activeID { activeID = id }
                     }
-                    .onAppear {
-                        proxy.scrollTo(initial.id, anchor: .top)
+                    .onScrollGeometryChange(for: PagerMetrics.self) { geometry in
+                        PagerMetrics(height: geometry.containerSize.height,
+                                     top: geometry.contentInsets.top,
+                                     bottom: geometry.contentInsets.bottom)
+                    } action: { _, metrics in
+                        guard !userHasScrolled, metrics.height > 1 else { return }
+                        placeInitialPage(proxy)
                     }
+                    .onAppear { placeInitialPage(proxy) }
+                    #if DEBUG
+                    .onScrollGeometryChange(for: PagerTrace.self) { geometry in
+                        PagerTrace(offset: geometry.contentOffset.y.rounded(),
+                                   height: geometry.containerSize.height.rounded(),
+                                   top: geometry.contentInsets.top.rounded(),
+                                   bottom: geometry.contentInsets.bottom.rounded())
+                    } action: { _, trace in
+                        guard !userHasScrolled else { return }
+                        print("[pager] initial=\(initial.id) visible=\(visibleID ?? "nil") active=\(activeID) offset=\(trace.offset) height=\(trace.height) top=\(trace.top) bottom=\(trace.bottom)")
+                    }
+                    #endif
                     .clipped()
                 }
             }
@@ -72,6 +91,15 @@ struct InstrumentDetailView: View {
         .onDisappear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false) }
     }
 
+    private func placeInitialPage(_ proxy: ScrollViewProxy) {
+        guard !userHasScrolled else { return }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(initial.id, anchor: .top)
+        }
+    }
+
     private func detail(_ item: FuturesInstrument, active: Bool) -> some View {
         InstrumentDetailPage(instrument: item, selectedContract: item.id == initial.id ? initialContract : nil,
                              period: $period, isActive: active)
@@ -79,6 +107,21 @@ struct InstrumentDetailView: View {
             .accessibilityHidden(!active)
     }
 }
+
+private struct PagerMetrics: Equatable {
+    let height: CGFloat
+    let top: CGFloat
+    let bottom: CGFloat
+}
+
+#if DEBUG
+private struct PagerTrace: Equatable {
+    let offset: CGFloat
+    let height: CGFloat
+    let top: CGFloat
+    let bottom: CGFloat
+}
+#endif
 
 private struct InstrumentDetailPage: View {
     @Environment(\.mainContracts) private var contracts
