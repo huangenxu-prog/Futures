@@ -412,7 +412,7 @@ struct LocalPaperTradingCenterView:View {
 struct QuickTradeSheet:View {
     let contract:PaperContract
     var body:some View {
-        TradingCenterView(initialContract:contract)
+        TradingCenterView(initialContract:contract, quickOnly: true)
     }
 }
 

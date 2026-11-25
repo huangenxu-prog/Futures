@@ -156,9 +156,11 @@ struct InstrumentDetailView: View {
             // dictionary. Consume the actual shared live feed directly.
             liveQuote = incoming
         }
-        .fullScreenCover(isPresented:$showingTrade) {
+        .sheet(isPresented:$showingTrade) {
             if let tradeContract {
                 QuickTradeSheet(contract:tradeContract)
+                    .presentationDetents([.height(430), .large])
+                    .presentationDragIndicator(.visible)
 
             }
         }

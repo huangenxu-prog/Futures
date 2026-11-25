@@ -354,12 +354,13 @@ struct TradingCenterView: View {
                 if session.signedIn {
                     VStack(spacing: 0) {
                         if !quickOnly { accountHeader; Divider() }
+                        else { Text("快期云端模拟").font(.caption).foregroundStyle(.secondary) }
                         orderPanel
                         if !quickOnly { Divider(); recordsPanel }
                         else { Spacer(minLength: 0) }
-                    if let message = session.actionMessage { Section { Text(message).font(.caption) } }
+                    if let message = session.actionMessage { Text(message).font(.caption).lineLimit(2) }
                     if session.pendingOrder != nil {
-                        Section { Button("已核对官方委托，解除锁定") { unlock = true }.disabled(session.busy) }
+                        Button("已核对官方委托，解除锁定") { unlock = true }.disabled(session.busy).font(.caption)
                     }
                     if session.snapshot?.simulation_orders != true {
                         Text("暂不可提交委托，请确认交易网关连接").font(.caption).foregroundStyle(.secondary)
@@ -654,6 +655,7 @@ struct TradingCenterView: View {
             guard !Task.isCancelled, selected?.symbol == c.symbol else { return }
             selected = next; quoteStamp = Date(); quoteError = false
             if selectedPrice.isEmpty, let last = next.last, last > 0 { selectedPrice = String(last) }
+            if closingSide != nil, closePrice.isEmpty, let last = next.last, last > 0 { closePrice = String(last) }
         } catch {
             guard !Task.isCancelled, selected?.symbol == c.symbol else { return }
             quoteError = true
@@ -698,7 +700,7 @@ struct TradingCenterView: View {
                             Text(orderQuantityText(o))
                             Spacer()
                             Text(o.status == "ALIVE" ? (o.remaining < o.quantity ? "部分成交" : "挂单") : (o.remaining == 0 ? "全部成交" : "已结束"))
-                            if o.status == "ALIVE" { Button("撤单", role: .destructive) { cancelID = o.id }.buttonStyle(.borderless).disabled(session.busy) }
+                            if tab == "挂单" && o.status == "ALIVE" { Button("撤单", role: .destructive) { cancelID = o.id }.buttonStyle(.borderless).disabled(session.busy) }
                         }.font(.caption)
                         if !o.message.isEmpty { Text(o.message).font(.caption2).foregroundStyle(.secondary) }
                     }
@@ -756,7 +758,7 @@ struct TradingCenterView: View {
                 HStack {
                     Text("平仓手数")
                     TextField("手数", value: $closeQuantity, format: .number.grouping(.never)).keyboardType(.numberPad).multilineTextAlignment(.trailing)
-                    Button("全部") { closeQuantity = min(10, available ?? 0) }.buttonStyle(.borderless).disabled((available ?? 0) <= 0)
+                    Button("最多") { closeQuantity = min(10, available ?? 0) }.buttonStyle(.borderless).disabled((available ?? 0) <= 0)
                 }
                 if requiresSplit {
                     Picker("平仓类型", selection: $closeToday) {
@@ -818,7 +820,7 @@ struct TradingCenterView: View {
             HStack(spacing: 12) {
                 Button("取消") { pendingAction = nil }
                     .buttonStyle(.bordered).frame(maxWidth: .infinity)
-                Button("确认" + action) { submitConfirmed(action) }
+                Button("确认" + openingTitle(action)) { submitConfirmed(action) }
                     .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
                     .disabled(!validOrder(action))
             }
@@ -836,10 +838,13 @@ struct TradingCenterView: View {
         pendingAction = nil; tab = "委托"
         Task { await session.submit(symbol: c.symbol, direction: direction, offset: offset, price: price, quantity: qty) }
     }
+    private func openingTitle(_ action: String) -> String {
+        selected?.option != nil ? (action == "开多" ? "买开" : "卖开") : action
+    }
     private func orderConfirmationText(_ action: String) -> String {
         let name = selected.map { contractName($0.symbol) } ?? ""
         let suffix = ""
-        return "\(name) \(action)\(suffix) \(selectedQuantity) 手 @ \(selectedPrice)"
+        return "\(name) \(openingTitle(action))\(suffix) \(selectedQuantity) 手 @ \(selectedPrice)"
     }
     private func fillQuantityText(_ fill: CloudSnapshot.Fill) -> String {
         let price = fill.price?.formatted() ?? "--"
@@ -857,7 +862,7 @@ struct TradingCenterView: View {
         let profit = (long ? p.float_profit_long : p.float_profit_short) ?? ((p.long == 0 || p.short == 0) ? p.float_profit : nil)
         return Button { beginClose(p, long: long) } label: {
             HStack(spacing: 4) {
-                VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 3) {
                     Text(contractName(p.symbol)).font(.caption.weight(.medium)).lineLimit(1)
                     Text(long ? "多" : "空").font(.caption2).foregroundStyle(long ? MarketPalette.up : MarketPalette.down)
                 }.frame(maxWidth: .infinity, alignment: .leading)
