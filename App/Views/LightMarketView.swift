@@ -54,10 +54,8 @@ struct LightMarketView: View {
     @State private var scope: Scope = .favorites
     @State private var search = ""
     @State private var editing = false
-    @State private var dataOffset: CGFloat = 0
-    @GestureState private var horizontalDrag: CGFloat = 0
+    @State private var dataPage = 0
     @State private var revealedFavorite: String?
-    @State private var dataViewport: CGFloat = 220
     @AppStorage("qihui.appearance.mode.v1") private var appearanceMode = AppAppearanceMode.dark.rawValue
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedInstrument: FuturesInstrument?
@@ -395,51 +393,32 @@ struct LightMarketView: View {
     private var showsFavoriteControl: Bool { scope != .favorites || !search.isEmpty }
 
     private let nameWidth: CGFloat = 115
-    private let columns: [(String, CGFloat)] = [
-        ("最新价",64),("涨跌幅",62),("成交量",67),("持仓量",67),
-        ("昨结",65),("日增仓",75),("今开",65),("最高",65),("最低",65),
-        ("振幅",65),("中间价",70),("沉淀资金",78),("资金流向",78)
-    ]
-    private var contentWidth: CGFloat { columns.reduce(0) { $0 + $1.1 } }
-    private func clampedOffset(_ value: CGFloat, width: CGFloat) -> CGFloat {
-        min(max(0, value), max(0, contentWidth - width))
-    }
+    // Three complete fields per page, shared by all rows and the header.
+    private let pages: [[Int]] = [[0,1,2],[3,4,5],[6,7,8],[9,10,4]]
+    private let columns = ["最新价","涨跌幅","成交量","持仓量","昨结","日增仓","今开","最高","最低","振幅","中间价"]
     private var dataGesture: some Gesture {
-        DragGesture(minimumDistance: 12)
-            .updating($horizontalDrag) { value, state, _ in
-                if abs(value.translation.width) > abs(value.translation.height) * 1.3 {
-                    state = -value.translation.width
-                }
-            }
+        DragGesture(minimumDistance: 15)
             .onEnded { value in
-                guard abs(value.translation.width) > abs(value.translation.height) * 1.3 else { return }
-                dataOffset = clampedOffset(dataOffset - value.translation.width, width: dataViewport)
+                let dx = value.translation.width
+                guard abs(dx) > 25, abs(dx) > abs(value.translation.height) * 1.5 else { return }
+                dataPage = min(pages.count - 1, max(0, dataPage + (dx < 0 ? 1 : -1)))
             }
     }
     private func slidingData<Content: View>(@ViewBuilder content: @escaping () -> Content) -> some View {
-        GeometryReader { geometry in
-            content()
-                .frame(width: contentWidth, alignment: .leading)
-                .offset(x: -clampedOffset(dataOffset + horizontalDrag, width: geometry.size.width))
-                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
-                .clipped()
-                .contentShape(Rectangle())
-                .simultaneousGesture(dataGesture)
-        }
+        content()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .simultaneousGesture(dataGesture)
     }
     private var columnHeadings: some View {
         HStack(spacing: 5) {
             Text("品种").frame(width: nameWidth, alignment: .leading)
-            GeometryReader { geo in
-                slidingData {
-                    HStack(spacing: 0) {
-                        ForEach(columns.indices, id: \.self) { index in
-                            Text(columns[index].0).frame(width: columns[index].1, alignment: .trailing)
-                        }
+            slidingData {
+                HStack(spacing: 5) {
+                    ForEach(pages[dataPage], id: \.self) { index in
+                        Text(columns[index]).frame(maxWidth: .infinity, alignment: .trailing)
                     }
                 }
-                .onAppear { dataViewport = geo.size.width }
-                .onChange(of: geo.size.width) { _, width in dataViewport = width; dataOffset = clampedOffset(dataOffset, width: width) }
             }
             if showsFavoriteControl || editing { Color.clear.frame(width: 23) }
         }
@@ -448,6 +427,13 @@ struct LightMarketView: View {
         .padding(.horizontal, 12).frame(height: 33)
         .background(MarketPalette.background)
         .overlay(alignment: .bottom) { Rectangle().fill(MarketPalette.divider).frame(height: 1) }
+    }
+    private func favoriteSwipe(_ id: String, isFavorite: Bool) -> some Gesture {
+        DragGesture(minimumDistance: 12).onEnded { value in
+            guard !editing, isFavorite, abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
+            if value.translation.width > 22 { revealedFavorite = id }
+            else if value.translation.width < -22 { revealedFavorite = nil }
+        }
     }
     private func marketRow(_ item: FuturesInstrument) -> some View {
         let q = quote(for: item.id)
@@ -470,34 +456,38 @@ struct LightMarketView: View {
                     }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 57)
                 }.buttonStyle(.plain)
                 if revealedFavorite == item.id && isFavorite {
-                    Button(role: .destructive) {
-                        revealedFavorite = nil
-                        favorites.toggle(item.id)
-                    } label: {
-                        Text("移出自选").font(.caption.weight(.medium)).foregroundStyle(.white)
-                            .frame(maxWidth: .infinity).frame(height: 45)
-                            .background(MarketPalette.up, in: RoundedRectangle(cornerRadius: 5))
-                    }.buttonStyle(.plain)
+                    HStack(spacing: 4) {
+                        Button(role: .destructive) {
+                            revealedFavorite = nil
+                            favorites.toggle(item.id)
+                        } label: {
+                            Text("移出自选").font(.caption.weight(.medium)).foregroundStyle(.white)
+                                .frame(maxWidth: .infinity).frame(height: 38)
+                                .background(MarketPalette.up, in: RoundedRectangle(cornerRadius: 5))
+                        }.buttonStyle(.plain)
+                        Button { revealedFavorite = nil } label: {
+                            Image(systemName: "xmark").font(.caption).foregroundStyle(MarketPalette.muted)
+                                .frame(width: 22, height: 38)
+                        }.buttonStyle(.plain).accessibilityLabel("收起移出自选")
+                    }
+                    .background(MarketPalette.surface)
+                    .highPriorityGesture(favoriteSwipe(item.id, isFavorite: isFavorite))
                 }
             }
             .frame(width: nameWidth)
             .contentShape(Rectangle())
-            .simultaneousGesture(DragGesture(minimumDistance: 18).onEnded { value in
-                guard !editing, isFavorite, abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
-                if value.translation.width > 28 { revealedFavorite = item.id }
-                else if value.translation.width < -28 { revealedFavorite = nil }
-            })
+            .simultaneousGesture(favoriteSwipe(item.id, isFavorite: isFavorite))
             .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in
                 if scope == .favorites && search.isEmpty && sortBy == "默认" { revealedFavorite = nil; editing = true }
             })
             slidingData {
                 HStack(spacing: 0) {
-                    ForEach(columns.indices, id: \.self) { index in
+                    ForEach(pages[dataPage], id: \.self) { index in
                         Text(dataValue(index, q))
                             .font(.system(size: index == 0 ? 14 : 12, weight: .medium, design: .rounded))
                             .foregroundStyle(index < 2 ? MarketPalette.movement(q?.change(basis: changeBasis)) : MarketPalette.ink)
                             .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
-                            .frame(width: columns[index].1, alignment: .trailing)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                 }
             }
