@@ -27,6 +27,7 @@ enum MarketPalette {
     static let weak = adaptive(light: 0x8794A3, dark: 0x6F7A89)
     static let divider = adaptive(light: 0xE8EDF2, dark: 0x2A3142)
     static let accent = adaptive(light: 0x2B6BB8, dark: 0x4C8DFF)
+    static let countdown = adaptive(light: 0x996000, dark: 0xFFD34E)
     // Domestic futures convention: red = rising, cyan/green = falling.
     static let up = adaptive(light: 0xD43B4A, dark: 0xFF5B5B)
     static let down = adaptive(light: 0x0F9166, dark: 0x23C6C8)
