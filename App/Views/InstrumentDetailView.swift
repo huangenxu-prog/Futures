@@ -7,8 +7,9 @@ struct InstrumentDetailView: View {
     private let initialContract: MarketDataService.ContractQuote?
     private let pages: [FuturesInstrument]
     @State private var period = "15分"
-    @State private var activeID: String
-    private let entryIndex: Int
+    @Environment(\.self) private var environment
+    @EnvironmentObject private var favorites: Favorites
+    @Environment(\.dismiss) private var dismiss
 
     init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote? = nil, sequence: [FuturesInstrument] = []) {
         initial = instrument
@@ -16,56 +17,16 @@ struct InstrumentDetailView: View {
         var seen = Set<String>()
         let unique = sequence.filter { seen.insert($0.id).inserted }
         pages = unique.contains(where: { $0.id == instrument.id }) ? unique : [instrument]
-        entryIndex = pages.firstIndex { $0.id == instrument.id } ?? 0
-        _activeID = State(initialValue: instrument.id)
     }
 
-    private var activeIndex: Int { pages.firstIndex { $0.id == activeID } ?? 0 }
-
     var body: some View {
-        Group {
-            if pages.count <= 1 {
-                detail(initial, active: true)
-            } else {
-                GeometryReader { viewport in
-                    ScrollView(.vertical) {
-                        VStack(spacing: 0) {
-                            ForEach(Array(pages.enumerated()), id: \.element.id) { index, item in
-                                Group {
-                                    if abs(index - activeIndex) <= 1 {
-                                        detail(item, active: item.id == activeID)
-                                    } else {
-                                        MarketPalette.surface
-                                    }
-                                }
-                                .frame(height: viewport.size.height)
-                                .frame(maxWidth: .infinity)
-                                .clipped()
-                                .accessibilityElement(children: .contain)
-                                .accessibilityIdentifier("contract.page." + item.id)
-                                .id(item.id)
-                            }
-                        }.scrollTargetLayout()
-                    }
-                    // Keep the native paging stride; only constrain the viewport
-                    // and eliminate scroll-content margins.
-                    .contentMargins(.vertical, 0, for: .scrollContent)
-                    .scrollIndicators(.hidden)
-                    .scrollTargetBehavior(.paging)
-                    // With equal-height pages, index / (count - 1) places that
-                    // page exactly at the viewport origin on the first layout.
-                    .defaultScrollAnchor(anchor(for: entryIndex), for: .initialOffset)
-                    .defaultScrollAnchor(anchor(for: activeIndex), for: .sizeChanges)
-                    .onScrollPhaseChange { _, phase, context in
-                        guard phase == .idle, viewport.size.height > 0 else { return }
-                        let offset = context.geometry.visibleRect.minY
-                        let index = Int((offset / viewport.size.height).rounded())
-                        if pages.indices.contains(index) { activeID = pages[index].id }
-                    }
-                    .accessibilityIdentifier("contract.viewport")
-                    .clipped()
-                }
-            }
+        ContractPageController(ids: pages.map(\.id), initialID: initial.id) { index, active in
+            let item = pages[index]
+            return InstrumentDetailPage(instrument: item,
+                selectedContract: item.id == initial.id ? initialContract : nil,
+                period: $period, isActive: active, goBack: { dismiss() })
+                .environment(\.self, environment)
+                .environmentObject(favorites)
         }
         .background(MarketPalette.surface.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
@@ -73,15 +34,89 @@ struct InstrumentDetailView: View {
         .onDisappear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false) }
     }
 
-    private func anchor(for index: Int) -> UnitPoint {
-        UnitPoint(x: 0.5, y: CGFloat(index) / CGFloat(max(1, pages.count - 1)))
+}
+
+// UIKit owns the visible controller from initialization through interactive
+// transitions. Layout changes resize that controller without selecting a page.
+private struct ContractPageController<Page: View>: UIViewControllerRepresentable {
+    let ids: [String]
+    let initialID: String
+    let content: (Int, Bool) -> Page
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIViewController(context: Context) -> UIPageViewController {
+        let pager = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .vertical)
+        let coordinator = context.coordinator
+        pager.dataSource = ids.count > 1 ? coordinator : nil
+        pager.delegate = coordinator
+        let first = coordinator.controller(at: coordinator.activeIndex)
+        pager.setViewControllers([first], direction: .forward, animated: false)
+        Coordinator.addTestFrame(to: pager.view, id: "contract.viewport")
+        return pager
     }
 
-    private func detail(_ item: FuturesInstrument, active: Bool) -> some View {
-        InstrumentDetailPage(instrument: item, selectedContract: item.id == initial.id ? initialContract : nil,
-                             period: $period, isActive: active)
-            .allowsHitTesting(active)
-            .accessibilityHidden(!active)
+    func updateUIViewController(_ pager: UIPageViewController, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.refreshPages()
+    }
+
+    final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
+        var parent: ContractPageController
+        var activeIndex: Int
+        private let hosts = NSMapTable<NSNumber, UIHostingController<Page>>.strongToWeakObjects()
+
+        init(_ parent: ContractPageController) {
+            self.parent = parent
+            activeIndex = parent.ids.firstIndex(of: parent.initialID) ?? 0
+        }
+
+        func controller(at index: Int) -> UIHostingController<Page> {
+            let key = NSNumber(value: index)
+            if let existing = hosts.object(forKey: key) { return existing }
+            let host = UIHostingController(rootView: parent.content(index, index == activeIndex))
+            host.safeAreaRegions = []
+            host.view.tag = index
+            host.view.backgroundColor = .clear
+            Self.addTestFrame(to: host.view, id: "contract.page." + parent.ids[index])
+            hosts.setObject(host, forKey: key)
+            return host
+        }
+
+        static func addTestFrame(to view: UIView, id: String) {
+            guard ProcessInfo.processInfo.arguments.contains("-contract-paging-test") else { return }
+            let probe = UIView(frame: view.bounds)
+            probe.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            probe.isUserInteractionEnabled = false
+            probe.isAccessibilityElement = true
+            probe.accessibilityIdentifier = id
+            probe.accessibilityLabel = id
+            view.addSubview(probe)
+        }
+
+        func refreshPages() {
+            for key in hosts.keyEnumerator().allObjects.compactMap({ $0 as? NSNumber }) {
+                let index = key.intValue
+                hosts.object(forKey: key)?.rootView = parent.content(index, index == activeIndex)
+            }
+        }
+
+        func pageViewController(_ pager: UIPageViewController, viewControllerBefore current: UIViewController) -> UIViewController? {
+            let index = current.view.tag - 1
+            return parent.ids.indices.contains(index) ? controller(at: index) : nil
+        }
+
+        func pageViewController(_ pager: UIPageViewController, viewControllerAfter current: UIViewController) -> UIViewController? {
+            let index = current.view.tag + 1
+            return parent.ids.indices.contains(index) ? controller(at: index) : nil
+        }
+
+        func pageViewController(_ pager: UIPageViewController, didFinishAnimating finished: Bool,
+                                previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
+            guard completed, let visible = pager.viewControllers?.first else { return }
+            activeIndex = visible.view.tag
+            refreshPages()
+        }
     }
 }
 
@@ -93,11 +128,13 @@ private struct InstrumentDetailPage: View {
     @State private var showContracts = false
     @State private var showChartIndicatorSettings = false
     private let instrument: FuturesInstrument
+    private let goBack: () -> Void
     private let isActive: Bool
     @Binding private var period: String
     @State private var selectedContract: MarketDataService.ContractQuote?
 
-    init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote?, period: Binding<String>, isActive: Bool) {
+    init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote?, period: Binding<String>, isActive: Bool, goBack: @escaping () -> Void) {
+        self.goBack = goBack
         self.instrument = instrument
         self.isActive = isActive
         _period = period
@@ -105,7 +142,6 @@ private struct InstrumentDetailPage: View {
     }
 
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.dismiss) private var dismiss
     @AppStorage("qihui.chart.period-order.v1") private var storedPeriodOrder = ""
     @State private var showPeriodOrder = false
     @State private var rawBars: [MarketBar] = []
@@ -390,14 +426,14 @@ private struct InstrumentDetailPage: View {
 
     private var topBar: some View {
         HStack(spacing: 6) {
-            Button { dismiss() } label: {
+            Button { goBack() } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 17, weight: .medium))
                     .frame(width: 28, height: 34)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier("contract.back")
+            .accessibilityIdentifier("contract.back." + instrument.id)
             Button { showContracts = true } label: {
                 HStack(spacing: 6) {
                     Text(instrument.name + (selectedContract?.month ?? quote?.month ?? ""))

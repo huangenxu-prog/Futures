@@ -3,6 +3,8 @@ import XCTest
 final class ContractPagingTests: XCTestCase {
     func testEntryAndTwentyPageTransitions() throws {
         let app = XCUIApplication()
+        continueAfterFailure = false
+        app.launchArguments.append("-contract-paging-test")
         app.launch()
         app.buttons["全部品种"].tap()
         let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "contract.row."))
@@ -13,12 +15,12 @@ final class ContractPagingTests: XCTestCase {
 
         func checkPage(_ id: String) {
             let page = app.descendants(matching: .any)["contract.page." + id].firstMatch
-            let viewport = app.scrollViews["contract.viewport"].firstMatch
+            let viewport = app.descendants(matching: .any)["contract.viewport"].firstMatch
             let aligned = NSPredicate { _, _ in
                 guard page.exists, viewport.exists, viewport.frame.height > 0 else { return false }
                 return abs(page.frame.minY - viewport.frame.minY) <= 1 &&
                     abs(page.frame.maxY - viewport.frame.maxY) <= 1 &&
-                    app.buttons["contract.back"].firstMatch.isHittable
+                    app.buttons["contract.back." + id].firstMatch.isHittable
             }
             let ready = XCTNSPredicateExpectation(predicate: aligned, object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed, id)
@@ -26,11 +28,11 @@ final class ContractPagingTests: XCTestCase {
         for id in ids {
             app.buttons["contract.row." + id].tap()
             checkPage(id)
-            app.buttons["contract.back"].firstMatch.tap()
+            app.buttons["contract.back." + id].firstMatch.tap()
         }
         app.buttons["contract.row." + ids[1]].tap()
         checkPage(ids[1])
-        let viewport = app.scrollViews["contract.viewport"].firstMatch
+        let viewport = app
         for step in 0..<20 {
             let forward = step.isMultiple(of: 2)
             let top = viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.20))
