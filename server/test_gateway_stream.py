@@ -20,6 +20,35 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_short_query_cache_reuses_result_and_expires(self):
+        with patch.object(gateway, "SHORT_QUERY_CACHE", gateway.OrderedDict()):
+            calls = []
+            @gateway.cached_short_query
+            def query(symbol):
+                calls.append(symbol)
+                return [{"code": symbol}]
+            with patch.object(gateway.time, "monotonic", return_value=10):
+                self.assertEqual(query("a"), query("a"))
+            self.assertEqual(calls, ["a"])
+            with patch.object(gateway.time, "monotonic", return_value=17):
+                query("a")
+            self.assertEqual(calls, ["a", "a"])
+
+    def test_short_query_cache_bounded(self):
+        with patch.object(gateway, "SHORT_QUERY_CACHE", gateway.OrderedDict()):
+            @gateway.cached_short_query
+            def query(symbol):
+                return [symbol]
+            for i in range(70):
+                query(str(i))
+            self.assertEqual(len(gateway.SHORT_QUERY_CACHE), 64)
+
+    def test_reply_ignores_disconnected_client(self):
+        handler = object.__new__(gateway.Handler)
+        with patch.object(handler, "send_response", side_effect=BrokenPipeError()):
+            handler.reply(200, {"ok": True})
+        self.assertTrue(handler.close_connection)
+
     def test_open_interest_is_genuine_optional_data(self):
         import tempfile
         from add_kline_interest import patched

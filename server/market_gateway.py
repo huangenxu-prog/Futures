@@ -7,7 +7,8 @@ import re
 import tempfile
 import threading
 import time
-from collections import deque
+from collections import deque, OrderedDict
+from functools import wraps
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -34,6 +35,46 @@ QUOTE_BATCH_UNTIL = {}
 LOCK = threading.Lock()
 
 
+# Short-lived SDK sessions share one admission gate. Persistent quote and
+# chart workers stay independent. Reentrant for catalog validation.
+SHORT_QUERY_GATE = threading.RLock()
+SHORT_QUERY_CACHE = OrderedDict()
+SHORT_QUERY_TTL = 6.0
+SHORT_QUERY_MAX_KEYS = 64
+
+
+def short_query(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if not SHORT_QUERY_GATE.acquire(timeout=3):
+            raise RuntimeError("market_query_busy")
+        try:
+            return function(*args, **kwargs)
+        finally:
+            SHORT_QUERY_GATE.release()
+    return wrapped
+
+
+def cached_short_query(function):
+    @wraps(function)
+    @short_query
+    def wrapped(symbol):
+        key = (function.__name__, symbol)
+        now = time.monotonic()
+        cached = SHORT_QUERY_CACHE.get(key)
+        if cached is not None and now < cached[0]:
+            SHORT_QUERY_CACHE.move_to_end(key)
+            return cached[1]
+        result = function(symbol)
+        if result:
+            SHORT_QUERY_CACHE[key] = (time.monotonic() + SHORT_QUERY_TTL, result)
+            SHORT_QUERY_CACHE.move_to_end(key)
+            while len(SHORT_QUERY_CACHE) > SHORT_QUERY_MAX_KEYS:
+                SHORT_QUERY_CACHE.popitem(last=False)
+        return result
+    return wrapped
+
+
 contract_cache = {}
 contract_cache_until = 0.0
 
@@ -43,6 +84,7 @@ def contract_product(code):
     return match.group(1) if match else None
 
 
+@short_query
 def product_catalog():
     """Discover listed futures from TqSdk's authoritative contract directory."""
     global CATALOG_CACHE, CATALOG_UNTIL
@@ -128,6 +170,7 @@ def supported_symbol(symbol):
     return symbol in SYMBOLS or supported_product(contract_product(symbol))
 
 
+@short_query
 def selected_quotes(products):
     """A bounded pull of main futures contracts, never subscribes the whole catalog."""
     requested = sorted(set(products))
@@ -170,6 +213,14 @@ def selected_quotes(products):
                 result[product] = dict(fields, code=code,
                                        month=f"{int(year) % 100:02d}{int(month):02d}")
             if result:
+                for expired in list(QUOTE_BATCH_UNTIL):
+                    if QUOTE_BATCH_UNTIL[expired] <= time.monotonic():
+                        QUOTE_BATCH_UNTIL.pop(expired, None)
+                        QUOTE_BATCH_CACHE.pop(expired, None)
+                if key not in QUOTE_BATCH_CACHE and len(QUOTE_BATCH_CACHE) >= 64:
+                    oldest = min(QUOTE_BATCH_UNTIL, key=QUOTE_BATCH_UNTIL.get)
+                    QUOTE_BATCH_UNTIL.pop(oldest, None)
+                    QUOTE_BATCH_CACHE.pop(oldest, None)
                 QUOTE_BATCH_CACHE[key] = result
                 QUOTE_BATCH_UNTIL[key] = time.monotonic() + 8
             return result
@@ -195,6 +246,7 @@ def snapshot(quote):
     return values
 
 
+@short_query
 def main_contracts():
     global contract_cache, contract_cache_until
     if time.monotonic() < contract_cache_until:
@@ -222,6 +274,7 @@ def main_contracts():
         api.close()
 
 
+@cached_short_query
 def option_chain(underlying):
     with open(AUTH_PATH, encoding="utf-8") as handle:
         credentials = json.load(handle)
@@ -247,6 +300,7 @@ def option_chain(underlying):
         api.close()
 
 
+@cached_short_query
 def listed_contracts(product):
     """Query genuine unexpired delivery months, with quotes if available."""
     if not supported_product(product):
@@ -285,6 +339,7 @@ def listed_contracts(product):
         api.close()
 
 
+@short_query
 def load_bars(symbol, period, count):
     with open(AUTH_PATH, encoding="utf-8") as handle:
         credentials = json.load(handle)
@@ -1109,12 +1164,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def reply(self, status, payload):
         data = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
 
     def do_GET(self):
         url = urlsplit(self.path)
@@ -1185,8 +1243,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/v1/main-contracts":
             try:
-                with LOCK:
-                    contracts = LIVE_QUOTES.current() or main_contracts()
+                contracts = LIVE_QUOTES.current() or main_contracts()
                 self.reply(200, contracts)
             except Exception:
                 self.reply(503, {"error": "market_data_unavailable"})
@@ -1197,8 +1254,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(400, {"error": "invalid_product"})
                 return
             try:
-                with LOCK:
-                    contracts = listed_contracts(product)
+                contracts = listed_contracts(product)
                 self.reply(200, contracts)
             except Exception as exc:
                 print("挂牌合约查询失败:", type(exc).__name__, str(exc)[:140], flush=True)
@@ -1210,8 +1266,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(400, {"error": "invalid_underlying"})
                 return
             try:
-                with LOCK:
-                    chain = option_chain(code)
+                chain = option_chain(code)
                 self.reply(200, chain)
             except Exception:
                 self.reply(503, {"error": "options_unavailable"})

@@ -40,6 +40,18 @@ FRESH_SECONDS = {
 MAX_SERIES_PER_RUN = 24
 MAX_RUNTIME_SECONDS = 7 * 60
 MIN_FREE_BYTES = 160 * 1024 * 1024
+MIN_AVAILABLE_MEMORY_KIB = 300 * 1024
+
+
+def memory_allows_prefetch():
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) >= MIN_AVAILABLE_MEMORY_KIB
+    except (OSError, ValueError, IndexError):
+        pass
+    # Fail closed for optional background warming.
+    return False
 VALID_CODE = re.compile(r"(CFFEX|SHFE|DCE|CZCE|INE|GFEX)\.[A-Za-z]+[0-9]{3,4}\Z")
 
 
@@ -128,6 +140,9 @@ def fetch_history(api, key, wanted=KLINE_HISTORY_LENGTH):
 
 
 def run(limit):
+    if not memory_allows_prefetch():
+        print("可用内存不足300MiB或无法检测，跳过本轮预热。", flush=True)
+        return
     start = time.monotonic()
     os.umask(0o077)
     store = KlineFileCache(directory=KLINE_CACHE_DIR)
@@ -162,6 +177,9 @@ def run(limit):
             print("所有主力合约的六个周期缓存均处于本轮有效期内。", flush=True)
             return
         for i, key in enumerate(jobs):
+            if not memory_allows_prefetch():
+                print("可用内存不足300MiB，结束本轮预热。", flush=True)
+                break
             if time.monotonic() - start >= MAX_RUNTIME_SECONDS:
                 print("达到单轮运行时间预算，剩余任务留给下次。", flush=True)
                 break

@@ -26,6 +26,14 @@ class MemoryStore:
         return self.bars.get(key, ([], 0))
 
 class MainPrefetchTests(unittest.TestCase):
+    def test_memory_guard(self):
+        with patch.object(Path, "read_text", return_value="MemAvailable: 307199 kB"):
+            self.assertFalse(prefetch.memory_allows_prefetch())
+        with patch.object(Path, "read_text", return_value="MemAvailable: 307200 kB"):
+            self.assertTrue(prefetch.memory_allows_prefetch())
+        with patch.object(Path, "read_text", side_effect=OSError):
+            self.assertFalse(prefetch.memory_allows_prefetch())
+
     def test_only_real_domestic_main_underlying_codes(self):
         sample = ["CZCE.SR701", "SHFE.ao2701", "DCE.m2701",
                   "INE.sc2701", "GFEX.lc2701", "CFFEX.IF2612",
