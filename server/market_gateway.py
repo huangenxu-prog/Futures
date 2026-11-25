@@ -1,5 +1,6 @@
 """Read-only TqSdk K-line HTTP gateway. Bind to loopback; expose only behind authenticated HTTPS reverse proxy."""
 import fcntl
+import hmac
 import json
 import math
 import os
@@ -17,6 +18,16 @@ from tqsdk import TqApi, TqAuth
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 AUTH_PATH = os.environ.get("TQ_AUTH_FILE", "/root/tq_test/auth.json")
+# Rollout: unset keeps legacy clients working; configured key protects every
+# market /v1 endpoint, independently of the trading access key.
+MARKET_ACCESS = os.environ.get("QIHUI_MARKET_ACCESS_KEY", "")
+
+
+def market_authorized(headers):
+    if not MARKET_ACCESS:
+        return True
+    supplied = headers.get("X-Qihui-Market-Access", "")
+    return hmac.compare_digest(supplied.encode("utf-8"), MARKET_ACCESS.encode("utf-8"))
 PERIODS = {60, 180, 300, 600, 900, 1800, 3600, 7200, 86400, 604800}
 SYMBOLS = {
     "SHFE.rb", "SHFE.ag", "SHFE.au", "SHFE.cu",
@@ -1319,6 +1330,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_get(self):
         url = urlsplit(self.path)
+        if url.path.startswith("/v1/") and not market_authorized(getattr(self, "headers", {})):
+            self.reply(403, {"error": "market_access_denied"})
+            return
         if url.path == "/health":
             self.reply(200, {"ok": True, "quote_stream": True, "bar_stream": True,
                              "kline_cache": KLINE_HUB.status(),
@@ -1467,6 +1481,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    if MARKET_ACCESS and (len(MARKET_ACCESS) < 32 or not MARKET_ACCESS.isascii()):
+        raise SystemExit("QIHUI_MARKET_ACCESS_KEY must be at least 32 ASCII characters")
     host = os.environ.get("QIHUI_BIND", "127.0.0.1")
     port = int(os.environ.get("QIHUI_PORT", "8765"))
     print("Qihui read-only gateway listening on %s:%s" % (host, port), flush=True)

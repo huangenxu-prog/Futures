@@ -20,6 +20,21 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_market_access_optional_and_protects_all_v1_routes(self):
+        from types import SimpleNamespace
+        key = "x" * 64
+        with patch.object(gateway, "MARKET_ACCESS", key):
+            for path in ("/v1/stream/quotes", "/v1/options", "/v1/history", "/v1/cache/warm"):
+                output = []
+                handler = SimpleNamespace(path=path, headers={},
+                    reply=lambda status, payload: output.append((status, payload)))
+                gateway.Handler.do_GET(handler)
+                self.assertEqual(output, [(403, {"error": "market_access_denied"})])
+            self.assertTrue(gateway.market_authorized({"X-Qihui-Market-Access": key}))
+            self.assertFalse(gateway.market_authorized({"X-Qihui-Market-Access": "wrong"}))
+        with patch.object(gateway, "MARKET_ACCESS", ""):
+            self.assertTrue(gateway.market_authorized({}))
+
     def test_two_short_depths_signal_temporary_history_pause(self):
         import tempfile
         rows = [{"time": t, "open": 1., "high": 2., "low": 0.,

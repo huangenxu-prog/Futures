@@ -7,6 +7,9 @@ struct QihuiSettingsView: View {
     let instruments: [FuturesInstrument]
     let favoriteIDs: [String]
     let mainCodes: [String:String]
+    @State private var marketAccess = false
+    @State private var marketKey = ""
+    @State private var marketKeyError = false
     @State private var strategy = false
     @State private var account = false
     @State private var indicators = false
@@ -24,6 +27,11 @@ struct QihuiSettingsView: View {
                         Text("今开").tag("open")
                     }.pickerStyle(.segmented)
                     Text("今开为交易日开盘价；行情未提供基准时显示 --。").font(.caption).foregroundStyle(.secondary)
+                    Button("行情访问密钥") {
+                        marketKey = ""
+                        marketKeyError = false
+                        marketAccess = true
+                    }
                 }
                 Section("图表与指标") {
                     Button("K线样式") { candle = true }
@@ -49,6 +57,30 @@ struct QihuiSettingsView: View {
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+            .sheet(isPresented: $marketAccess) {
+                NavigationStack {
+                    Form {
+                        SecureField("输入独立行情密钥", text: $marketKey)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        Text("密钥仅保存在本机钥匙串。保存后重新打开期汇，以新密钥连接。").font(.caption)
+                        if marketKeyError { Text("密钥格式无效或保存失败").foregroundStyle(.red) }
+                        Button("保存") {
+                            if MarketAccessKey.save(marketKey.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                                marketKey = ""
+                                marketAccess = false
+                            } else { marketKeyError = true }
+                        }.disabled(marketKey.isEmpty)
+                        Button("清除已保存密钥", role: .destructive) {
+                            if MarketAccessKey.save("") { marketAccess = false }
+                            else { marketKeyError = true }
+                        }
+                    }
+                    .navigationTitle("行情访问密钥")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { marketAccess = false } } }
+                }
+            }
             .sheet(isPresented: $strategy) { StrategyCenterView(instruments: instruments, favoriteIDs: favoriteIDs, mainCodes: mainCodes) }
             .sheet(isPresented: $account) { TradeConnectionSettingsView() }
             .sheet(isPresented: $indicators) { IndicatorSettingsView(settings: ChartDisplaySettings.load()) { $0.save() } }

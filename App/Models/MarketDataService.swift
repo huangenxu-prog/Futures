@@ -1,4 +1,38 @@
 import Foundation
+import Security
+
+enum MarketAccessKey {
+    private static var query: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: "qihui.market.access",
+         kSecAttrAccount as String: "gateway"]
+    }
+    static func load() -> String {
+        var q = query
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var value: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &value) == errSecSuccess,
+              let data = value as? Data else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+    static func save(_ key: String) -> Bool {
+        if key.isEmpty {
+            let status = SecItemDelete(query as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound
+        }
+        guard key.utf8.count >= 32, key.utf8.count <= 256,
+              key.utf8.allSatisfy({ (33...126).contains($0) }) else { return false }
+        let data = Data(key.utf8)
+        let update = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if update == errSecSuccess { return true }
+        guard update == errSecItemNotFound else { return false }
+        var q = query
+        q[kSecValueData as String] = data
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
+    }
+}
 
 private struct KlineResponse: Decodable {
     let symbol: String
@@ -21,6 +55,23 @@ enum MarketDataError: LocalizedError {
 }
 
 enum MarketDataService {
+    private static func authorizedRequest(url: URL, timeoutInterval: TimeInterval = 60,
+                                          cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy) -> URLRequest {
+        var request = URLRequest(url: url, cachePolicy: cachePolicy, timeoutInterval: timeoutInterval)
+        let key = MarketAccessKey.load()
+        if !key.isEmpty { request.setValue(key, forHTTPHeaderField: "X-Qihui-Market-Access") }
+        return request
+    }
+    // Do not forward a private gateway key through HTTP redirects.
+    private final class NoRedirect: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest,
+                        completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
+    }
+    private static let httpSession = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
     private static let cacheWriter = DispatchQueue(label: "qihui.kline.cache-writer", qos: .utility)
     private static func cacheURL(symbol: String, period: Int) -> URL? {
         guard let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
@@ -83,8 +134,8 @@ enum MarketDataService {
                 .appending(queryItems: batch.map {
                     URLQueryItem(name: "symbol", value: $0)
                 })
-            let (data, response) = try await URLSession.shared.data(
-                for: URLRequest(url: url, timeoutInterval: 12)
+            let (data, response) = try await httpSession.data(
+                for: authorizedRequest(url: url, timeoutInterval: 12)
             )
             guard (response as? HTTPURLResponse)?.statusCode == 200,
                   (try? JSONSerialization.jsonObject(with: data)) != nil else {
@@ -95,8 +146,8 @@ enum MarketDataService {
 
     static func catalogProducts() async throws -> [FuturesInstrument] {
         let url = try baseURL().appendingPathComponent("v1/catalog")
-        let (data, response) = try await URLSession.shared.data(
-            for: URLRequest(url: url, timeoutInterval: 35)
+        let (data, response) = try await httpSession.data(
+            for: authorizedRequest(url: url, timeoutInterval: 35)
         )
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw MarketDataError.invalidResponse
@@ -112,8 +163,8 @@ enum MarketDataService {
         guard !products.isEmpty, products.count <= 48 else { return [:] }
         let url = try baseURL().appendingPathComponent("v1/product-quotes")
             .appending(queryItems: products.map { URLQueryItem(name: "product", value: $0) })
-        let (data, response) = try await URLSession.shared.data(
-            for: URLRequest(url: url, timeoutInterval: 12)
+        let (data, response) = try await httpSession.data(
+            for: authorizedRequest(url: url, timeoutInterval: 12)
         )
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw MarketDataError.invalidResponse
@@ -199,8 +250,8 @@ enum MarketDataService {
     static func listedContracts(for product: String) async throws -> [ContractQuote] {
         let url = try baseURL().appendingPathComponent("v1/contracts")
             .appending(queryItems: [URLQueryItem(name: "product", value: product)])
-        let (data, response) = try await URLSession.shared.data(
-            for: URLRequest(url: url, timeoutInterval: 35)
+        let (data, response) = try await httpSession.data(
+            for: authorizedRequest(url: url, timeoutInterval: 35)
         )
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw MarketDataError.invalidResponse
@@ -225,7 +276,7 @@ enum MarketDataService {
     static func options(for code: String) async throws -> [OptionQuote] {
         let url = try baseURL().appendingPathComponent("v1/options")
             .appending(queryItems: [URLQueryItem(name: "symbol", value: code)])
-        let (data, response) = try await URLSession.shared.data(for:URLRequest(url:url,timeoutInterval:35))
+        let (data, response) = try await httpSession.data(for:authorizedRequest(url: url, timeoutInterval: 35))
         if (response as? HTTPURLResponse)?.statusCode == 404 {
             throw NSError(domain: "Futures", code: 404, userInfo: [NSLocalizedDescriptionKey: "请升级行情网关以查看期权"])
         }
@@ -235,7 +286,7 @@ enum MarketDataService {
 
     static func mainContracts() async throws -> [String: MainContract] {
         let url = try baseURL().appendingPathComponent("v1/main-contracts")
-        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 25))
+        let (data, response) = try await httpSession.data(for: authorizedRequest(url: url, timeoutInterval: 25))
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw MarketDataError.invalidResponse }
         return try JSONDecoder().decode([String: MainContract].self, from: data)
     }
@@ -262,7 +313,7 @@ enum MarketDataService {
         stamp: ((T, Double, Double) -> T)? = nil,
         onEvent: @MainActor @escaping (T) -> Void
     ) async throws {
-        var request = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData)
+        var request = authorizedRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData)
         request.timeoutInterval = 45
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
@@ -353,9 +404,9 @@ enum MarketDataService {
                 URLQueryItem(name: "count", value: String(count)),
                 URLQueryItem(name: "depth", value: String(depth))
             ])
-        var request = URLRequest(url: url)
+        var request = authorizedRequest(url: url)
         request.timeoutInterval = 35
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await httpSession.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw MarketDataError.invalidResponse
         }
@@ -397,9 +448,9 @@ enum MarketDataService {
             URLQueryItem(name: "count", value: String(count))
         ]
         guard let endpoint = parts.url else { throw MarketDataError.invalidResponse }
-        var request = URLRequest(url: endpoint)
+        var request = authorizedRequest(url: endpoint)
         request.timeoutInterval = 25
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await httpSession.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw MarketDataError.invalidResponse
         }
@@ -439,6 +490,13 @@ private final class SSEEventReceiver<T: Decodable & Sendable>: NSObject, URLSess
         self.continuation = continuation
         self.label = label
         self.streamID = streamID
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
