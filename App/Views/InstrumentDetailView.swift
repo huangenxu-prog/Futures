@@ -7,9 +7,8 @@ struct InstrumentDetailView: View {
     private let initialContract: MarketDataService.ContractQuote?
     private let pages: [FuturesInstrument]
     @State private var period = "15分"
-    @State private var visibleID: String?
     @State private var activeID: String
-    @State private var scrolling = false
+    private let entryIndex: Int
 
     init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote? = nil, sequence: [FuturesInstrument] = []) {
         initial = instrument
@@ -17,7 +16,7 @@ struct InstrumentDetailView: View {
         var seen = Set<String>()
         let unique = sequence.filter { seen.insert($0.id).inserted }
         pages = unique.contains(where: { $0.id == instrument.id }) ? unique : [instrument]
-        _visibleID = State(initialValue: instrument.id)
+        entryIndex = pages.firstIndex { $0.id == instrument.id } ?? 0
         _activeID = State(initialValue: instrument.id)
     }
 
@@ -28,20 +27,22 @@ struct InstrumentDetailView: View {
             if pages.count <= 1 {
                 detail(initial, active: true)
             } else {
-                ScrollViewReader { proxy in
+                GeometryReader { viewport in
                     ScrollView(.vertical) {
                         VStack(spacing: 0) {
                             ForEach(Array(pages.enumerated()), id: \.element.id) { index, item in
                                 Group {
-                                    if abs(index - activeIndex) <= 1 || item.id == visibleID {
+                                    if abs(index - activeIndex) <= 1 {
                                         detail(item, active: item.id == activeID)
                                     } else {
                                         MarketPalette.surface
                                     }
                                 }
-                                .containerRelativeFrame(.vertical)
+                                .frame(height: viewport.size.height)
                                 .frame(maxWidth: .infinity)
                                 .clipped()
+                                .accessibilityElement(children: .contain)
+                                .accessibilityIdentifier("contract.page." + item.id)
                                 .id(item.id)
                             }
                         }.scrollTargetLayout()
@@ -51,17 +52,17 @@ struct InstrumentDetailView: View {
                     .contentMargins(.vertical, 0, for: .scrollContent)
                     .scrollIndicators(.hidden)
                     .scrollTargetBehavior(.paging)
-                    .scrollPosition(id: $visibleID, anchor: .top)
-                    .onScrollPhaseChange { _, phase in
-                        scrolling = phase != .idle
-                        if phase == .idle, let id = visibleID { activeID = id }
+                    // With equal-height pages, index / (count - 1) places that
+                    // page exactly at the viewport origin on the first layout.
+                    .defaultScrollAnchor(anchor(for: entryIndex), for: .initialOffset)
+                    .defaultScrollAnchor(anchor(for: activeIndex), for: .sizeChanges)
+                    .onScrollPhaseChange { _, phase, context in
+                        guard phase == .idle, viewport.size.height > 0 else { return }
+                        let offset = context.geometry.visibleRect.minY
+                        let index = Int((offset / viewport.size.height).rounded())
+                        if pages.indices.contains(index) { activeID = pages[index].id }
                     }
-                    .onChange(of: visibleID) { _, id in
-                        if !scrolling, let id { activeID = id }
-                    }
-                    .onAppear {
-                        proxy.scrollTo(initial.id, anchor: .top)
-                    }
+                    .accessibilityIdentifier("contract.viewport")
                     .clipped()
                 }
             }
@@ -70,6 +71,10 @@ struct InstrumentDetailView: View {
         .toolbar(.hidden, for: .navigationBar)
         .onAppear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true) }
         .onDisappear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false) }
+    }
+
+    private func anchor(for index: Int) -> UnitPoint {
+        UnitPoint(x: 0.5, y: CGFloat(index) / CGFloat(max(1, pages.count - 1)))
     }
 
     private func detail(_ item: FuturesInstrument, active: Bool) -> some View {
@@ -392,6 +397,7 @@ private struct InstrumentDetailPage: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("contract.back")
             Button { showContracts = true } label: {
                 HStack(spacing: 6) {
                     Text(instrument.name + (selectedContract?.month ?? quote?.month ?? ""))
