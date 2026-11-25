@@ -1,6 +1,7 @@
 
 """Single-owner TqKq simulation only. No real accounts."""
 import hmac
+import hashlib
 import json
 import math
 import queue
@@ -112,6 +113,10 @@ def snapshot(account, positions, orders=None, fills=None):
 class Session:
     def __init__(self, username, password):
         self.token = secrets.token_urlsafe(32)
+        self.username = username
+        self.salt = secrets.token_bytes(16)
+        self.verifier = self.password_digest(password)
+        self.inflight = 0
         self.stop = threading.Event()
         self.ready = threading.Event()
         self.data_lock = threading.Lock()
@@ -121,6 +126,12 @@ class Session:
         self.last_access = time.monotonic()
         self.worker = threading.Thread(target=self.run, args=(username, password), daemon=True)
         self.worker.start()
+
+    def password_digest(self, password):
+        return hashlib.scrypt(password.encode('utf-8'), salt=self.salt, n=16384, r=8, p=1)
+
+    def matches(self, username, password):
+        return equal(self.username, username) and hmac.compare_digest(self.verifier, self.password_digest(password))
 
     def run(self, username, password):
         api = None
@@ -166,6 +177,8 @@ class Session:
                     except Exception:
                         result["status"] = 503
                     finally:
+                        with LOCK:
+                            self.inflight -= 1
                         done.set()
                 api.wait_update(deadline=time.time() + 0.5)
                 data = snapshot(account, positions, orders, fills)
@@ -234,17 +247,37 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(400)
             with LOCK:
                 now = time.monotonic()
-                if SESSION is not None and SESSION.worker.is_alive():
-                    return self.reply(409)
                 if now - LAST_LOGIN < 5:
                     return self.reply(429)
                 LAST_LOGIN = now
-                SESSION = s = Session(username, password)
+                if SESSION is not None and SESSION.worker.is_alive():
+                    s = SESSION
+                    if s.stop.is_set():
+                        return self.reply(409)
+                    if not s.matches(username, password):
+                        return self.reply(403)
+                    if s.inflight:
+                        return self.reply(409)
+                    # Reuse the authenticated SDK session, never restart it or replay orders.
+                    # Rotate only once a usable snapshot exists below.
+                    s.last_access = now
+                else:
+                    SESSION = s = Session(username, password)
             del body, username, password
-            if not s.ready.wait(60) or s.stop.is_set() or s.read() is None:
-                s.stop.set()
+            if not s.ready.wait(60):
                 return self.reply(503)
-            return self.reply(200, {"token": s.token, "snapshot": s.read()})
+            with LOCK:
+                if s is not SESSION or s.stop.is_set():
+                    return self.reply(503)
+                data = s.read()
+                if data is None:
+                    return self.reply(503)
+                if s.inflight:
+                    return self.reply(409)
+                s.token = secrets.token_urlsafe(32)
+                s.last_access = time.monotonic()
+                token = s.token
+            return self.reply(200, {"token": token, "snapshot": data})
         if self.path not in (PREFIX + "snapshot", PREFIX + "logout", PREFIX + "order", PREFIX + "cancel"):
             return self.reply(404)
         with LOCK:
@@ -252,6 +285,8 @@ class Handler(BaseHTTPRequestHandler):
             if s is None or s.stop.is_set() or not equal(self.headers.get("Authorization", ""), "Bearer " + s.token):
                 return self.reply(401)
             if self.path == PREFIX + "logout" and method == "POST":
+                if s.inflight:
+                    return self.reply(409)
                 s.stop.set()
                 return self.reply(200)
             s.last_access = time.monotonic()
@@ -275,11 +310,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(400)
         done, result = threading.Event(), {}
         with LOCK:
-            if s is not SESSION or s.stop.is_set():
+            if s is not SESSION or s.stop.is_set() or not equal(self.headers.get("Authorization", ""), "Bearer " + s.token):
                 return self.reply(401)
+            if s.inflight:
+                return self.reply(409)
             try:
+                s.inflight += 1
                 s.commands.put_nowait((action, payload, done, result))
             except queue.Full:
+                s.inflight -= 1
                 return self.reply(429)
         if not done.wait(12):
             return self.reply(503)

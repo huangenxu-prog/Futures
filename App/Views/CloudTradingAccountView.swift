@@ -113,7 +113,7 @@ private enum CloudTradeError: LocalizedError {
         case .rejected: return "登录或授权失败，请检查快期账户及网关访问密钥"
         case .unavailable: return "交易网关或快期服务暂不可用"
         case .expired: return "会话已失效，请退出后重新登录"
-        case .conflict: return "上一次会话仍在使用，请退出旧会话或等待释放"
+        case .conflict: return "交易会话正在处理或关闭，请稍后重试"
         }
     }
 }
@@ -260,6 +260,9 @@ private final class CloudTradeSession: ObservableObject {
             }
         } catch {
             self.error = error.localizedDescription
+            if let failure = error as? CloudTradeError, case .rejected = failure {
+                retryAfter = .distantFuture
+            }
         }
     }
     func refresh() async {
@@ -315,9 +318,10 @@ private final class CloudTradeSession: ObservableObject {
         guard let status = (response as? HTTPURLResponse)?.statusCode else { throw CloudTradeError.unavailable }
         switch status {
         case 200: return try JSONDecoder().decode(CloudReply.self, from: data)
-        case 401,403: throw token == nil ? CloudTradeError.rejected : CloudTradeError.expired
+        case 401: throw token == nil ? CloudTradeError.rejected : CloudTradeError.expired
+        case 403: throw CloudTradeError.rejected
         case 409: throw CloudTradeError.conflict
-        case 429: throw CloudTradeError.unavailable
+        case 429: throw CloudTradeError.conflict
         default: throw NSError(domain: "QihuiTrade", code: status, userInfo: [NSLocalizedDescriptionKey: "交易服务 HTTP " + String(status) + "，请重试"])
         }
     }
@@ -407,11 +411,8 @@ struct TradingCenterView: View {
                         Section("交易网关") {
                             TextField("HTTPS 网关地址", text: $address)
                                 .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            if key.isEmpty {
-                                SecureField("网关访问密钥", text: $key)
-                            } else {
-                                LabeledContent("网关访问密钥", value: "已填写")
-                            }
+                            SecureField("网关访问密钥", text: $key)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
                             Button("清除已保存密钥", role: .destructive) {
                                 if TradeKeychain.remove(address) { key = ""; keychainMessage = nil; _ = TradeKeychain.remove(address, kind: "password"); _ = TradeKeychain.remove(address, kind: "session") }
                                 else { keychainMessage = "无法清除设备钥匙串密钥" }
