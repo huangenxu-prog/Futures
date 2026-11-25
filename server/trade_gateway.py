@@ -1,8 +1,10 @@
 
-"""Single-owner, read-only TqKq gateway. No real accounts or order endpoints."""
+"""Single-owner TqKq simulation only. No real accounts."""
 import hmac
 import json
 import math
+import queue
+import re
 import os
 import secrets
 import threading
@@ -26,7 +28,39 @@ def number(v):
     except (TypeError, ValueError, OverflowError):
         return None
 
-def snapshot(account, positions):
+def order_row(oid, o):
+    return {"id": oid, "symbol": str(o.exchange_id) + "." + str(o.instrument_id),
+            "direction": str(o.direction), "offset": str(o.offset),
+            "price": number(o.limit_price), "quantity": int(o.volume_orign),
+            "remaining": int(o.volume_left), "status": str(o.status),
+            "message": str(o.last_msg or "")[:200]}
+
+def fill_row(tid, t):
+    return {"id": tid, "order_id": str(t.order_id),
+            "symbol": str(t.exchange_id) + "." + str(t.instrument_id),
+            "direction": str(t.direction), "offset": str(t.offset),
+            "price": number(t.price), "quantity": int(t.volume),
+            "time_ns": int(t.trade_date_time)}
+
+def validate_order(body):
+    oid = body["id"]
+    symbol = body["symbol"]
+    direction, offset = body["direction"], body["offset"]
+    quantity = int(body["quantity"])
+    price = float(body["price"])
+    if not isinstance(oid, str) or not re.fullmatch(r"[a-f0-9]{32}", oid):
+        raise ValueError("invalid id")
+    if not isinstance(symbol, str) or not re.fullmatch(r"(SHFE|INE|DCE|CZCE|GFEX|CFFEX)\.[A-Za-z]+[0-9]{3,4}([CP][0-9]+(?:\.[0-9]+)?|-[CP]-[0-9]+(?:\.[0-9]+)?)?", symbol):
+        raise ValueError("invalid symbol")
+    if direction not in ("BUY", "SELL") or offset not in ("OPEN", "CLOSE", "CLOSETODAY"):
+        raise ValueError("invalid direction or offset")
+    if offset == "CLOSETODAY" and symbol.split(".")[0] not in ("SHFE", "INE"):
+        raise ValueError("invalid close today")
+    if not 1 <= quantity <= 10 or not math.isfinite(price) or not 0 < price <= 1e8:
+        raise ValueError("invalid price or volume")
+    return oid, symbol, direction, offset, quantity, price
+
+def snapshot(account, positions, orders=None, fills=None):
     fields = ("balance", "available", "margin", "float_profit", "close_profit")
     data = {field: number(getattr(account, field, None)) for field in fields}
     if data["balance"] is None or data["available"] is None:
@@ -38,7 +72,10 @@ def snapshot(account, positions):
         if long or short:
             rows.append({"symbol": symbol, "long": long, "short": short,
                          "float_profit": number(getattr(pos, "float_profit", None))})
-    return {"account": data, "positions": sorted(rows, key=lambda x: x["symbol"])}
+    return {"account": data, "positions": sorted(rows, key=lambda x: x["symbol"]),
+            "orders": [order_row(k, v) for k, v in (orders or {}).items() if v.instrument_id and v.volume_orign > 0],
+            "fills": [fill_row(k, v) for k, v in (fills or {}).items() if v.instrument_id and v.volume > 0],
+            "simulation_orders": True}
 
 class Session:
     def __init__(self, username, password):
@@ -47,6 +84,8 @@ class Session:
         self.ready = threading.Event()
         self.data_lock = threading.Lock()
         self.data = None
+        self.commands = queue.Queue(maxsize=16)
+        self.seen = {}
         self.last_access = time.monotonic()
         self.worker = threading.Thread(target=self.run, args=(username, password), daemon=True)
         self.worker.start()
@@ -59,9 +98,45 @@ class Session:
             password = None
             account = api.get_account()
             positions = api.get_position()
+            orders = api.get_order()
+            fills = api.get_trade()
             while not self.stop.is_set() and time.monotonic() - self.last_access < IDLE:
-                api.wait_update(deadline=time.time() + 1)
-                data = snapshot(account, positions)
+                try:
+                    action, payload, done, result = self.commands.get_nowait()
+                except queue.Empty:
+                    pass
+                else:
+                    try:
+                        if action == "order":
+                            oid, symbol, direction, offset, qty, price = payload
+                            if oid in self.seen:
+                                if self.seen[oid] != payload:
+                                    result["status"] = 409
+                                else:
+                                    result["status"] = 200
+                            elif oid in orders:
+                                result["status"] = 409
+                            elif len(self.seen) >= 1000:
+                                result["status"] = 429
+                            else:
+                                # Never retry an uncertain SDK submission automatically.
+                                self.seen[oid] = payload
+                                api.insert_order(symbol=symbol, direction=direction, offset=offset,
+                                                 volume=qty, limit_price=price, order_id=oid)
+                                result["status"] = 200
+                        else:
+                            order = orders.get(payload)
+                            if order is None or order.status != "ALIVE":
+                                result["status"] = 409
+                            else:
+                                api.cancel_order(order)
+                                result["status"] = 200
+                    except Exception:
+                        result["status"] = 503
+                    finally:
+                        done.set()
+                api.wait_update(deadline=time.time() + 0.5)
+                data = snapshot(account, positions, orders, fills)
                 with self.data_lock:
                     self.data = data
                 if data is not None:
@@ -138,7 +213,7 @@ class Handler(BaseHTTPRequestHandler):
                 s.stop.set()
                 return self.reply(503)
             return self.reply(200, {"token": s.token, "snapshot": s.read()})
-        if self.path not in (PREFIX + "snapshot", PREFIX + "logout"):
+        if self.path not in (PREFIX + "snapshot", PREFIX + "logout", PREFIX + "order", PREFIX + "cancel"):
             return self.reply(404)
         with LOCK:
             s = SESSION
@@ -147,11 +222,36 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == PREFIX + "logout" and method == "POST":
                 s.stop.set()
                 return self.reply(200)
-            if self.path != PREFIX + "snapshot" or method != "GET":
-                return self.reply(405)
             s.last_access = time.monotonic()
             data = s.read()
-        return self.reply(200, {"snapshot": data}) if data is not None else self.reply(503)
+        if self.path == PREFIX + "snapshot" and method == "GET":
+            return self.reply(200, {"snapshot": data}) if data is not None else self.reply(503)
+        if method != "POST" or self.path not in (PREFIX + "order", PREFIX + "cancel"):
+            return self.reply(405)
+        if data is None:
+            return self.reply(503)
+        action = self.path[len(PREFIX):]
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 8192:
+                return self.reply(400)
+            body = json.loads(self.rfile.read(length))
+            payload = validate_order(body) if action == "order" else body["id"]
+            if action == "cancel" and (not isinstance(payload, str) or not 0 < len(payload) <= 128):
+                return self.reply(400)
+        except (ValueError, TypeError, KeyError, OSError, OverflowError):
+            return self.reply(400)
+        done, result = threading.Event(), {}
+        with LOCK:
+            if s is not SESSION or s.stop.is_set():
+                return self.reply(401)
+            try:
+                s.commands.put_nowait((action, payload, done, result))
+            except queue.Full:
+                return self.reply(429)
+        if not done.wait(12):
+            return self.reply(503)
+        return self.reply(result.get("status", 503))
 
 def main():
     if len(ACCESS) < 32:

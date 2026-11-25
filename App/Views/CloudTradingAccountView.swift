@@ -18,7 +18,30 @@ private struct CloudSnapshot: Decodable {
         var id: String { symbol }
     }
     let account: Account
+    struct Order: Decodable, Identifiable {
+        let id: String
+        let symbol: String
+        let direction: String
+        let offset: String
+        let price: Double?
+        let quantity: Int
+        let remaining: Int
+        let status: String
+        let message: String
+    }
+    struct Fill: Decodable, Identifiable {
+        let id: String
+        let symbol: String
+        let direction: String
+        let offset: String
+        let price: Double?
+        let quantity: Int
+        let time_ns: Int64
+    }
     let positions: [Position]
+    let orders: [Order]?
+    let fills: [Fill]?
+    let simulation_orders: Bool?
 }
 private struct CloudReply: Decodable {
     let token: String?
@@ -47,6 +70,42 @@ private final class CloudTradeSession: ObservableObject {
     private var accessKey = ""
     private var endpoint: URL?
     private var generation = UUID()
+    @Published private(set) var pendingOrder: String?
+    @Published private(set) var actionMessage: String?
+    private var mutating = false
+    var canTrade: Bool { signedIn && snapshot?.simulation_orders == true && !busy && !mutating && pendingOrder == nil }
+    func submit(symbol: String, direction: String, offset: String, price: String, quantity: String) async {
+        guard canTrade, let url = endpoint, let token else { return }
+        mutating = true; busy = true
+        defer { mutating = false; busy = false }
+        let id = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        pendingOrder = id
+        actionMessage = "正在提交模拟委托"
+        do {
+            _ = try await request(base: url, action: "order", key: accessKey, token: token,
+                                  body: ["id": id, "symbol": symbol, "direction": direction, "offset": offset, "price": price, "quantity": quantity])
+            actionMessage = "指令已交给SDK，等待委托回报"
+        } catch {
+            actionMessage = "提交结果未确认，请查看委托列表，勿重复下单。编号：" + id
+        }
+        await refresh()
+    }
+    func cancel(_ id: String) async {
+        guard signedIn, snapshot?.simulation_orders == true, !busy, !mutating, let url = endpoint, let token else { return }
+        mutating = true; busy = true
+        defer { mutating = false; busy = false }
+        do {
+            _ = try await request(base: url, action: "cancel", key: accessKey, token: token, body: ["id": id])
+            actionMessage = "撤单指令已交给SDK，等待回报"
+        } catch {
+            actionMessage = "撤单结果未确认，请核对委托状态"
+        }
+        await refresh()
+    }
+    func acknowledgeUncertainOrder() {
+        pendingOrder = nil
+        actionMessage = "已手动解除提交锁定，请先核对快期委托记录"
+    }
     private let http: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.urlCache = nil
@@ -70,6 +129,7 @@ private final class CloudTradeSession: ObservableObject {
             guard let session = reply.token, !session.isEmpty, let data = reply.snapshot else { throw CloudTradeError.unavailable }
             token = session; accessKey = key; endpoint = url
             generation = UUID()
+            pendingOrder = nil; actionMessage = nil
             snapshot = data; signedIn = true
         } catch {
             self.error = error.localizedDescription
@@ -83,6 +143,10 @@ private final class CloudTradeSession: ObservableObject {
             guard current == generation, !Task.isCancelled else { return }
             guard let data = reply.snapshot else { throw CloudTradeError.unavailable }
             snapshot = data; error = nil
+            if let pendingOrder, data.orders?.contains(where: { $0.id == pendingOrder }) == true {
+                self.pendingOrder = nil
+                actionMessage = "已收到委托记录"
+            }
         } catch {
             guard current == generation, !Task.isCancelled else { return }
             snapshot = nil
@@ -135,6 +199,12 @@ struct TradingCenterView: View {
     @State private var password = ""
     @State private var real = false
     @State private var local = false
+    @State private var ticket = false
+    @State private var showOrders = false
+    @State private var showFills = false
+    @State private var unlock = false
+    @State private var cancelID: String?
+    @State private var openedInitial = false
     var favoriteIDs: [String] = []
     var mainCodes: [String:String] = [:]
     var initialContract: PaperContract? = nil
@@ -165,7 +235,7 @@ struct TradingCenterView: View {
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(p.symbol).fontWeight(.medium)
                                     HStack {
-                                        Text("多 (p.long) 手 · 空 (p.short) 手")
+                                        Text("多 \(p.long) 手 · 空 \(p.short) 手")
                                         Spacer()
                                         Text(money(p.float_profit))
                                     }.font(.caption).foregroundStyle(.secondary)
@@ -174,7 +244,16 @@ struct TradingCenterView: View {
                         } else { Text("持仓未取得").foregroundStyle(.secondary) }
                     }
                     Section("交易功能") {
-                        Button("下单、撤单、委托与成交（待接入）") {}.disabled(true)
+                        Button("下单") { ticket = true }.disabled(!session.canTrade)
+                        Button("委托 / 撤单") { showOrders = true }.disabled(session.snapshot?.simulation_orders != true)
+                        Button("成交记录") { showFills = true }.disabled(session.snapshot?.simulation_orders != true)
+                        if let message = session.actionMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
+                        if session.pendingOrder != nil {
+                            Button("已核对官方委托，解除锁定") { unlock = true }.disabled(session.busy)
+                        }
+                        if session.snapshot?.simulation_orders != true {
+                            Text("请升级交易网关以启用模拟下单").font(.caption).foregroundStyle(.secondary)
+                        }
                         Button("银期转账（未开放）") {}.disabled(true)
                         Button("退出账户", role: .destructive) { Task { await session.logout() } }
                             .disabled(session.busy)
@@ -238,6 +317,57 @@ struct TradingCenterView: View {
             .navigationTitle("交易")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+            .sheet(isPresented: $ticket) {
+                CloudOrderTicket(session: session, contract: initialContract)
+            }
+            .sheet(isPresented: $showOrders) {
+                NavigationStack {
+                    List {
+                        ForEach(session.snapshot?.orders ?? []) { o in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(o.symbol).fontWeight(.semibold)
+                                Text(o.direction + " " + o.offset + " · " + (o.price.map { String($0) } ?? "--"))
+                                Text("状态 " + o.status + " · 已成交 " + String(o.quantity - o.remaining) + "/" + String(o.quantity))
+                                Text(o.message).font(.caption).foregroundStyle(.secondary)
+                                Text(o.id).font(.caption2).foregroundStyle(.secondary)
+                                if o.status == "ALIVE" {
+                                    Button("撤单", role: .destructive) { cancelID = o.id }.disabled(session.busy)
+                                }
+                            }
+                        }
+                        if session.snapshot?.orders?.isEmpty != false { Text("暂无委托或未取得数据") }
+                    }
+                    .navigationTitle("云端模拟委托")
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showOrders = false } } }
+                    .confirmationDialog("确认撤销该模拟委托？", isPresented: Binding(get: { cancelID != nil }, set: { if !$0 { cancelID = nil } })) {
+                        Button("确认撤单", role: .destructive) {
+                            if let id = cancelID { Task { await session.cancel(id) } }
+                            cancelID = nil
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $showFills) {
+                NavigationStack {
+                    List {
+                        ForEach(session.snapshot?.fills ?? []) { f in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(f.symbol).fontWeight(.semibold)
+                                Text(f.direction + " " + f.offset + " · " + (f.price.map { String($0) } ?? "--") + " × " + String(f.quantity))
+                                Text(Date(timeIntervalSince1970: Double(f.time_ns) / 1e9).formatted()).font(.caption)
+                            }
+                        }
+                        if session.snapshot?.fills?.isEmpty != false { Text("暂无成交或未取得数据") }
+                    }
+                    .navigationTitle("云端模拟成交")
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showFills = false } } }
+                }
+            }
+            .confirmationDialog("确认已在快期核对委托结果？", isPresented: $unlock) {
+                Button("解除锁定") { session.acknowledgeUncertainOrder() }
+            } message: { Text("未知结果可能已经下单，切勿重复提交。") }
+            .onAppear { openInitialIfReady() }
+            .onChange(of: session.canTrade) { _, _ in openInitialIfReady() }
             .sheet(isPresented: $local) {
                 LocalPaperTradingCenterView(favoriteIDs: favoriteIDs, mainCodes: mainCodes, initialContract: initialContract)
             }
@@ -250,8 +380,80 @@ struct TradingCenterView: View {
             }
         }.tint(MarketPalette.accent)
     }
+    private func openInitialIfReady() {
+        guard !openedInitial, initialContract != nil, session.canTrade else { return }
+        openedInitial = true; ticket = true
+    }
     private func money(_ value: Double?) -> String {
         guard let value, value.isFinite else { return "--" }
         return value.formatted(.number.precision(.fractionLength(2))) + " 元"
+    }
+}
+
+private struct CloudOrderTicket: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var session: CloudTradeSession
+    let contract: PaperContract?
+    @State private var symbol: String
+    @State private var price: String
+    @State private var quantity = "1"
+    @State private var action = "开多"
+    @State private var closeToday = false
+    @State private var confirm = false
+    init(session: CloudTradeSession, contract: PaperContract?) {
+        self.session = session; self.contract = contract
+        _symbol = State(initialValue: contract?.symbol ?? "")
+        _price = State(initialValue: contract?.last.map { String($0) } ?? "")
+    }
+    private var exchangeSplit: Bool { symbol.hasPrefix("SHFE.") || symbol.hasPrefix("INE.") }
+    private var isClose: Bool { action.hasPrefix("平") }
+    private var direction: String { action == "开多" || action == "平空" ? "BUY" : "SELL" }
+    private var offset: String { isClose ? (exchangeSplit && closeToday ? "CLOSETODAY" : "CLOSE") : "OPEN" }
+    private var valid: Bool {
+        guard let p = Double(price), p.isFinite, p > 0, let q = Int(quantity), (1...10).contains(q) else { return false }
+        return !symbol.isEmpty && session.canTrade
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("快期云端模拟 · 非实盘") {
+                    if let contract {
+                        LabeledContent(contract.displayName, value: symbol)
+                    } else {
+                        TextField("合约，例如 CZCE.SR701", text: $symbol).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    }
+                    Picker("方向", selection: $action) {
+                        ForEach(["开多","开空","平多","平空"], id: \.self) { Text($0) }
+                    }.pickerStyle(.segmented)
+                    if exchangeSplit && isClose {
+                        Picker("平仓类型", selection: $closeToday) {
+                            Text("平昨").tag(false)
+                            Text("平今").tag(true)
+                        }.pickerStyle(.segmented)
+                    }
+                    TextField("限价", text: $price).keyboardType(.decimalPad)
+                    if let contract {
+                        HStack {
+                            if let bid = contract.bid, bid.isFinite, bid > 0 { Button("买一 " + String(bid)) { price = String(bid) }.buttonStyle(.borderless) }
+                            if let ask = contract.ask, ask.isFinite, ask > 0 { Button("卖一 " + String(ask)) { price = String(ask) }.buttonStyle(.borderless) }
+                            if let last = contract.last, last.isFinite, last > 0 { Button("最新 " + String(last)) { price = String(last) }.buttonStyle(.borderless) }
+                        }.font(.caption)
+                    }
+                    TextField("手数（1–10）", text: $quantity).keyboardType(.numberPad)
+                    Text("仅限价模拟委托，报价为打开面板时的参考价。").font(.caption).foregroundStyle(.secondary)
+                    Button("确认模拟下单") { confirm = true }.disabled(!valid)
+                }
+                if let message = session.actionMessage { Section { Text(message).font(.caption) } }
+            }
+            .navigationTitle("模拟下单")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+            .confirmationDialog("确认模拟委托", isPresented: $confirm, titleVisibility: .visible) {
+                Button("提交模拟委托") {
+                    let sym = symbol, d = direction, o = offset, p = price, q = quantity
+                    Task { await session.submit(symbol: sym, direction: d, offset: o, price: p, quantity: q); dismiss() }
+                }
+            } message: { Text(symbol + " " + action + " " + quantity + " 手 @ " + price) }
+        }.tint(MarketPalette.accent)
     }
 }
