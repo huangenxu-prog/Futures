@@ -1,30 +1,105 @@
 import SwiftUI
 import Combine
 
+// Native vertical paging: retain the current and adjacent page identities.
 struct InstrumentDetailView: View {
+    private let initial: FuturesInstrument
+    private let initialContract: MarketDataService.ContractQuote?
+    private let pages: [FuturesInstrument]
+    @State private var period = "15分"
+    @State private var visibleID: String?
+    @State private var activeID: String
+    @State private var scrolling = false
+
+    init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote? = nil, sequence: [FuturesInstrument] = []) {
+        initial = instrument
+        initialContract = selectedContract
+        var seen = Set<String>()
+        let unique = sequence.filter { seen.insert($0.id).inserted }
+        pages = unique.contains(where: { $0.id == instrument.id }) ? unique : [instrument]
+        _visibleID = State(initialValue: instrument.id)
+        _activeID = State(initialValue: instrument.id)
+    }
+
+    private var activeIndex: Int { pages.firstIndex { $0.id == activeID } ?? 0 }
+
+    var body: some View {
+        Group {
+            if pages.count <= 1 {
+                detail(initial, active: true)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) {
+                        VStack(spacing: 0) {
+                            ForEach(Array(pages.enumerated()), id: \.element.id) { index, item in
+                                Group {
+                                    if abs(index - activeIndex) <= 1 || item.id == visibleID {
+                                        detail(item, active: item.id == activeID)
+                                    } else {
+                                        MarketPalette.surface
+                                    }
+                                }
+                                .containerRelativeFrame(.vertical)
+                                .frame(maxWidth: .infinity)
+                                .clipped()
+                                .id(item.id)
+                            }
+                        }.scrollTargetLayout()
+                    }
+                    .scrollIndicators(.hidden)
+                    .scrollTargetBehavior(.paging)
+                    .scrollPosition(id: $visibleID, anchor: .top)
+                    .onScrollPhaseChange { _, phase in
+                        scrolling = phase != .idle
+                        if phase == .idle, let id = visibleID { activeID = id }
+                    }
+                    .onChange(of: visibleID) { _, id in
+                        if !scrolling, let id { activeID = id }
+                    }
+                    .onAppear {
+                        proxy.scrollTo(initial.id, anchor: .top)
+                    }
+                }
+            }
+        }
+        .background(MarketPalette.surface.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
+        .onAppear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true) }
+        .onDisappear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false) }
+    }
+
+    private func detail(_ item: FuturesInstrument, active: Bool) -> some View {
+        InstrumentDetailPage(instrument: item, selectedContract: item.id == initial.id ? initialContract : nil,
+                             period: $period, isActive: active)
+            .allowsHitTesting(active)
+            .accessibilityHidden(!active)
+    }
+}
+
+private struct InstrumentDetailPage: View {
     @Environment(\.mainContracts) private var contracts
     @EnvironmentObject private var favorites: Favorites
     @State private var showOptions = false
     @State private var tradeContract: PaperContract?
     @State private var showContracts = false
     @State private var showChartIndicatorSettings = false
-    @State private var instrument: FuturesInstrument
-    private let sequence: [FuturesInstrument]
+    private let instrument: FuturesInstrument
+    private let isActive: Bool
+    @Binding private var period: String
     @State private var selectedContract: MarketDataService.ContractQuote?
 
-    init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote? = nil, sequence: [FuturesInstrument] = []) {
-        _instrument = State(initialValue: instrument)
-        self.sequence = sequence
+    init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote?, period: Binding<String>, isActive: Bool) {
+        self.instrument = instrument
+        self.isActive = isActive
+        _period = period
         _selectedContract = State(initialValue: selectedContract)
     }
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
-    @State private var period = "15分"
     @AppStorage("qihui.chart.period-order.v1") private var storedPeriodOrder = ""
     @State private var showPeriodOrder = false
     @State private var rawBars: [MarketBar] = []
-    @State private var adjacentBars: [String: [MarketBar]] = [:]
     @State private var chartFeed = DirectChartFeed<[MarketBar]>()
     @State private var liveQuote: MarketDataService.MainContract?
     @State private var selectedCandleTime: Int64? = nil
@@ -80,7 +155,7 @@ struct InstrumentDetailView: View {
                         previousSettlement: selectedContract == nil ? quote?.settlement : selectedContract?.settlement,
                         showingIndicatorSettings: $showChartIndicatorSettings,
                         selectedCandleTime: $selectedCandleTime,
-                        onVerticalSwipe: { step in switchInstrument(step) }
+                        isInteractive: isActive
                     )
                     .id(chartKey)
                     .frame(maxHeight: .infinity)
@@ -92,7 +167,8 @@ struct InstrumentDetailView: View {
         .padding(.top, 2)
         .background(MarketPalette.surface.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .task(id: chartSymbol) {
+        .task(id: chartSymbol + (isActive ? "/active" : "/preview")) {
+            guard isActive else { return }
             // Contract metadata, not displayed price magnitude, determines
             // precision. The main-contract snapshot does not include priceTick,
             // so request it from the existing listed-contract endpoint.
@@ -109,41 +185,29 @@ struct InstrumentDetailView: View {
                 }
             }
         }
-        .task(id: chartKey + "/neighbors/" + (scenePhase == .active ? "active" : "paused")) {
-            guard scenePhase == .active,
-                  let index = sequence.firstIndex(where: { $0.id == instrument.id }) else { return }
-            let seconds = periodSeconds
-            let currentKey = chartKey
-            let neighbors = [index + 1, index - 1].filter { sequence.indices.contains($0) }
-            let symbols = neighbors.compactMap { contracts[sequence[$0].id]?.code }
-            for symbol in symbols {
-                guard !Task.isCancelled, chartKey == currentKey else { return }
-                let key = symbol + "/" + String(seconds)
-                if adjacentBars[key] != nil { continue }
-                let cached = await Task.detached(priority: .utility) {
-                    MarketDataService.cached(symbol: symbol, period: seconds)
-                }.value
-                guard !Task.isCancelled, chartKey == currentKey else { return }
-                if let cached, !cached.isEmpty {
-                    adjacentBars[key] = cached
-                } else if let fetched = try? await MarketDataService.fetch(symbol: symbol, period: seconds, count: KlineStartupMerge.initialCount, mergeCached: false),
-                          !Task.isCancelled, chartKey == currentKey, !fetched.isEmpty {
-                    adjacentBars[key] = fetched
-                    MarketDataService.cache(fetched, symbol: symbol, period: seconds)
-                }
-                if adjacentBars.count > 6 {
-                    let keep = Set(symbols.map { $0 + "/" + String(seconds) })
-                    adjacentBars = adjacentBars.filter { keep.contains($0.key) }
-                }
-            }
-        }
-        .task(id: chartKey + (scenePhase == .active ? "/active" : "/paused")) {
+        .task(id: chartKey + (scenePhase == .active ? "/foreground" : "/paused") + (isActive ? "/live" : "/preview")) {
             guard scenePhase == .active else { return }
             let symbol = chartSymbol
             let seconds = periodSeconds
             let key = chartKey
             if displayedKey != key {
-                prepareCachedCandles(symbol: symbol, period: seconds)
+                let cached = await Task.detached(priority: .utility) {
+                    MarketDataService.cached(symbol: symbol, period: seconds)
+                }.value
+                guard !Task.isCancelled, chartKey == key else { return }
+                prepareCachedCandles(symbol: symbol, period: seconds, prepared: cached ?? [])
+            }
+            if !isActive {
+                // Adjacent pages own their own rendered chart, but no live stream.
+                // Their single HTTP history request is cancelled on activation.
+                if rawBars.isEmpty, let fetched = try? await MarketDataService.fetch(symbol: symbol, period: seconds, count: KlineStartupMerge.initialCount, mergeCached: false),
+                   !Task.isCancelled, chartKey == key, !fetched.isEmpty {
+                    rawBars = fetched
+                    chartFeed.publish(key: key, snapshot: fetched)
+                    MarketDataService.cache(fetched, symbol: symbol, period: seconds)
+                    loading = false
+                }
+                return
             }
             // The SSE handshake already contains an authoritative history page.
             // Only hydrate by HTTP if it is incomplete or the stream fails.
@@ -204,36 +268,17 @@ struct InstrumentDetailView: View {
                 if !updated.contains(period) { period = updated.first ?? "15分" }
             }
         }
-        .onAppear {
-            NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true)
-        }
-        .onDisappear {
-            NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false)
+        .onChange(of: isActive) { _, active in
+            if !active { selectedCandleTime = nil }
         }
     }
     @MainActor
-    private func switchInstrument(_ step: Int) {
-        guard tradeContract == nil, !showOptions, !showContracts, !showChartIndicatorSettings, !showPeriodOrder,
-              selectedCandleTime == nil,
-              let index = sequence.firstIndex(where: { $0.id == instrument.id }),
-              sequence.indices.contains(index + step) else { return }
-        let next = sequence[index + step]
-        guard next.id != instrument.id else { return }
-        instrument = next
-        selectedContract = nil
-        liveQuote = nil
-        tradeContract = nil
-        currentPriceTick = nil
-        currentVolumeMultiple = nil
-        prepareCachedCandles(symbol: chartSymbol, period: periodSeconds)
-    }
-    @MainActor
-    private func prepareCachedCandles(symbol: String, period: Int) {
+    private func prepareCachedCandles(symbol: String, period: Int, prepared: [MarketBar]? = nil) {
         displayedKey = chartKey
         lastStreamCandleKey = nil
         mostRecentStreamBar = nil
         lastCachedCandleAt = nil
-        rawBars = adjacentBars[symbol + "/" + String(period)] ?? MarketDataService.cached(symbol: symbol, period: period) ?? []
+        rawBars = prepared ?? MarketDataService.cached(symbol: symbol, period: period) ?? []
         chartFeed.publish(key: chartKey, snapshot: rawBars)
         selectedCandleTime = nil
         loadError = nil

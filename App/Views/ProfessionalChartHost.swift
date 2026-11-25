@@ -18,6 +18,7 @@ struct ProfessionalChartHost: View {
     var isReplay = false
     var onReplayApplied: ((MarketBar, Double) -> Void)? = nil
     var onVerticalSwipe: ((Int) -> Void)? = nil
+    var isInteractive = true
     @State private var feedOwner = UUID()
     @AppStorage(CandleAppearance.hollowKey) private var hollowRising = true
     @AppStorage(CandleAppearance.upKey) private var candleUp = CandleAppearance.automatic
@@ -216,6 +217,17 @@ struct ProfessionalChartHost: View {
                 synchronizeBars(previous: previous ?? [], incoming: incoming)
             }
         }
+        .onChange(of: isInteractive) { _, active in
+            if active {
+                displaySettings = ChartDisplaySettings.load()
+                configureChart()
+            } else {
+                historyTask?.cancel()
+                historyTask = nil
+                model.activeDrawingTool = nil
+                configureChart()
+            }
+        }
         .onChange(of: displaySettings) { _, current in
             model.indicators = current.indicators()
             current.save()
@@ -380,7 +392,7 @@ struct ProfessionalChartHost: View {
             case .drawing:
                 saveDrawings()
             case .approachedHistoryStart:
-                guard !isReplay, historyTask == nil else { return }
+                guard isInteractive, !isReplay, historyTask == nil else { return }
                 historyTask = Task { @MainActor in
                     await fetchOlderHistory()
                     historyTask = nil
