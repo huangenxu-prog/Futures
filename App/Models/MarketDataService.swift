@@ -126,6 +126,8 @@ enum MarketDataService {
         let last, settlement, bid, ask, volume, interest, previousInterest: Double?
         let bidVolume, askVolume: Double?
         var opening: Double? = nil
+        var highest: Double? = nil
+        var lowest: Double? = nil
         let time: String?
 
         var identity: MainContract {

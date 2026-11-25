@@ -54,6 +54,10 @@ struct LightMarketView: View {
     @State private var scope: Scope = .favorites
     @State private var search = ""
     @State private var editing = false
+    @State private var dataOffset: CGFloat = 0
+    @GestureState private var horizontalDrag: CGFloat = 0
+    @State private var revealedFavorite: String?
+    @State private var dataViewport: CGFloat = 220
     @AppStorage("qihui.appearance.mode.v1") private var appearanceMode = AppAppearanceMode.dark.rawValue
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedInstrument: FuturesInstrument?
@@ -210,14 +214,7 @@ struct LightMarketView: View {
                             .listRowBackground(MarketPalette.surface)
                             .listRowSeparatorTint(MarketPalette.divider)
                             .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if favorites.ids.contains(item.id) {
-                                    Button("移出自选", role: .destructive) { favorites.toggle(item.id) }
-                                } else {
-                                    Button("加入自选") { favorites.toggle(item.id) }
-                                        .tint(MarketPalette.accent)
-                                }
-                            }
+
                     }
                     .onMove(perform: move)
                     if instruments.isEmpty {
@@ -328,6 +325,7 @@ struct LightMarketView: View {
                     scope = option
                     selectedCategory = "全部"
                     editing = false
+                    revealedFavorite = nil
                 } label: {
                     VStack(spacing: 9) {
                         Text(option.rawValue)
@@ -396,96 +394,146 @@ struct LightMarketView: View {
 
     private var showsFavoriteControl: Bool { scope != .favorites || !search.isEmpty }
 
-    // The header and every row share exactly the same column widths.
-    private let lastWidth: CGFloat = 64
-    private let changeWidth: CGFloat = 54
-    private let quantityWidth: CGFloat = 53
-
+    private let nameWidth: CGFloat = 115
+    private let columns: [(String, CGFloat)] = [
+        ("最新价",64),("涨跌幅",62),("成交量",67),("持仓量",67),
+        ("昨结",65),("日增仓",75),("今开",65),("最高",65),("最低",65),
+        ("振幅",65),("中间价",70),("沉淀资金",78),("资金流向",78)
+    ]
+    private var contentWidth: CGFloat { columns.reduce(0) { $0 + $1.1 } }
+    private func clampedOffset(_ value: CGFloat, width: CGFloat) -> CGFloat {
+        min(max(0, value), max(0, contentWidth - width))
+    }
+    private var dataGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .updating($horizontalDrag) { value, state, _ in
+                if abs(value.translation.width) > abs(value.translation.height) * 1.3 {
+                    state = -value.translation.width
+                }
+            }
+            .onEnded { value in
+                guard abs(value.translation.width) > abs(value.translation.height) * 1.3 else { return }
+                dataOffset = clampedOffset(dataOffset - value.translation.width, width: dataViewport)
+            }
+    }
+    private func slidingData<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        GeometryReader { geometry in
+            content()
+                .frame(width: contentWidth, alignment: .leading)
+                .offset(x: -clampedOffset(dataOffset + horizontalDrag, width: geometry.size.width))
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
+                .clipped()
+                .contentShape(Rectangle())
+                .simultaneousGesture(dataGesture)
+        }
+    }
     private var columnHeadings: some View {
         HStack(spacing: 5) {
-            Text("品种").frame(maxWidth: .infinity, alignment: .leading)
-            Text("最新价").frame(width: lastWidth, alignment: .trailing)
-            Text("涨跌幅").frame(width: changeWidth, alignment: .trailing)
-            Text("成交量").frame(width: quantityWidth, alignment: .trailing)
-            Text("持仓").frame(width: quantityWidth, alignment: .trailing)
-            if showsFavoriteControl || editing {
-                Color.clear.frame(width: 23, height: 1)
+            Text("品种").frame(width: nameWidth, alignment: .leading)
+            GeometryReader { geo in
+                slidingData {
+                    HStack(spacing: 0) {
+                        ForEach(columns.indices, id: \.self) { index in
+                            Text(columns[index].0).frame(width: columns[index].1, alignment: .trailing)
+                        }
+                    }
+                }
+                .onAppear { dataViewport = geo.size.width }
+                .onChange(of: geo.size.width) { _, width in dataViewport = width; dataOffset = clampedOffset(dataOffset, width: width) }
             }
+            if showsFavoriteControl || editing { Color.clear.frame(width: 23) }
         }
         .font(.system(size: 10, weight: .medium))
         .foregroundStyle(MarketPalette.muted)
-        .padding(.horizontal, 12)
-        .frame(height: 33)
+        .padding(.horizontal, 12).frame(height: 33)
         .background(MarketPalette.background)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(MarketPalette.divider).frame(height: 1)
-        }
+        .overlay(alignment: .bottom) { Rectangle().fill(MarketPalette.divider).frame(height: 1) }
     }
-
     private func marketRow(_ item: FuturesInstrument) -> some View {
-        let quote = quote(for: item.id)
+        let q = quote(for: item.id)
         let isFavorite = favorites.ids.contains(item.id)
         return HStack(spacing: 5) {
-            Button {
-                if !editing { detailSequence = instruments; selectedInstrument = item }
-            } label: {
-                HStack(spacing: 5) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(item.name + (quote.map { " " + $0.month } ?? ""))
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(MarketPalette.ink)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.68)
-                        Text(quote?.code ?? item.id)
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(MarketPalette.muted)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
+            ZStack(alignment: .leading) {
+                Button {
+                    if !editing {
+                        if revealedFavorite == item.id { revealedFavorite = nil }
+                        else { detailSequence = instruments; selectedInstrument = item }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    Text(quote?.last?.formatted() ?? "--")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(MarketPalette.movement(quote?.change(basis: changeBasis)))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.65)
-                        .frame(width: lastWidth, alignment: .trailing)
-                    Text(quote?.changePercent(basis: changeBasis) ?? "--")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(MarketPalette.movement(quote?.change(basis: changeBasis)))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                        .frame(width: changeWidth, alignment: .trailing)
-                    quantityCell(quote?.volume)
-                    quantityCell(quote?.interest)
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.name + (q.map { " " + $0.month } ?? ""))
+                            .font(.system(size: 14, weight: .semibold)).foregroundStyle(MarketPalette.ink)
+                            .lineLimit(1).minimumScaleFactor(0.68)
+                        Text(q?.code ?? item.id)
+                            .font(.system(size: 9, design: .monospaced)).foregroundStyle(MarketPalette.muted)
+                            .lineLimit(1).minimumScaleFactor(0.7)
+                    }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 57)
+                }.buttonStyle(.plain)
+                if revealedFavorite == item.id && isFavorite {
+                    Button(role: .destructive) {
+                        revealedFavorite = nil
+                        favorites.toggle(item.id)
+                    } label: {
+                        Text("移出自选").font(.caption.weight(.medium)).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity).frame(height: 45)
+                            .background(MarketPalette.up, in: RoundedRectangle(cornerRadius: 5))
+                    }.buttonStyle(.plain)
                 }
-                .frame(height: 57)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .frame(width: nameWidth)
+            .contentShape(Rectangle())
+            .simultaneousGesture(DragGesture(minimumDistance: 18).onEnded { value in
+                guard !editing, isFavorite, abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
+                if value.translation.width > 28 { revealedFavorite = item.id }
+                else if value.translation.width < -28 { revealedFavorite = nil }
+            })
+            .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in
+                if scope == .favorites && search.isEmpty && sortBy == "默认" { revealedFavorite = nil; editing = true }
+            })
+            slidingData {
+                HStack(spacing: 0) {
+                    ForEach(columns.indices, id: \.self) { index in
+                        Text(dataValue(index, q))
+                            .font(.system(size: index == 0 ? 14 : 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(index < 2 ? MarketPalette.movement(q?.change(basis: changeBasis)) : MarketPalette.ink)
+                            .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
+                            .frame(width: columns[index].1, alignment: .trailing)
+                    }
+                }
+            }
             if showsFavoriteControl {
                 Button { favorites.toggle(item.id) } label: {
-                    Image(systemName: isFavorite ? "star.fill" : "star")
-                        .font(.system(size: 12))
+                    Image(systemName: isFavorite ? "star.fill" : "star").font(.system(size: 12))
                         .foregroundStyle(isFavorite ? MarketPalette.accent : MarketPalette.muted)
                         .frame(width: 23, height: 40)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel(isFavorite ? "移出自选" : "加入自选")
+                }.buttonStyle(.borderless)
             }
-        }
+        }.frame(height: 57)
     }
-
-    private func quantityCell(_ value: Double?) -> some View {
-        Text(CompactMarketQuantity.format(value))
-            .font(.system(size: 11, weight: .medium, design: .rounded))
-            .foregroundStyle(MarketPalette.ink)
-            .monospacedDigit()
-            .lineLimit(1)
-            .minimumScaleFactor(0.65)
-            .frame(width: quantityWidth, alignment: .trailing)
+    private func dataValue(_ index: Int, _ q: MarketDataService.MainContract?) -> String {
+        func number(_ value: Double?) -> String {
+            guard let value, value.isFinite else { return "--" }
+            return value.formatted()
+        }
+        guard let q else { return "--" }
+        switch index {
+        case 0: return number(q.last)
+        case 1: return q.changePercent(basis: changeBasis)
+        case 2: return CompactMarketQuantity.format(q.volume)
+        case 3: return CompactMarketQuantity.format(q.interest)
+        case 4: return number(q.settlement)
+        case 5: return number(q.interestChange)
+        case 6: return number(q.opening)
+        case 7: return number(q.highest)
+        case 8: return number(q.lowest)
+        case 9:
+            guard let h = q.highest, let l = q.lowest, let base = q.settlement, base > 0, h >= l else { return "--" }
+            return String(format: "%.2f%%", (h-l)/base*100)
+        case 10:
+            guard let bid = q.bid, let ask = q.ask, bid > 0, ask >= bid else { return "--" }
+            return number((bid+ask)/2)
+        default: return "--"
+        }
     }
 
     private func move(from source: IndexSet, to destination: Int) {

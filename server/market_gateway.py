@@ -184,6 +184,7 @@ def snapshot(quote):
         "last": "last_price", "settlement": "pre_settlement", "opening": "open", "bid": "bid_price1",
         "ask": "ask_price1", "volume": "volume", "interest": "open_interest",
         "previousInterest": "pre_open_interest",
+        "highest": "highest", "lowest": "lowest",
         "bidVolume": "bid_volume1", "askVolume": "ask_volume1",
     }
     values = {"time": quote.datetime}
