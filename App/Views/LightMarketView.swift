@@ -530,22 +530,11 @@ struct LightMarketView: View {
 }
 
 
-// Retain the project's older deployment target. Native direction gating is
-// available on iOS 18 and later; older systems retain simultaneous gestures.
+// The app requires iOS 18 or newer. Use native direction gating on every device.
 private struct MarketHorizontalSwipeModifier: ViewModifier {
     let onSwipe: (CGFloat) -> Void
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 18.0, *) {
-            content.gesture(MarketHorizontalSwipe(onSwipe: onSwipe))
-        } else {
-            content.simultaneousGesture(
-                DragGesture(minimumDistance: 25).onEnded { value in
-                    let t = value.translation
-                    guard abs(t.width) > 25, abs(t.width) > abs(t.height) * 1.5 else { return }
-                    onSwipe(t.width)
-                }
-            )
-        }
+    func body(content: Content) -> some View {
+        content.gesture(MarketHorizontalSwipe(onSwipe: onSwipe))
     }
 }
 
