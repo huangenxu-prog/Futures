@@ -1,6 +1,46 @@
 
 import SwiftUI
 import Foundation
+import Security
+
+private enum TradeKeychain {
+    private static func query(_ address: String) -> [String: Any]? {
+        guard let parts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
+              parts.scheme?.lowercased() == "https", let host = parts.host?.lowercased(),
+              parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil else { return nil }
+        let scope = "https://" + host + ":" + String(parts.port ?? 443) + parts.path
+        return [kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: "com.huangenxu.futures.trade.gateway",
+                kSecAttrAccount as String: scope,
+                kSecAttrSynchronizable as String: false]
+    }
+    static func load(_ address: String) -> String {
+        guard var q = query(address) else { return "" }
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+    static func save(_ key: String, address: String) -> Bool {
+        guard let q = query(address), !key.isEmpty else { return false }
+        let attributes: [String: Any] = [kSecValueData as String: Data(key.utf8)]
+        let status = SecItemUpdate(q as CFDictionary, attributes as CFDictionary)
+        if status == errSecSuccess { return true }
+        guard status == errSecItemNotFound else { return false }
+        var item = q
+        item[kSecValueData as String] = Data(key.utf8)
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+    }
+    static func remove(_ address: String) -> Bool {
+        guard let q = query(address) else { return false }
+        let status = SecItemDelete(q as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
+}
+
 
 private struct CloudSnapshot: Decodable {
     struct Account: Decodable {
@@ -134,6 +174,9 @@ private final class CloudTradeSession: ObservableObject {
             generation = UUID()
             pendingOrder = nil; actionMessage = nil
             snapshot = data; signedIn = true
+            if !TradeKeychain.save(key, address: address) {
+                self.error = "登录成功，但设备安全存储未保存网关密钥"
+            }
         } catch {
             self.error = error.localizedDescription
         }
@@ -199,6 +242,7 @@ struct TradingCenterView: View {
     @StateObject private var session = CloudTradeSession.shared
     @AppStorage("qihui.trade.endpoint.v1") private var address = "https://8.153.96.190"
     @State private var key = ""
+    @State private var keychainMessage: String?
     @State private var username = ""
     @State private var password = ""
     @State private var real = false
@@ -259,7 +303,12 @@ struct TradingCenterView: View {
                             TextField("HTTPS 网关地址", text: $address)
                                 .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                             SecureField("网关访问密钥", text: $key)
-                            Text("首次部署需配置独立交易服务与可信 HTTPS。密码和访问密钥不写入本地存储。")
+                            Button("清除已保存密钥", role: .destructive) {
+                                if TradeKeychain.remove(address) { key = ""; keychainMessage = nil }
+                                else { keychainMessage = "无法清除设备钥匙串密钥" }
+                            }.disabled(session.busy)
+                            if let keychainMessage { Text(keychainMessage).font(.caption).foregroundStyle(.red) }
+                            Text("登录成功后自动记住网关密钥，仅保存在本机钥匙串。快期密码不保存。")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Section {
@@ -268,7 +317,6 @@ struct TradingCenterView: View {
                                 let secret = password
                                 password = ""
                                 let access = key
-                                key = ""
                                 Task { await session.login(address: address, key: access, username: user, password: secret) }
                             } label: {
                                 HStack {
@@ -344,7 +392,13 @@ struct TradingCenterView: View {
                     do { try await Task.sleep(for: .seconds(5)) } catch { return }
                 }
             }
-            .onAppear { openInitialIfReady() }
+            .onAppear {
+                if key.isEmpty { key = TradeKeychain.load(address) }
+                openInitialIfReady()
+            }
+            .onChange(of: address) { _, newAddress in
+                key = TradeKeychain.load(newAddress); keychainMessage = nil
+            }
             .onChange(of: session.canTrade) { _, _ in openInitialIfReady() }
             .sheet(isPresented: $local) {
                 LocalPaperTradingCenterView(favoriteIDs: favoriteIDs, mainCodes: mainCodes, initialContract: initialContract)
