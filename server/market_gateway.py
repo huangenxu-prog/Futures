@@ -16,7 +16,7 @@ from tqsdk import TqApi, TqAuth
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 AUTH_PATH = os.environ.get("TQ_AUTH_FILE", "/root/tq_test/auth.json")
-PERIODS = {60, 300, 900, 1800, 3600, 86400}
+PERIODS = {60, 180, 300, 600, 900, 1800, 3600, 7200, 86400, 604800}
 SYMBOLS = {
     "SHFE.rb", "SHFE.ag", "SHFE.au", "SHFE.cu",
     "CZCE.SR", "CZCE.RM", "CZCE.MA", "CZCE.CF", "CZCE.TA", "CZCE.SA",

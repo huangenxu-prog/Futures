@@ -13,14 +13,8 @@ struct QihuiSettingsView: View {
     @State private var candle = false
     @State private var period = false
     @AppStorage("qihui.chart.period-order.v1") private var storedPeriodOrder = ""
-    private var periods: [String] {
-        let defaults = ["1分","5分","15分","30分","60分","日线"]
-        var result: [String] = []
-        for item in storedPeriodOrder.split(separator: ",").map(String.init) + defaults {
-            if defaults.contains(item), !result.contains(item) { result.append(item) }
-        }
-        return result
-    }
+    @AppStorage("qihui.chart.period-hidden.v1") private var hiddenPeriods = "3分,10分,120分"
+    private var periods: [String] { QihuiPeriods.visible(storedPeriodOrder, hidden: hiddenPeriods) }
     var body: some View {
         NavigationStack {
             Form {
@@ -60,7 +54,10 @@ struct QihuiSettingsView: View {
             .sheet(isPresented: $indicators) { IndicatorSettingsView(settings: ChartDisplaySettings.load()) { $0.save() } }
             .sheet(isPresented: $candle) { CandleAppearanceView() }
             .sheet(isPresented: $period) {
-                PeriodOrderView(order: periods, label: { ["1分":"1m","5分":"5m","15分":"15m","30分":"30m","60分":"1h","日线":"日"][$0] ?? $0 }) { storedPeriodOrder = $0.joined(separator: ",") }
+                PeriodOrderView(order: periods, label: { QihuiPeriods.labels[$0] ?? $0 }) { updated in
+                    storedPeriodOrder = updated.joined(separator: ",")
+                    hiddenPeriods = QihuiPeriods.all.filter { !updated.contains($0) }.joined(separator: ",")
+                }
             }
         }.tint(MarketPalette.accent)
     }

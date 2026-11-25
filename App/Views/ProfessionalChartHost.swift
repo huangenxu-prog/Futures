@@ -63,7 +63,6 @@ struct ProfessionalChartHost: View {
     @State private var drawingsRestored = false
     @State private var historyDepth = 1100
     @State private var historyTask: Task<Void, Never>?
-    @State private var showingBacktest = false
 
     private var interval: ChartInterval {
         ChartInterval(seconds: TimeInterval(period))
@@ -115,7 +114,7 @@ struct ProfessionalChartHost: View {
         // The chart's X values are synthetic, while labels must always reflect
         // the original China futures exchange timestamps.
         let mapping = sessionAxis
-        let daily = period == 86_400
+        let daily = period >= 86_400
         return TimeFormatter { chartDate, _, context in
             guard let actual = mapping.nearestActual(for: chartDate) else { return "" }
             let formatter = DateFormatter()
@@ -228,9 +227,6 @@ struct ProfessionalChartHost: View {
                 displaySettings = updated
             }
         }
-        .sheet(isPresented:$showingBacktest) {
-            StrategyBacktestView(symbol:symbol,period:period,formulas:displaySettings.formulas,priceTick:priceTick,contractMultiplier:contractMultiplier)
-        }
         .onDisappear {
             feed.detach(owner: feedOwner)
             model.onEvent = nil
@@ -330,7 +326,6 @@ struct ProfessionalChartHost: View {
 
     private var drawingMenu: some View {
         Menu {
-            Button("指标回测",systemImage:"chart.xyaxis.line") { showingBacktest = true }
             Section("画线工具") {
                 Button("水平线", systemImage: "minus") { choose(.horizontalLine) }
                 Button("趋势线", systemImage: "chart.line.uptrend.xyaxis") { choose(.trendLine) }

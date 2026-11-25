@@ -91,11 +91,15 @@ private struct StrategyContractPicker: View {
                 }
                 Picker("公式执行周期",selection:$period) {
                     Text("1分钟").tag(60)
+                    Text("3分钟").tag(180)
                     Text("5分钟").tag(300)
+                    Text("10分钟").tag(600)
                     Text("15分钟").tag(900)
                     Text("30分钟").tag(1800)
                     Text("60分钟").tag(3600)
+                    Text("120分钟").tag(7200)
                     Text("日线").tag(86400)
+                    Text("周线").tag(604800)
                 }
                 Text("使用具体月份合约，不拼接不同合约的价格。")
                     .font(.caption).foregroundStyle(.secondary)

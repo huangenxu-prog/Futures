@@ -9,7 +9,6 @@ struct InstrumentDetailView: View {
     @State private var tradeContract: PaperContract?
     @State private var showContracts = false
     @State private var showChartIndicatorSettings = false
-    @State private var showCandleAppearance = false
     let instrument: FuturesInstrument
     @State private var selectedContract: MarketDataService.ContractQuote?
 
@@ -31,17 +30,9 @@ struct InstrumentDetailView: View {
     @State private var loading = false
     @State private var currentPriceTick: Double?
     @State private var currentVolumeMultiple: Double?
-    private static let defaultPeriods = ["1分","5分","15分","30分","60分","日线"]
-    private var periods: [String] {
-        var result: [String] = []
-        for item in storedPeriodOrder.split(separator: ",").map(String.init) + Self.defaultPeriods {
-            if Self.defaultPeriods.contains(item), !result.contains(item) { result.append(item) }
-        }
-        return result
-    }
-    private func periodLabel(_ item: String) -> String {
-        ["1分":"1m", "5分":"5m", "15分":"15m", "30分":"30m", "60分":"1h", "日线":"日"][item] ?? item
-    }
+    @AppStorage("qihui.chart.period-hidden.v1") private var hiddenPeriods = "3分,10分,120分"
+    private var periods: [String] { QihuiPeriods.visible(storedPeriodOrder, hidden: hiddenPeriods) }
+    private func periodLabel(_ item: String) -> String { QihuiPeriods.labels[item] ?? item }
     private var quote: MarketDataService.MainContract? { liveQuote ?? contracts[instrument.id] }
     private var chartSymbol: String { selectedContract?.code ?? quote?.code ?? instrument.id }
     private var chartKey: String { chartSymbol + "/" + period }
@@ -57,7 +48,7 @@ struct InstrumentDetailView: View {
     private var currentLast: Double? {
         (displayedKey == chartKey ? rawBars.last?.close : nil) ?? (selectedContract == nil ? quote?.last : selectedContract?.last)
     }
-    private var periodSeconds: Int { ["1分":60,"5分":300,"15分":900,"30分":1800,"60分":3600,"日线":86400][period] ?? 900 }
+    private var periodSeconds: Int { QihuiPeriods.seconds[period] ?? 900 }
     var body: some View {
         VStack(spacing: 3) {
                 topBar
@@ -178,10 +169,11 @@ struct InstrumentDetailView: View {
                 showContracts = false
             }
         }
-        .sheet(isPresented: $showCandleAppearance) { CandleAppearanceView() }
         .sheet(isPresented: $showPeriodOrder) {
             PeriodOrderView(order: periods, label: periodLabel) { updated in
                 storedPeriodOrder = updated.joined(separator: ",")
+                hiddenPeriods = QihuiPeriods.all.filter { !updated.contains($0) }.joined(separator: ",")
+                if !updated.contains(period) { period = updated.first ?? "15分" }
             }
         }
         .onAppear {
@@ -402,18 +394,22 @@ struct InstrumentDetailView: View {
 
     private var periodRow: some View {
         HStack(spacing: 3) {
+            ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 3) {
             ForEach(periods, id: \.self) { item in
                 Button { period = item } label: {
                     Text(periodLabel(item))
                         .font(.system(size: 13, weight: period == item ? .semibold : .medium))
                         .foregroundStyle(period == item ? Color.white : MarketPalette.muted)
-                        .frame(maxWidth: .infinity)
+                        .frame(minWidth: 44)
                         .frame(height: 29)
                         .background(period == item ? MarketPalette.accent : Color.clear,
                                     in: RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(period == item ? .isSelected : [])
+            }
+            }
             }
             actions
         }
@@ -427,7 +423,7 @@ struct InstrumentDetailView: View {
         let date = Date(timeIntervalSince1970: TimeInterval(timestamp))
         let formatter = DateFormatter()
         formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        formatter.dateFormat = period == "日线" ? "MM/dd" : "MM/dd HH:mm"
+        formatter.dateFormat = (period == "日线" || period == "周线") ? "MM/dd" : "MM/dd HH:mm"
         return formatter.string(from: date)
     }
     private func selectedCandleInfo(_ candle: MarketBar) -> some View {
@@ -461,8 +457,6 @@ struct InstrumentDetailView: View {
 
     private var actions: some View {
         Menu {
-            Button("K线样式") { showCandleAppearance = true }
-            Button("指标参数设置") { showChartIndicatorSettings = true }
             Button("周期排序") { showPeriodOrder = true }
         } label: {
             Image(systemName: "ellipsis")
@@ -519,7 +513,21 @@ struct InstrumentDetailView: View {
 }
 
 
-/// Reorder the existing supported periods without introducing new server intervals.
+enum QihuiPeriods {
+    static let all = ["1分","3分","5分","10分","15分","30分","60分","120分","日线","周线"]
+    static let defaults = ["1分","5分","15分","30分","60分","日线","周线"]
+    static let labels = ["1分":"1m","3分":"3m","5分":"5m","10分":"10m","15分":"15m","30分":"30m","60分":"1h","120分":"2h","日线":"日","周线":"周"]
+    static let seconds = ["1分":60,"3分":180,"5分":300,"10分":600,"15分":900,"30分":1800,"60分":3600,"120分":7200,"日线":86400,"周线":604800]
+    static func visible(_ stored: String, hidden: String) -> [String] {
+        var result: [String] = []
+        let excluded = Set(hidden.split(separator: ",").map(String.init))
+        for item in stored.split(separator: ",").map(String.init) + defaults + all {
+            if all.contains(item), !excluded.contains(item), !result.contains(item) { result.append(item) }
+        }
+        return result.isEmpty ? defaults : result
+    }
+}
+
 struct PeriodOrderView: View {
     @Environment(\.dismiss) private var dismiss
     @State var order: [String]
@@ -530,10 +538,19 @@ struct PeriodOrderView: View {
         NavigationStack {
             List {
                 ForEach(order, id: \.self) { item in
-                    Text(label(item))
+                    HStack {
+                        Text(label(item))
+                        Spacer()
+                        Button { if order.count > 1 { order.removeAll { $0 == item } } } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).disabled(order.count <= 1)
+                    }
                 }
                 .onMove { source, destination in
                     order.move(fromOffsets: source, toOffset: destination)
+                }
+                Section("未显示周期") {
+                    ForEach(QihuiPeriods.all.filter { !order.contains($0) }, id: \.self) { item in
+                        Button { order.append(item) } label: { Label(label(item), systemImage: "plus.circle") }
+                    }
                 }
             }
             .environment(\.editMode, .constant(.active))
