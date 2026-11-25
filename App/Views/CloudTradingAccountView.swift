@@ -172,7 +172,9 @@ private final class CloudTradeSession: ObservableObject {
             guard let session = reply.token, !session.isEmpty, let data = reply.snapshot else { throw CloudTradeError.unavailable }
             token = session; accessKey = key; endpoint = url
             generation = UUID()
-            pendingOrder = nil; actionMessage = nil
+            if let pendingOrder, data.orders?.contains(where: { $0.id == pendingOrder }) == true {
+                self.pendingOrder = nil; actionMessage = "已恢复委托记录"
+            } else if pendingOrder == nil { actionMessage = nil }
             snapshot = data; signedIn = true
             if !TradeKeychain.save(key, address: address) {
                 self.error = "登录成功，但设备安全存储未保存网关密钥"
@@ -196,7 +198,14 @@ private final class CloudTradeSession: ObservableObject {
         } catch {
             guard current == generation, !Task.isCancelled else { return }
             snapshot = nil
-            self.error = error.localizedDescription
+            if let failure = error as? CloudTradeError, case .expired = failure {
+                generation = UUID()
+                token = nil; endpoint = nil; accessKey = ""
+                signedIn = false
+                self.error = "交易会话已失效，请重新登录。网关密钥已保留。"
+            } else {
+                self.error = error.localizedDescription
+            }
         }
     }
     func logout() async {
@@ -392,7 +401,14 @@ struct TradingCenterView: View {
             .onChange(of: address) { _, newAddress in
                 key = TradeKeychain.load(newAddress); keychainMessage = nil
             }
-            .onChange(of: session.signedIn) { _, _ in openInitialIfReady() }
+            .onChange(of: session.signedIn) { _, signedIn in
+                if signedIn {
+                    openInitialIfReady()
+                } else {
+                    pendingAction = nil; cancelID = nil
+                    key = TradeKeychain.load(address)
+                }
+            }
             .sheet(isPresented: $local) {
                 LocalPaperTradingCenterView(favoriteIDs: favoriteIDs, mainCodes: mainCodes, initialContract: initialContract)
             }
