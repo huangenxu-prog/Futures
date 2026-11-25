@@ -2,7 +2,7 @@ import SwiftUI
 import Combine
 
 /// Local simulation only. Real-trading access cannot be enabled by a toggle.
-struct TradingCenterView:View {
+struct LocalPaperTradingCenterView:View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.futuresCatalog) private var catalog
@@ -33,9 +33,9 @@ struct TradingCenterView:View {
         NavigationStack {
             VStack(spacing:0) {
                 HStack(spacing:8) {
-                    Text("模拟账户").fontWeight(.semibold)
+                    Text("本地演练账户").fontWeight(.semibold)
                     Spacer()
-                    Text("实盘未连接").foregroundStyle(.secondary)
+                    Text("非快期云端").foregroundStyle(.secondary)
                 }.font(.caption).foregroundStyle(MarketPalette.accent)
                     .padding(12).background(MarketPalette.raised)
                 accountOverview
@@ -410,6 +410,13 @@ struct TradingCenterView:View {
 }
 
 struct QuickTradeSheet:View {
+    let contract:PaperContract
+    var body:some View {
+        TradingCenterView(initialContract:contract)
+    }
+}
+
+private struct LocalPaperQuickTradeSheet:View {
     let contract:PaperContract
     @AppStorage("qihui.paper-ledger.v1") private var saved = Data()
     @Environment(\.dismiss) private var dismiss
