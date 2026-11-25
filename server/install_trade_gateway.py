@@ -64,7 +64,7 @@ def main():
     old = CONF.read_bytes()
     source = old.decode()
     # Match the existing multiline root proxy, not the HTTP ACME server's inline location.
-    pattern = r"(?m)^([ \t]*)location[ \t]+/[ \t]*\{[ \t]*\n(?=[^{}]*proxy_pass[ \t]+http://127\.0\.0\.1:8765;)"
+    pattern = r"(?m)^([ \t]*)location[ \t]+/[ \t]*\{[ \t]*\n(?=[ \t]*limit_except GET \{ deny all; \}[ \t]*\n[ \t]*limit_req zone=qihui_requests burst=24 nodelay;[ \t]*\n[ \t]*limit_conn qihui_connections 16;[ \t]*\n[ \t]*proxy_pass http://127\.0\.0\.1:8765;)"
     matches = list(re.finditer(pattern, source))
     if len(matches) != 1 or "/v1/trade/" in source:
         raise RuntimeError("Unexpected Nginx configuration; no changes made")
@@ -72,6 +72,9 @@ def main():
     indent = match.group(1)
     location = "\n".join(indent + line for line in [
         "location ^~ /v1/trade/ {",
+        "    limit_except GET POST { deny all; }",
+        "    limit_req zone=qihui_requests burst=24 nodelay;",
+        "    limit_conn qihui_connections 16;",
         "    proxy_pass http://127.0.0.1:8766;",
         "    proxy_set_header X-Qihui-Access $http_x_qihui_access;",
         "    proxy_set_header Authorization $http_authorization;",
