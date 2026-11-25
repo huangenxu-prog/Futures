@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// A minimal, light trading terminal shell around the existing TqSdk feed.
 /// The chart, rather than decorative cards or account widgets, remains the focus.
@@ -396,19 +397,13 @@ struct LightMarketView: View {
     // Three complete fields per page, shared by all rows and the header.
     private let pages: [[Int]] = [[0,1,2],[3,4,5],[6,7,8],[9,10,4]]
     private let columns = ["最新价","涨跌幅","成交量","持仓量","昨结","日增仓","今开","最高","最低","振幅","中间价"]
-    private var dataGesture: some Gesture {
-        DragGesture(minimumDistance: 15)
-            .onEnded { value in
-                let dx = value.translation.width
-                guard abs(dx) > 25, abs(dx) > abs(value.translation.height) * 1.5 else { return }
-                dataPage = min(pages.count - 1, max(0, dataPage + (dx < 0 ? 1 : -1)))
-            }
-    }
-    private func slidingData<Content: View>(@ViewBuilder content: @escaping () -> Content) -> some View {
+    private func slidingData<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         content()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
-            .simultaneousGesture(dataGesture)
+            .gesture(MarketHorizontalSwipe { dx in
+                dataPage = min(pages.count - 1, max(0, dataPage + (dx < 0 ? 1 : -1)))
+            })
     }
     private var columnHeadings: some View {
         HStack(spacing: 5) {
@@ -428,11 +423,11 @@ struct LightMarketView: View {
         .background(MarketPalette.background)
         .overlay(alignment: .bottom) { Rectangle().fill(MarketPalette.divider).frame(height: 1) }
     }
-    private func favoriteSwipe(_ id: String, isFavorite: Bool) -> some Gesture {
-        DragGesture(minimumDistance: 12).onEnded { value in
-            guard !editing, isFavorite, abs(value.translation.width) > abs(value.translation.height) * 1.5 else { return }
-            if value.translation.width > 22 { revealedFavorite = id }
-            else if value.translation.width < -22 { revealedFavorite = nil }
+    private func favoriteSwipe(_ id: String, isFavorite: Bool) -> MarketHorizontalSwipe {
+        MarketHorizontalSwipe { dx in
+            guard !editing, isFavorite else { return }
+            if dx > 0 { revealedFavorite = id }
+            else if revealedFavorite == id { revealedFavorite = nil }
         }
     }
     private func marketRow(_ item: FuturesInstrument) -> some View {
@@ -471,12 +466,11 @@ struct LightMarketView: View {
                         }.buttonStyle(.plain).accessibilityLabel("收起移出自选")
                     }
                     .background(MarketPalette.surface)
-                    .highPriorityGesture(favoriteSwipe(item.id, isFavorite: isFavorite))
                 }
             }
             .frame(width: nameWidth)
             .contentShape(Rectangle())
-            .simultaneousGesture(favoriteSwipe(item.id, isFavorite: isFavorite))
+            .gesture(favoriteSwipe(item.id, isFavorite: isFavorite))
             .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in
                 if scope == .favorites && search.isEmpty && sortBy == "默认" { revealedFavorite = nil; editing = true }
             })
@@ -532,5 +526,39 @@ struct LightMarketView: View {
         let id = instruments[from].id
         let target = destination > from ? destination - 1 : destination
         favorites.move(id, to: min(max(0, target), favorites.ids.count - 1))
+    }
+}
+
+
+// Reject vertical motion before the gesture begins, not after scrolling ends.
+private struct MarketHorizontalSwipe: UIGestureRecognizerRepresentable {
+    let onSwipe: (CGFloat) -> Void
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            let v = pan.velocity(in: pan.view)
+            return abs(v.x) > abs(v.y) * 1.5 && abs(v.x) > 0
+        }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            false
+        }
+    }
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let pan = UIPanGestureRecognizer()
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = context.coordinator
+        pan.cancelsTouchesInView = true
+        return pan
+    }
+    func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        recognizer.delegate = context.coordinator
+    }
+    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        guard recognizer.state == .ended else { return }
+        let t = recognizer.translation(in: recognizer.view)
+        guard abs(t.x) > 25, abs(t.x) > abs(t.y) * 1.5 else { return }
+        onSwipe(t.x)
     }
 }
