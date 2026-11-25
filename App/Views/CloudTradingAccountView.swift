@@ -349,6 +349,12 @@ struct TradingCenterView: View {
     @Environment(\.futuresCatalog) private var catalog
     @State private var selected: PaperContract?
     @State private var selecting = false
+    @State private var expandedHolding: String?
+    @State private var detailedQuote: MarketDataService.ContractQuote?
+    @State private var chartQuote: MarketDataService.ContractQuote?
+    @State private var chartProduct: FuturesInstrument?
+    @State private var showHoldingChart = false
+    @AppStorage("qihui.change.basis.v1") private var changeBasis = "settlement"
     @State private var selectionRequest = UUID()
     @State private var selectedPrice = ""
     @State private var selectedQuantity = 1
@@ -461,6 +467,11 @@ struct TradingCenterView: View {
             .sheet(isPresented: $selecting) {
                 PaperContractPicker(instruments: catalog, favoriteIDs: favoriteIDs, mainCodes: mainCodes) { c in
                     choose(c); selecting = false
+                }
+            }
+            .fullScreenCover(isPresented: $showHoldingChart) {
+                if let chartProduct, let chartQuote {
+                    InstrumentDetailView(instrument: chartProduct, selectedContract: chartQuote)
                 }
             }
             .sheet(isPresented: $showAccount) {
@@ -576,39 +587,70 @@ struct TradingCenterView: View {
     }
     private var orderPanel: some View {
         VStack(spacing: 7) {
-            Button { if !quickOnly { selecting = true } } label: {
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                    Text(selected.map { contractName($0.symbol) } ?? "选择交易合约")
-                    Spacer()
-                    Text(selected?.symbol ?? "").font(.caption2).foregroundStyle(.secondary)
-                    if !quickOnly { Image(systemName: "chevron.right").font(.caption2) }
-                }.foregroundStyle(MarketPalette.ink)
+            HStack(alignment: .top, spacing: 8) {
+                VStack(spacing: 7) {
+                    Button { if !quickOnly { selecting = true } } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "magnifyingglass")
+                            Text(selected.map { contractName($0.symbol) } ?? "选择交易合约")
+                                .lineLimit(1).minimumScaleFactor(0.7)
+                            Spacer(minLength: 0)
+                            if !quickOnly { Image(systemName: "chevron.right").font(.caption2) }
+                        }.font(.subheadline).foregroundStyle(MarketPalette.ink)
+                            .padding(8).frame(height: 36)
+                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(MarketPalette.divider))
+                    }.buttonStyle(.plain)
+                    HStack(spacing: 4) {
+                        Text("最新").foregroundStyle(.secondary)
+                        Text(selected?.last.map { $0.formatted() } ?? "--")
+                            .foregroundStyle(MarketPalette.movement(detailedQuote?.change(basis: changeBasis)))
+                        Spacer(minLength: 0)
+                        Text(detailedQuote?.changePercent(basis: changeBasis) ?? "--")
+                            .foregroundStyle(MarketPalette.movement(detailedQuote?.change(basis: changeBasis)))
+                    }.font(.caption2).monospacedDigit()
+                    HStack(spacing: 4) {
+                        Button { stepPrice(-1) } label: { Image(systemName: "minus").frame(width: 30, height: 30).background(MarketPalette.raised, in: RoundedRectangle(cornerRadius: 4)) }.buttonStyle(.plain).disabled(selected?.tick == nil)
+                        TextField("限价", text: $selectedPrice).keyboardType(.decimalPad).multilineTextAlignment(.center).monospacedDigit()
+                        Button { stepPrice(1) } label: { Image(systemName: "plus").frame(width: 30, height: 30).background(MarketPalette.raised, in: RoundedRectangle(cornerRadius: 4)) }.buttonStyle(.plain).disabled(selected?.tick == nil)
+                    }.padding(3).overlay(RoundedRectangle(cornerRadius: 5).stroke(MarketPalette.divider))
+                    HStack(spacing: 4) {
+                        Button { selectedQuantity = max(1, selectedQuantity - 1) } label: { Image(systemName: "minus").frame(width: 30, height: 30).background(MarketPalette.raised, in: RoundedRectangle(cornerRadius: 4)) }.buttonStyle(.plain)
+                        TextField("手数", value: $selectedQuantity, format: .number.grouping(.never)).keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit()
+                        Button { selectedQuantity = min(10, selectedQuantity + 1) } label: { Image(systemName: "plus").frame(width: 30, height: 30).background(MarketPalette.raised, in: RoundedRectangle(cornerRadius: 4)) }.buttonStyle(.plain)
+                    }.padding(3).overlay(RoundedRectangle(cornerRadius: 5).stroke(MarketPalette.divider))
+                }.frame(maxWidth: .infinity)
+                VStack(spacing: 7) {
+                    quoteLine("涨停", nil)
+                    quoteLine("最高", nil)
+                    quoteLine("卖一", selected?.ask, volume: detailedQuote?.askVolume)
+                    quoteLine("买一", selected?.bid, volume: detailedQuote?.bidVolume)
+                    quoteLine("最低", nil)
+                    quoteLine("跌停", nil)
+                }.padding(7).frame(width: 122)
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(MarketPalette.divider))
             }
-            HStack(spacing: 6) {
-                priceButton("买一", selected?.bid)
-                priceButton("最新", selected?.last)
-                priceButton("卖一", selected?.ask)
-            }
-            Text(quoteError ? "报价获取失败，请核对价格" : (quoteStamp == nil ? "等待报价" : "参考报价 · " + (quoteStamp?.formatted(date: .omitted, time: .standard) ?? "")))
-                .font(.caption2).foregroundStyle(.secondary)
             HStack {
-                Text("价格").font(.caption)
-                Button { stepPrice(-1) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).disabled(selected?.tick == nil)
-                TextField("限价", text: $selectedPrice).keyboardType(.decimalPad).multilineTextAlignment(.center).monospacedDigit()
-                Button { stepPrice(1) } label: { Image(systemName: "plus.circle") }.buttonStyle(.borderless).disabled(selected?.tick == nil)
-            }
-            HStack {
-                Text("手数").font(.caption)
-                Button { selectedQuantity = max(1, selectedQuantity - 1) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless)
-                TextField("手数", value: $selectedQuantity, format: .number.grouping(.never)).keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit()
-                Button { selectedQuantity = min(10, selectedQuantity + 1) } label: { Image(systemName: "plus.circle") }.buttonStyle(.borderless)
-            }
+                Text(quoteError ? "报价失败" : (quoteStamp == nil ? "等待报价" : "参考报价"))
+                Spacer()
+                Text("最大可开 -- · 保证金 --")
+            }.font(.caption2).foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 tradeButton("开多", color: MarketPalette.up)
                 tradeButton("开空", color: MarketPalette.down)
             }
-        }.padding(.vertical, 8)
+        }.padding(.vertical, 6)
+    }
+    private func quoteLine(_ title: String, _ value: Double?, volume: Double? = nil) -> some View {
+        Button {
+            if let value, value.isFinite, value > 0 { selectedPrice = String(value) }
+        } label: {
+            HStack(spacing: 3) {
+                Text(title).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Text(value.map { $0.formatted() } ?? "--").foregroundStyle(MarketPalette.ink)
+                if let volume { Text(volume.formatted()).foregroundStyle(.secondary) }
+            }.font(.system(size: 10)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+        }.buttonStyle(.plain).disabled(value == nil)
     }
     private func priceButton(_ title: String, _ value: Double?) -> some View {
         Button {
@@ -633,6 +675,7 @@ struct TradingCenterView: View {
         if next > 0 { selectedPrice = next.formatted(.number.grouping(.never).precision(.fractionLength(0...8))) }
     }
     private func choose(_ c: PaperContract) {
+        detailedQuote = nil; expandedHolding = nil
         selected = c; selectedPrice = c.last.flatMap { $0.isFinite && $0 > 0 ? String($0) : nil } ?? ""
         selectedQuantity = 1; closeToday = false; quoteStamp = nil; quoteError = false; selectionRequest = UUID()
     }
@@ -662,28 +705,41 @@ struct TradingCenterView: View {
     @MainActor private func refreshQuote(_ c: PaperContract) async {
         do {
             let next: PaperContract
+            var details: MarketDataService.ContractQuote?
             if let option = c.option {
                 guard let q = try await MarketDataService.options(for: option.underlying).first(where: { $0.code == c.symbol }) else { throw MarketDataError.noData }
                 next = q.paperContract(underlying: option.underlying, name: c.name)
             } else {
                 guard let p = product(c.symbol), let q = try await MarketDataService.listedContracts(for: p.id).first(where: { $0.code == c.symbol }) else { throw MarketDataError.noData }
+                details = q
                 next = PaperContract(symbol: q.code, name: p.name, tick: q.priceTick, multiplier: q.volumeMultiple, last: q.last, bid: q.bid, ask: q.ask)
             }
             guard !Task.isCancelled, selected?.symbol == c.symbol else { return }
+            detailedQuote = details
             selected = next; quoteStamp = Date(); quoteError = false
             if selectedPrice.isEmpty, let last = next.last, last > 0 { selectedPrice = String(last) }
             if closingSide != nil, closePrice.isEmpty, let last = next.last, last > 0 { closePrice = String(last) }
         } catch {
             guard !Task.isCancelled, selected?.symbol == c.symbol else { return }
+            detailedQuote = nil
             quoteError = true
             selected = PaperContract(symbol: c.symbol, name: c.name, tick: c.tick, multiplier: c.multiplier, last: nil, bid: nil, ask: nil, option: c.option)
         }
     }
     private var recordsPanel: some View {
         VStack(spacing: 5) {
-            Picker("交易记录", selection: $tab) {
-                ForEach(["持仓","挂单","委托","成交"], id: \.self) { Text($0) }
-            }.pickerStyle(.segmented)
+            HStack(spacing: 0) {
+                ForEach(["持仓","挂单","委托","成交"], id: \.self) { item in
+                    Button { tab = item; expandedHolding = nil } label: {
+                        VStack(spacing: 5) {
+                            Text(item).font(.subheadline.weight(tab == item ? .semibold : .regular))
+                                .foregroundStyle(tab == item ? MarketPalette.ink : MarketPalette.muted)
+                            Rectangle().fill(tab == item ? MarketPalette.accent : Color.clear).frame(width: 30, height: 2)
+                        }.frame(maxWidth: .infinity).padding(.top, 5)
+                    }.buttonStyle(.plain)
+                }
+            }
+            Divider()
             ScrollView {
             LazyVStack(spacing: 0) {
             if session.snapshot == nil {
@@ -708,29 +764,56 @@ struct TradingCenterView: View {
                     }
                 }
             } else if tab == "成交" {
+                HStack(spacing: 3) {
+                    recordCell("合约")
+                    recordCell("开平", width: 34)
+                    recordCell("成交价", width: 53)
+                    recordCell("手数", width: 28)
+                    recordCell("时间", width: 63)
+                }.foregroundStyle(.secondary)
+                Divider()
                 ForEach((session.snapshot?.fills ?? []).sorted { $0.time_ns > $1.time_ns }) { f in
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack { Text(contractName(f.symbol)).fontWeight(.medium); Spacer(); Text(actionName(f.direction, f.offset)) }
-                        HStack { Text(fillQuantityText(f)); Spacer(); Text(Date(timeIntervalSince1970: Double(f.time_ns)/1e9).formatted(date: .omitted, time: .standard)) }.font(.caption).foregroundStyle(.secondary)
-                    }
+                    HStack(spacing: 3) {
+                        recordCell(contractName(f.symbol))
+                        recordCell(recordAction(f.direction, f.offset), width: 34)
+                            .foregroundStyle(f.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
+                        recordCell(f.price?.formatted() ?? "--", width: 53)
+                        recordCell(String(f.quantity), width: 28)
+                        recordCell(recordTime(f.time_ns), width: 63)
+                    }.padding(.vertical, 10)
+                    Divider()
                 }
                 if session.snapshot?.fills?.isEmpty != false { Text("暂无成交或未取得数据").font(.caption).foregroundStyle(.secondary) }
             } else {
                 let orders = (session.snapshot?.orders ?? []).filter { tab != "挂单" || $0.status == "ALIVE" }.sorted {
                     ($0.time_ns ?? 0) == ($1.time_ns ?? 0) ? $0.id > $1.id : ($0.time_ns ?? 0) > ($1.time_ns ?? 0)
                 }
+                HStack(spacing: 3) {
+                    recordCell("合约")
+                    recordCell("状态", width: 40)
+                    recordCell("开平", width: 30)
+                    recordCell("委托价", width: 48)
+                    recordCell("数量", width: 30)
+                    recordCell(tab == "挂单" ? "操作" : "时间", width: tab == "挂单" ? 38 : 58)
+                }.foregroundStyle(.secondary)
+                Divider()
                 ForEach(orders) { o in
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack { Text(contractName(o.symbol)).fontWeight(.medium); Spacer(); Text(actionName(o.direction,o.offset)) }
-                        HStack {
-                            Text(orderQuantityText(o))
-                            Spacer()
-                            Text(o.stateText)
-                            if tab == "挂单" && o.status == "ALIVE" { Button("撤单", role: .destructive) { cancelID = o.id }.buttonStyle(.borderless).disabled(session.busy) }
-                        }.font(.caption)
-                        if let ns = o.time_ns, ns > 0 { Text(Date(timeIntervalSince1970: Double(ns)/1e9).formatted(date: .omitted, time: .standard)).font(.caption2).foregroundStyle(.secondary) }
-                        if !o.message.isEmpty { Text(o.message).font(.caption2).foregroundStyle(.secondary) }
-                    }
+                    HStack(spacing: 3) {
+                        recordCell(contractName(o.symbol))
+                        recordCell(o.stateText, width: 40)
+                        recordCell(recordAction(o.direction, o.offset), width: 30)
+                            .foregroundStyle(o.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
+                        recordCell(o.price?.formatted() ?? "--", width: 48)
+                        recordCell(String(o.quantity - o.remaining) + "/" + String(o.quantity), width: 30)
+                        if tab == "挂单" && o.status == "ALIVE" {
+                            Button("撤单", role: .destructive) { cancelID = o.id }
+                                .font(.caption2).buttonStyle(.borderless).frame(width: 38).disabled(session.busy)
+                        } else {
+                            recordCell(recordTime(o.time_ns), width: tab == "挂单" ? 38 : 58)
+                        }
+                    }.padding(.vertical, 10)
+                    .accessibilityHint(o.message)
+                    Divider()
                 }
                 if orders.isEmpty { Text(tab == "挂单" ? "暂无挂单" : "暂无委托或未取得数据").font(.caption).foregroundStyle(.secondary) }
             }
@@ -739,6 +822,21 @@ struct TradingCenterView: View {
         }.padding(.top, 5).frame(maxHeight: .infinity, alignment: .top)
     }
 
+    private func recordCell(_ value: String, width: CGFloat? = nil) -> some View {
+        Text(value).font(.caption2).monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
+            .frame(width: width, alignment: .leading)
+            .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
+    }
+    private func recordAction(_ direction: String, _ offset: String) -> String {
+        (direction == "BUY" ? "买" : "卖") + (offset == "OPEN" ? "开" : (offset == "CLOSETODAY" ? "平今" : "平"))
+    }
+    private func recordTime(_ ns: Int64?) -> String {
+        guard let ns, ns > 0 else { return "--" }
+        let formatter = DateFormatter()
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: Date(timeIntervalSince1970: Double(ns) / 1e9))
+    }
     private func beginClose(_ p: CloudSnapshot.Position, long: Bool) {
         IndicatorKeyboard.dismiss()
         if selected?.symbol != p.symbol { selectHolding(p.symbol) }
@@ -924,7 +1022,15 @@ struct TradingCenterView: View {
         let frozen = long ? p.frozen_long : p.frozen_short
         let average = long ? p.open_price_long : p.open_price_short
         let profit = (long ? p.float_profit_long : p.float_profit_short) ?? ((p.long == 0 || p.short == 0) ? p.float_profit : nil)
-        return Button { beginClose(p, long: long) } label: {
+        let rowID = p.symbol + (long ? "/long" : "/short")
+        let expanded = expandedHolding == rowID
+        return VStack(spacing: 0) {
+        Button {
+            if expanded { expandedHolding = nil } else {
+                selectHolding(p.symbol)
+                expandedHolding = rowID
+            }
+        } label: {
             HStack(spacing: 4) {
                 HStack(spacing: 3) {
                     Text(contractName(p.symbol)).font(.caption.weight(.medium)).lineLimit(1)
@@ -935,6 +1041,19 @@ struct TradingCenterView: View {
                 Text(money(profit, suffix: false)).foregroundStyle(MarketPalette.movement(profit)).frame(width: 65, alignment: .trailing)
             }.font(.caption).monospacedDigit().foregroundStyle(MarketPalette.ink)
         }.buttonStyle(.borderless).padding(.vertical, 8)
+        if expanded {
+            HStack(spacing: 10) {
+                Spacer()
+                if let q = detailedQuote, q.code == p.symbol, let product = product(p.symbol) {
+                    Button("图表") { chartProduct = product; chartQuote = q; showHoldingChart = true }
+                        .buttonStyle(.bordered)
+                }
+                Button("平仓") { beginClose(p, long: long) }
+                    .buttonStyle(.bordered).disabled(!session.canTrade || frozen == nil || qty <= (frozen ?? qty))
+            }.font(.caption).padding(.bottom, 8)
+        }
+        Divider()
+        }.background(expanded ? MarketPalette.raised : Color.clear)
     }
     private func actionName(_ direction: String, _ offset: String) -> String {
         if offset == "OPEN" { return direction == "BUY" ? "开多" : "开空" }
