@@ -27,6 +27,7 @@ EXCHANGES = {"CFFEX", "SHFE", "DCE", "CZCE", "INE", "GFEX"}
 CATALOG_LOCK = threading.Lock()
 CATALOG_CACHE = []
 CATALOG_UNTIL = 0.0
+CATALOG_RETRY_AFTER = 0.0
 DYNAMIC_QUOTE_LOCK = threading.Lock()
 QUOTE_BATCH_CACHE = {}
 QUOTE_BATCH_UNTIL = {}
@@ -84,10 +85,30 @@ def contract_product(code):
     return match.group(1) if match else None
 
 
-@short_query
 def product_catalog():
+    global CATALOG_RETRY_AFTER
+    now = time.monotonic()
+    if CATALOG_CACHE and now < CATALOG_UNTIL:
+        return list(CATALOG_CACHE)
+    if now < CATALOG_RETRY_AFTER:
+        if CATALOG_CACHE:
+            return list(CATALOG_CACHE)
+        raise RuntimeError("market_data_unavailable")
+    try:
+        return _refresh_catalog()
+    except Exception as exc:
+        if str(exc) == "market_query_busy":
+            raise
+        CATALOG_RETRY_AFTER = time.monotonic() + 30
+        if CATALOG_CACHE:
+            return list(CATALOG_CACHE)
+        raise RuntimeError("market_data_unavailable") from exc
+
+
+@short_query
+def _refresh_catalog():
     """Discover listed futures from TqSdk's authoritative contract directory."""
-    global CATALOG_CACHE, CATALOG_UNTIL
+    global CATALOG_CACHE, CATALOG_UNTIL, CATALOG_RETRY_AFTER
     with CATALOG_LOCK:
         if CATALOG_CACHE and time.monotonic() < CATALOG_UNTIL:
             return list(CATALOG_CACHE)
@@ -146,6 +167,7 @@ def product_catalog():
             ]
             CATALOG_CACHE = result
             CATALOG_UNTIL = time.monotonic() + 6 * 3600
+            CATALOG_RETRY_AFTER = 0.0
             return list(result)
         finally:
             api.close()
@@ -170,7 +192,6 @@ def supported_symbol(symbol):
     return symbol in SYMBOLS or supported_product(contract_product(symbol))
 
 
-@short_query
 def selected_quotes(products):
     """A bounded pull of main futures contracts, never subscribes the whole catalog."""
     requested = sorted(set(products))
@@ -182,6 +203,11 @@ def selected_quotes(products):
     live = LIVE_QUOTES.current()
     if requested and all(product in live for product in requested):
         return {product: live[product] for product in requested}
+    return _selected_quotes_cold(tuple(requested))
+
+
+@short_query
+def _selected_quotes_cold(requested):
     key = tuple(requested)
     with DYNAMIC_QUOTE_LOCK:
         if time.monotonic() < QUOTE_BATCH_UNTIL.get(key, 0):
@@ -200,7 +226,8 @@ def selected_quotes(products):
             if not pairs:
                 return {}
             quotes = api.get_quote_list([code for _, code in pairs])
-            while time.time() < deadline and not any(getattr(q, "datetime", "") for q in quotes):
+            deadline = time.time() + 2
+            while time.time() < deadline and not all(getattr(q, "datetime", "") for q in quotes):
                 api.wait_update(deadline=time.time() + 0.5)
             result = {}
             for (product, code), quote in zip(pairs, quotes):
@@ -1129,6 +1156,35 @@ def historical_page(symbol, period, before, count, depth):
         HISTORY_QUERY_LOCK.release()
 
 
+class BoundedMarketServer(ThreadingHTTPServer):
+    """Reserve a fixed process-wide budget, including SSE connections."""
+    def __init__(self, *args, **kwargs):
+        self.request_slots = threading.BoundedSemaphore(32)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        if not self.request_slots.acquire(blocking=False):
+            try:
+                request.settimeout(0.2)
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\nRetry-After: 3\r\n\r\n")
+            except OSError:
+                pass
+            finally:
+                self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.request_slots.release()
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 30
@@ -1405,4 +1461,4 @@ if __name__ == "__main__":
     print("Qihui read-only gateway listening on %s:%s" % (host, port), flush=True)
     LIVE_QUOTES.start()
     KLINE_HUB.start()
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    BoundedMarketServer((host, port), Handler).serve_forever()

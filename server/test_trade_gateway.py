@@ -4,6 +4,26 @@ from types import SimpleNamespace as Obj
 from trade_gateway import snapshot, number, validate_order
 
 class SnapshotTests(unittest.TestCase):
+    def test_audit_uses_private_file_and_structured_metadata(self):
+        import json
+        import tempfile
+        import os
+        import trade_gateway as gateway
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "audit.jsonl")
+            with patch.object(gateway.AUDIT, "handlers", []):
+                gateway.configure_audit(path)
+                try:
+                    gateway.audit("order_attempt", id="a"*32, symbol="CZCE.SR701")
+                    row = json.loads(open(path, encoding="utf-8").read())
+                    self.assertEqual(row["event"], "order_attempt")
+                    self.assertEqual(row["id"], "a"*32)
+                    self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+                finally:
+                    for handler in gateway.AUDIT.handlers:
+                        handler.close()
+
     def test_account_and_positions(self):
         account = Obj(balance=100000, available=90000, margin=10000, float_profit=100, close_profit=0)
         result = snapshot(account, {"DCE.m2701": Obj(pos_long=2, pos_short=0, float_profit=100),

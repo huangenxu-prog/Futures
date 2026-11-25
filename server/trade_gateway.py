@@ -4,6 +4,8 @@ import hmac
 import hashlib
 import json
 import math
+import logging
+from logging.handlers import RotatingFileHandler
 import queue
 import re
 import os
@@ -18,6 +20,35 @@ LOCK = threading.Lock()
 SESSION = None
 LAST_LOGIN = 0.0
 ACCESS = os.environ.get("QIHUI_TRADE_ACCESS_KEY", "")
+
+AUDIT = logging.getLogger("qihui.trade.audit")
+AUDIT.propagate = False
+AUDIT.addHandler(logging.NullHandler())
+
+
+def configure_audit(path):
+    # The installer already provides a private, mode-0700 working directory.
+    fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+    handler = RotatingFileHandler(path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    AUDIT.handlers[:] = [handler]
+    AUDIT.setLevel(logging.INFO)
+
+
+def audit(event, **fields):
+    # Only explicitly selected metadata; never raw request/exception messages.
+    try:
+        if "id" in fields and not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", fields["id"]):
+            fields["id"] = hashlib.sha256(fields["id"].encode("utf-8")).hexdigest()
+        AUDIT.info(json.dumps(dict(event=event, time_ns=time.time_ns(), **fields),
+                              ensure_ascii=False, allow_nan=False))
+    except Exception:
+        pass
+
 
 def equal(a, b):
     return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
@@ -152,6 +183,8 @@ class Session:
                     try:
                         if action == "order":
                             oid, symbol, direction, offset, qty, price = payload
+                            audit("order_attempt", id=oid, symbol=symbol, direction=direction,
+                                  offset=offset, quantity=qty, price=price)
                             if oid in self.seen:
                                 if self.seen[oid] != payload:
                                     result["status"] = 409
@@ -168,15 +201,19 @@ class Session:
                                                  volume=qty, limit_price=price, order_id=oid)
                                 result["status"] = 200
                         else:
+                            audit("cancel_attempt", id=payload)
                             order = orders.get(payload)
                             if order is None or order.status != "ALIVE":
                                 result["status"] = 409
                             else:
                                 api.cancel_order(order)
                                 result["status"] = 200
-                    except Exception:
+                    except Exception as exc:
                         result["status"] = 503
+                        audit("command_exception", action=action, error_type=type(exc).__name__)
                     finally:
+                        audit("command_result", action=action, id=payload[0] if action == "order" else payload,
+                              status=result.get("status", 503))
                         with LOCK:
                             self.inflight -= 1
                         done.set()
@@ -186,10 +223,10 @@ class Session:
                     self.data = data
                 if data is not None:
                     self.ready.set()
-        except Exception:
-            # Never return or log SDK errors containing account credentials.
-            pass
+        except Exception as exc:
+            audit("session_exception", error_type=type(exc).__name__)
         finally:
+            audit("session_end")
             self.stop.set()
             with self.data_lock:
                 self.data = None
@@ -321,12 +358,14 @@ class Handler(BaseHTTPRequestHandler):
                 s.inflight -= 1
                 return self.reply(429)
         if not done.wait(12):
+            audit("command_wait_timeout", action=action, id=payload[0] if action == "order" else payload)
             return self.reply(503)
         return self.reply(result.get("status", 503))
 
 def main():
     if len(ACCESS) < 32:
         raise SystemExit("Set a private QIHUI_TRADE_ACCESS_KEY of at least 32 characters")
+    configure_audit("trade-audit.jsonl")
     ThreadingHTTPServer(("127.0.0.1", 8766), Handler).serve_forever()
 
 if __name__ == "__main__":

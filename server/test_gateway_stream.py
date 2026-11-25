@@ -20,6 +20,30 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_common_quote_does_not_acquire_short_query_gate(self):
+        live = {"CZCE.SR": {"last": 5000}}
+        with patch.object(gateway.LIVE_QUOTES, "current", return_value=live), patch.object(
+                gateway, "SHORT_QUERY_GATE", SimpleNamespace(acquire=lambda **kw: False)):
+            self.assertEqual(gateway.selected_quotes(["CZCE.SR"]), live)
+
+    def test_catalog_cache_survives_busy_gate(self):
+        sample = [{"id": "SHFE.zn"}]
+        with patch.object(gateway, "CATALOG_CACHE", sample), patch.object(
+                gateway, "CATALOG_UNTIL", gateway.time.monotonic() + 60), patch.object(
+                gateway, "_refresh_catalog") as refresh:
+            self.assertTrue(gateway.supported_product("SHFE.zn"))
+            refresh.assert_not_called()
+
+    def test_bounded_server_rejects_excess_connections(self):
+        from unittest.mock import Mock
+        server = object.__new__(gateway.BoundedMarketServer)
+        server.request_slots = SimpleNamespace(acquire=lambda **kw: False)
+        server.shutdown_request = Mock()
+        sock = Mock()
+        server.process_request(sock, ("127.0.0.1", 1))
+        self.assertIn(b"503", sock.sendall.call_args.args[0])
+        server.shutdown_request.assert_called_once_with(sock)
+
     def test_live_disk_queue_coalesces_and_is_bounded(self):
         hub = gateway.SharedKlineHub(store=object())
         hub.disk_writer = SimpleNamespace(is_alive=lambda: True)
