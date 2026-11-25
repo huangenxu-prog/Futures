@@ -10,6 +10,8 @@ struct InstrumentDetailView: View {
     @State private var visibleID: String?
     @State private var activeID: String
     @State private var scrolling = false
+    @State private var pageRemainder: CGFloat = 0
+    @State private var alignmentOffset: CGFloat = 0
 
     init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote? = nil, sequence: [FuturesInstrument] = []) {
         initial = instrument
@@ -42,19 +44,31 @@ struct InstrumentDetailView: View {
                                 .containerRelativeFrame(.vertical)
                                 .frame(maxWidth: .infinity)
                                 .clipped()
+                                .pagingTestEdges("contract.page." + item.id)
+                                .offset(y: alignmentOffset)
                                 .id(item.id)
                             }
                         }.scrollTargetLayout()
+                        .onGeometryChange(for: CGFloat.self) { geometry in
+                            let stride = geometry.size.height / CGFloat(pages.count)
+                            guard stride > 0 else { return 0 }
+                            return geometry.frame(in: .named("contractViewport")).minY.remainder(dividingBy: stride)
+                        } action: { remainder in
+                            pageRemainder = remainder
+                            if !scrolling { alignmentOffset = -remainder }
+                        }
                     }
-                    // Keep the native paging stride; only constrain the viewport
-                    // and eliminate scroll-content margins.
-                    .contentMargins(.vertical, 0, for: .scrollContent)
+                    .coordinateSpace(name: "contractViewport")
+                    .pagingTestEdges("contract.viewport")
                     .scrollIndicators(.hidden)
                     .scrollTargetBehavior(.paging)
                     .scrollPosition(id: $visibleID, anchor: .top)
                     .onScrollPhaseChange { _, phase in
                         scrolling = phase != .idle
-                        if phase == .idle, let id = visibleID { activeID = id }
+                        if phase == .idle {
+                            alignmentOffset = -pageRemainder
+                            if let id = visibleID { activeID = id }
+                        }
                     }
                     .onChange(of: visibleID) { _, id in
                         if !scrolling, let id { activeID = id }
@@ -62,11 +76,22 @@ struct InstrumentDetailView: View {
                     .onAppear {
                         proxy.scrollTo(initial.id, anchor: .top)
                     }
-                    .clipped()
                 }
             }
         }
         .background(MarketPalette.surface.ignoresSafeArea())
+        .overlay {
+            GeometryReader { bounds in
+                VStack(spacing: 0) {
+                    MarketPalette.surface.frame(height: bounds.safeAreaInsets.top)
+                    Spacer(minLength: 0)
+                    MarketPalette.surface.frame(height: bounds.safeAreaInsets.bottom)
+                }
+                .ignoresSafeArea(.container, edges: .vertical)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
         .toolbar(.hidden, for: .navigationBar)
         .onAppear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true) }
         .onDisappear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false) }
@@ -77,6 +102,33 @@ struct InstrumentDetailView: View {
                              period: $period, isActive: active)
             .allowsHitTesting(active)
             .accessibilityHidden(!active)
+    }
+}
+
+private extension View {
+    @ViewBuilder func pagingTestEdges(_ id: String) -> some View {
+        if ProcessInfo.processInfo.arguments.contains("-contract-paging-test") {
+            self.overlay(alignment: .top) { PageEdgeMarker(id: id + ".top") }
+                .overlay(alignment: .bottom) { PageEdgeMarker(id: id + ".bottom") }
+        } else {
+            self
+        }
+    }
+}
+
+private struct PageEdgeMarker: UIViewRepresentable {
+    let id: String
+    func makeUIView(context: Context) -> UIView {
+        let marker = UIView()
+        marker.isAccessibilityElement = true
+        marker.isUserInteractionEnabled = false
+        marker.accessibilityLabel = id
+        marker.accessibilityIdentifier = id
+        return marker
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {}
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIView, context: Context) -> CGSize? {
+        CGSize(width: 1, height: 1)
     }
 }
 
@@ -392,6 +444,7 @@ private struct InstrumentDetailPage: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("contract.back." + instrument.id)
             Button { showContracts = true } label: {
                 HStack(spacing: 6) {
                     Text(instrument.name + (selectedContract?.month ?? quote?.month ?? ""))
