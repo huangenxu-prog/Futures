@@ -168,6 +168,10 @@ enum MarketDataService {
         let last, settlement, bid, ask, volume, interest, priceTick, volumeMultiple: Double?
         let bidVolume, askVolume: Double?
         var opening: Double? = nil
+        var highest: Double? = nil
+        var lowest: Double? = nil
+        var upperLimit: Double? = nil
+        var lowerLimit: Double? = nil
         let time: String?
         var id: String { code }
 
@@ -208,6 +212,8 @@ enum MarketDataService {
         let strike: Double
         let last, ask, bid, volume, interest: Double?
         let priceTick, volumeMultiple: Double?
+        var settlement, opening, highest, lowest, upperLimit, lowerLimit, bidVolume, askVolume: Double?
+        var time: String?
         var id: String { code }
         func paperContract(underlying:String,name:String)->PaperContract {
             PaperContract(symbol:code,name:name,tick:priceTick,multiplier:volumeMultiple,last:last,bid:bid,ask:ask,

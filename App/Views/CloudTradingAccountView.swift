@@ -351,6 +351,7 @@ struct TradingCenterView: View {
     @State private var selecting = false
     @State private var expandedHolding: String?
     @State private var detailedQuote: MarketDataService.ContractQuote?
+    @State private var optionQuote: MarketDataService.OptionQuote?
     @State private var chartQuote: MarketDataService.ContractQuote?
     @State private var chartProduct: FuturesInstrument?
     @State private var showHoldingChart = false
@@ -620,10 +621,28 @@ struct TradingCenterView: View {
     }
     private func quoteColor(_ value: Double?) -> Color {
         guard let value, value.isFinite else { return MarketPalette.muted }
-        guard let reference = changeBasis == "open" ? detailedQuote?.opening : detailedQuote?.settlement,
+        guard let reference = quoteReference,
               reference.isFinite, reference > 0 else { return MarketPalette.ink }
         if abs(value - reference) < 0.0000001 { return MarketPalette.ink }
         return MarketPalette.movement(value - reference)
+    }
+    private var quoteReference: Double? {
+        changeBasis == "open" ? (optionQuote?.opening ?? detailedQuote?.opening) : (optionQuote?.settlement ?? detailedQuote?.settlement)
+    }
+    private var quoteChange: Double? {
+        guard let last = selected?.last, let reference = quoteReference, last.isFinite, reference.isFinite, reference > 0 else { return nil }
+        return last - reference
+    }
+    private var quoteChangeText: String {
+        guard let change = quoteChange, let reference = quoteReference else { return "--" }
+        return String(format: "%+.2f%%", change / reference * 100)
+    }
+    private var holdingSelection: (CloudSnapshot.Position, Bool)? {
+        guard !quickOnly, let symbol = selected?.symbol, let row = expandedHolding,
+              let p = session.snapshot?.positions.first(where: { $0.symbol == symbol }) else { return nil }
+        if row == symbol + "/long", p.long > 0 { return (p, true) }
+        if row == symbol + "/short", p.short > 0 { return (p, false) }
+        return nil
     }
     private var orderPanel: some View {
         VStack(spacing: 7) {
@@ -645,8 +664,8 @@ struct TradingCenterView: View {
                         Text(selected?.last.map { $0.formatted() } ?? "--")
                             .foregroundStyle(quoteColor(selected?.last))
                         Spacer(minLength: 0)
-                        Text(detailedQuote?.changePercent(basis: changeBasis) ?? "--")
-                            .foregroundStyle(MarketPalette.movement(detailedQuote?.change(basis: changeBasis)))
+                        Text(quoteChangeText)
+                            .foregroundStyle(MarketPalette.movement(quoteChange))
                     }.font(.caption2).monospacedDigit()
                     HStack(spacing: 4) {
                         Button { stepPrice(-1) } label: { Image(systemName: "minus").frame(width: 30, height: 30).background(MarketPalette.raised, in: RoundedRectangle(cornerRadius: 4)) }.buttonStyle(.plain).disabled(selected?.tick == nil)
@@ -660,12 +679,12 @@ struct TradingCenterView: View {
                     }.padding(3).overlay(RoundedRectangle(cornerRadius: 5).stroke(MarketPalette.divider))
                 }.frame(maxWidth: .infinity)
                 VStack(spacing: 7) {
-                    quoteLine("涨停", nil)
-                    quoteLine("最高", nil)
-                    quoteLine("卖一", selected?.ask, volume: detailedQuote?.askVolume)
-                    quoteLine("买一", selected?.bid, volume: detailedQuote?.bidVolume)
-                    quoteLine("最低", nil)
-                    quoteLine("跌停", nil)
+                    quoteLine("涨停", optionQuote?.upperLimit ?? detailedQuote?.upperLimit)
+                    quoteLine("最高", optionQuote?.highest ?? detailedQuote?.highest)
+                    quoteLine("卖一", selected?.ask, volume: optionQuote?.askVolume ?? detailedQuote?.askVolume)
+                    quoteLine("买一", selected?.bid, volume: optionQuote?.bidVolume ?? detailedQuote?.bidVolume)
+                    quoteLine("最低", optionQuote?.lowest ?? detailedQuote?.lowest)
+                    quoteLine("跌停", optionQuote?.lowerLimit ?? detailedQuote?.lowerLimit)
                 }.padding(7).frame(width: 122)
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(MarketPalette.divider))
             }
@@ -675,8 +694,23 @@ struct TradingCenterView: View {
                 Text("最大可开 -- · 保证金 --")
             }.font(.caption2).foregroundStyle(.secondary)
             HStack(spacing: 8) {
-                tradeButton("开多", color: MarketPalette.up)
-                tradeButton("开空", color: MarketPalette.down)
+                if let (position, long) = holdingSelection {
+                    tradeButton("开多", color: MarketPalette.up, title: long ? "加多" : "锁仓")
+                    tradeButton("开空", color: MarketPalette.down, title: long ? "锁仓" : "加空")
+                    Button {
+                        beginClose(position, long: long)
+                    } label: {
+                        VStack(spacing: 3) {
+                            Text(selectedPrice.isEmpty ? "--" : selectedPrice).monospacedDigit()
+                            Text("平仓")
+                        }.font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity).padding(.vertical, 8)
+                            .background(MarketPalette.accent.opacity(session.canTrade && (availableToClose(long) ?? 0) > 0 && selected?.tick != nil ? 0.85 : 0.25), in: RoundedRectangle(cornerRadius: 8))
+                    }.buttonStyle(.plain).disabled(!session.canTrade || (availableToClose(long) ?? 0) <= 0 || selected?.tick == nil)
+                } else {
+                    tradeButton("开多", color: MarketPalette.up)
+                    tradeButton("开空", color: MarketPalette.down)
+                }
             }
         }.padding(.vertical, 6)
     }
@@ -689,7 +723,7 @@ struct TradingCenterView: View {
                 Spacer(minLength: 0)
                 Text(value.map { $0.formatted() } ?? "--").foregroundStyle(quoteColor(value))
                 if let volume { Text(volume.formatted()).foregroundStyle(.secondary) }
-            }.font(.system(size: 10)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+            }.font(.system(size: 12)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
         }.buttonStyle(.plain).disabled(value == nil)
     }
     private func priceButton(_ title: String, _ value: Double?) -> some View {
@@ -702,9 +736,12 @@ struct TradingCenterView: View {
             }.frame(maxWidth: .infinity).padding(.vertical, 7)
         }.buttonStyle(.borderless).disabled(value == nil)
     }
-    private func tradeButton(_ action: String, color: Color) -> some View {
+    private func tradeButton(_ action: String, color: Color, title: String? = nil) -> some View {
         Button { IndicatorKeyboard.dismiss(); pendingAction = action } label: {
-            Text(selected?.option != nil ? (action == "开多" ? "买开" : "卖开") : action).font(.system(size: 15, weight: .semibold))
+            VStack(spacing: 3) {
+                if title != nil { Text(selectedPrice.isEmpty ? "--" : selectedPrice).monospacedDigit() }
+                Text(title ?? (selected?.option != nil ? (action == "开多" ? "买开" : "卖开") : action))
+            }.font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white).frame(maxWidth: .infinity).padding(.vertical, 12)
                 .background(color.opacity(validOrder(action) ? 0.85 : 0.25), in: RoundedRectangle(cornerRadius: 8))
         }.buttonStyle(.borderless).disabled(!validOrder(action))
@@ -715,7 +752,7 @@ struct TradingCenterView: View {
         if next > 0 { selectedPrice = next.formatted(.number.grouping(.never).precision(.fractionLength(0...8))) }
     }
     private func choose(_ c: PaperContract) {
-        detailedQuote = nil; expandedHolding = nil
+        detailedQuote = nil; optionQuote = nil; expandedHolding = nil
         selected = c; selectedPrice = c.last.flatMap { $0.isFinite && $0 > 0 ? String($0) : nil } ?? ""
         selectedQuantity = 1; closeToday = false; quoteStamp = nil; quoteError = false; selectionRequest = UUID()
     }
@@ -739,15 +776,28 @@ struct TradingCenterView: View {
         return p.name + suffix
     }
     private func selectHolding(_ symbol: String) {
-        if selected?.symbol == symbol { return }
-        choose(PaperContract(symbol: symbol, name: contractName(symbol), tick: nil, multiplier: nil, last: nil, bid: nil, ask: nil))
+        if selected?.symbol == symbol, selected?.isConcreteFuture == true || selected?.option != nil { return }
+        // Exchange option symbols use C/P with an optional hyphen before/after it.
+        let pattern = #"^([A-Za-z]+\.[A-Za-z]+[0-9]{3,4})-?([CPcp])-?([0-9]+(?:\.[0-9]+)?)$"#
+        var option: PaperOptionDetails?
+        if let regex = try? NSRegularExpression(pattern: pattern),
+           let match = regex.firstMatch(in: symbol, range: NSRange(symbol.startIndex..., in: symbol)),
+           let u = Range(match.range(at: 1), in: symbol),
+           let side = Range(match.range(at: 2), in: symbol),
+           let strikeRange = Range(match.range(at: 3), in: symbol),
+           let strike = Double(symbol[strikeRange]), strike > 0 {
+            option = PaperOptionDetails(underlying: String(symbol[u]), side: symbol[side].uppercased() == "C" ? "CALL" : "PUT", strike: strike)
+        }
+        choose(PaperContract(symbol: symbol, name: product(symbol)?.name ?? contractName(symbol), tick: nil, multiplier: nil, last: nil, bid: nil, ask: nil, option: option))
     }
     @MainActor private func refreshQuote(_ c: PaperContract) async {
         do {
             let next: PaperContract
             var details: MarketDataService.ContractQuote?
+            var optionDetails: MarketDataService.OptionQuote?
             if let option = c.option {
                 guard let q = try await MarketDataService.options(for: option.underlying).first(where: { $0.code == c.symbol }) else { throw MarketDataError.noData }
+                optionDetails = q
                 next = q.paperContract(underlying: option.underlying, name: c.name)
             } else {
                 guard let p = product(c.symbol), let q = try await MarketDataService.listedContracts(for: p.id).first(where: { $0.code == c.symbol }) else { throw MarketDataError.noData }
@@ -756,12 +806,14 @@ struct TradingCenterView: View {
             }
             guard !Task.isCancelled, selected?.symbol == c.symbol else { return }
             detailedQuote = details
+            optionQuote = optionDetails
             selected = next; quoteStamp = Date(); quoteError = false
             if selectedPrice.isEmpty, let last = next.last, last > 0 { selectedPrice = String(last) }
             if closingSide != nil, closePrice.isEmpty, let last = next.last, last > 0 { closePrice = String(last) }
         } catch {
             guard !Task.isCancelled, selected?.symbol == c.symbol else { return }
             detailedQuote = nil
+            optionQuote = nil
             quoteError = true
             selected = PaperContract(symbol: c.symbol, name: c.name, tick: c.tick, multiplier: c.multiplier, last: nil, bid: nil, ask: nil, option: c.option)
         }
@@ -880,8 +932,8 @@ struct TradingCenterView: View {
     private func beginClose(_ p: CloudSnapshot.Position, long: Bool) {
         IndicatorKeyboard.dismiss()
         if selected?.symbol != p.symbol { selectHolding(p.symbol) }
-        closePrice = selected?.last.map { String($0) } ?? ""
-        closeQuantity = 1
+        closePrice = selectedPrice.isEmpty ? (selected?.last.map { String($0) } ?? "") : selectedPrice
+        closeQuantity = min(max(1, selectedQuantity), min(10, availableToClose(long) ?? 1))
         closeToday = false
         closeConfirm = false
         closingSide = long
