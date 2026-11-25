@@ -85,13 +85,22 @@ private struct ContractPageController<Page: View>: UIViewControllerRepresentable
 
         static func addTestFrame(to view: UIView, id: String) {
             guard ProcessInfo.processInfo.arguments.contains("-contract-paging-test") else { return }
-            let probe = UIView(frame: view.bounds)
-            probe.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            probe.isUserInteractionEnabled = false
-            probe.isAccessibilityElement = true
-            probe.accessibilityIdentifier = id
-            probe.accessibilityLabel = id
-            view.addSubview(probe)
+            for bottom in [false, true] {
+                let probe = UIView()
+                probe.translatesAutoresizingMaskIntoConstraints = false
+                probe.isUserInteractionEnabled = false
+                probe.isAccessibilityElement = true
+                probe.accessibilityIdentifier = id + (bottom ? ".bottom" : ".top")
+                probe.accessibilityLabel = probe.accessibilityIdentifier
+                view.addSubview(probe)
+                NSLayoutConstraint.activate([
+                    probe.widthAnchor.constraint(equalToConstant: 1),
+                    probe.heightAnchor.constraint(equalToConstant: 1),
+                    probe.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                    bottom ? probe.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+                           : probe.topAnchor.constraint(equalTo: view.topAnchor)
+                ])
+            }
         }
 
         func refreshPages() {

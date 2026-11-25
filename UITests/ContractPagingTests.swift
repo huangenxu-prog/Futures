@@ -26,11 +26,14 @@ final class ContractPagingTests: XCTestCase {
                 }
                 visit(root)
                 evidence = String(describing: frames)
-                guard let page = frames["contract.page." + id],
-                      let viewport = frames["contract.viewport"],
+                guard let top = frames["contract.page." + id + ".top"],
+                      let bottom = frames["contract.page." + id + ".bottom"],
+                      let viewportTop = frames["contract.viewport.top"],
+                      let viewportBottom = frames["contract.viewport.bottom"],
                       let header = frames["contract.back." + id],
-                      viewport.height > 0, viewport.contains(header) else { return false }
-                return abs(page.minY - viewport.minY) <= 1 && abs(page.maxY - viewport.maxY) <= 1
+                      viewportBottom.maxY > viewportTop.minY,
+                      header.minY >= viewportTop.minY, header.maxY <= viewportBottom.maxY else { return false }
+                return abs(top.minY - viewportTop.minY) <= 1 && abs(bottom.maxY - viewportBottom.maxY) <= 1
             }
             let ready = XCTNSPredicateExpectation(predicate: aligned, object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 20), .completed, id + " " + evidence)
