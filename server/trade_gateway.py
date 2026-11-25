@@ -71,7 +71,13 @@ def snapshot(account, positions, orders=None, fills=None):
         short = int(number(getattr(pos, "pos_short", 0)) or 0)
         if long or short:
             rows.append({"symbol": symbol, "long": long, "short": short,
-                         "float_profit": number(getattr(pos, "float_profit", None))})
+                         "float_profit": number(getattr(pos, "float_profit", None)),
+                         "open_price_long": number(getattr(pos, "open_price_long", None)),
+                         "open_price_short": number(getattr(pos, "open_price_short", None)),
+                         "float_profit_long": number(getattr(pos, "float_profit_long", None)),
+                         "float_profit_short": number(getattr(pos, "float_profit_short", None)),
+                         "frozen_long": number(getattr(pos, "volume_long_frozen", None)),
+                         "frozen_short": number(getattr(pos, "volume_short_frozen", None))})
     return {"account": data, "positions": sorted(rows, key=lambda x: x["symbol"]),
             "orders": [order_row(k, v) for k, v in (orders or {}).items() if v.instrument_id and v.volume_orign > 0],
             "fills": [fill_row(k, v) for k, v in (fills or {}).items() if v.instrument_id and v.volume > 0],

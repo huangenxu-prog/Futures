@@ -9,7 +9,10 @@ class SnapshotTests(unittest.TestCase):
         result = snapshot(account, {"DCE.m2701": Obj(pos_long=2, pos_short=0, float_profit=100),
                                     "DCE.m2705": Obj(pos_long=0, pos_short=0)})
         self.assertEqual(result["account"]["balance"], 100000)
-        self.assertEqual(result["positions"], [{"symbol":"DCE.m2701","long":2,"short":0,"float_profit":100}])
+        self.assertEqual(len(result["positions"]), 1)
+        self.assertEqual(result["positions"][0]["symbol"], "DCE.m2701")
+        self.assertEqual(result["positions"][0]["long"], 2)
+        self.assertIsNone(result["positions"][0]["open_price_long"])
     def test_invalid_data(self):
         self.assertIsNone(snapshot(Obj(balance=float("nan"), available=0), {}))
         self.assertIsNone(number(float("inf")))

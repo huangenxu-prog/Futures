@@ -674,7 +674,7 @@ private struct PaperOrderTicket:View {
     }
 }
 
-private struct PaperContractPicker:View {
+struct PaperContractPicker:View {
     @Environment(\.dismiss) private var dismiss
     let instruments:[FuturesInstrument]
     let favoriteIDs:[String]
