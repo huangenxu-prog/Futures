@@ -5,7 +5,6 @@ struct InstrumentDetailView: View {
     @Environment(\.mainContracts) private var contracts
     @EnvironmentObject private var favorites: Favorites
     @State private var showOptions = false
-    @State private var showingTrade = false
     @State private var tradeContract: PaperContract?
     @State private var showContracts = false
     @State private var showChartIndicatorSettings = false
@@ -150,13 +149,10 @@ struct InstrumentDetailView: View {
             // dictionary. Consume the actual shared live feed directly.
             liveQuote = incoming
         }
-        .sheet(isPresented:$showingTrade) {
-            if let tradeContract {
-                QuickTradeSheet(contract:tradeContract)
-                    .presentationDetents([.height(430), .large])
-                    .presentationDragIndicator(.visible)
-
-            }
+        .sheet(item: $tradeContract) { contract in
+            QuickTradeSheet(contract: contract)
+                .presentationDetents([.height(350), .large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showOptions) {
             OptionChainView(code: chartSymbol, underlyingLast: currentLast,underlyingName:instrument.name)
@@ -188,7 +184,7 @@ struct InstrumentDetailView: View {
     }
     @MainActor
     private func switchInstrument(_ step: Int) {
-        guard !showingTrade, !showOptions, !showContracts, !showChartIndicatorSettings, !showPeriodOrder,
+        guard tradeContract == nil, !showOptions, !showContracts, !showChartIndicatorSettings, !showPeriodOrder,
               selectedCandleTime == nil,
               let index = sequence.firstIndex(where: { $0.id == instrument.id }),
               sequence.indices.contains(index + step) else { return }
@@ -471,7 +467,6 @@ struct InstrumentDetailView: View {
             last:selectedContract?.last ?? snapshot?.last ?? chartLast,
             bid:selectedContract?.bid ?? snapshot?.bid,
             ask:selectedContract?.ask ?? snapshot?.ask)
-        showingTrade = true
     }
 
     private var actions: some View {

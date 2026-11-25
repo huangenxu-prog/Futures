@@ -381,7 +381,7 @@ struct TradingCenterView: View {
                     VStack(spacing: 0) {
                         if !quickOnly { accountHeader; Divider() }
                         else { Text("快期云端模拟").font(.caption).foregroundStyle(.secondary) }
-                        orderPanel
+                        if quickOnly { quickOrderPanel } else { orderPanel }
                         if !quickOnly { Divider(); recordsPanel }
                         else { Spacer(minLength: 0) }
                     if let message = session.actionMessage { Text(message).font(.caption).lineLimit(2) }
@@ -585,6 +585,46 @@ struct TradingCenterView: View {
         }
         return true
     }
+    private var quickOrderPanel: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text(selected.map { contractName($0.symbol) } ?? initialContract.map { contractName($0.symbol) } ?? "--")
+                    .font(.headline)
+                Spacer()
+                Text(selected?.symbol ?? initialContract?.symbol ?? "").font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 6) {
+                priceButton("买一", selected?.bid)
+                priceButton("最新", selected?.last)
+                priceButton("卖一", selected?.ask)
+            }
+            HStack {
+                Text("价格").font(.caption)
+                Button { stepPrice(-1) } label: { Image(systemName: "minus.circle") }.disabled(selected?.tick == nil)
+                TextField("限价", text: $selectedPrice).keyboardType(.decimalPad).multilineTextAlignment(.center).monospacedDigit()
+                Button { stepPrice(1) } label: { Image(systemName: "plus.circle") }.disabled(selected?.tick == nil)
+            }.buttonStyle(.borderless)
+            HStack {
+                Text("手数").font(.caption)
+                Button { selectedQuantity = max(1, selectedQuantity - 1) } label: { Image(systemName: "minus.circle") }
+                TextField("手数", value: $selectedQuantity, format: .number.grouping(.never)).keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit()
+                Button { selectedQuantity = min(10, selectedQuantity + 1) } label: { Image(systemName: "plus.circle") }
+            }.buttonStyle(.borderless)
+            HStack(spacing: 8) {
+                tradeButton("开多", color: MarketPalette.up)
+                tradeButton("开空", color: MarketPalette.down)
+            }
+            Text(quoteError ? "报价获取失败，请核对价格" : (quoteStamp == nil ? "等待报价" : "参考报价 · " + (quoteStamp?.formatted(date: .omitted, time: .standard) ?? "")))
+                .font(.caption2).foregroundStyle(.secondary)
+        }.padding(.vertical, 4)
+    }
+    private func quoteColor(_ value: Double?) -> Color {
+        guard let value, value.isFinite else { return MarketPalette.muted }
+        guard let reference = changeBasis == "open" ? detailedQuote?.opening : detailedQuote?.settlement,
+              reference.isFinite, reference > 0 else { return MarketPalette.ink }
+        if abs(value - reference) < 0.0000001 { return MarketPalette.ink }
+        return MarketPalette.movement(value - reference)
+    }
     private var orderPanel: some View {
         VStack(spacing: 7) {
             HStack(alignment: .top, spacing: 8) {
@@ -603,7 +643,7 @@ struct TradingCenterView: View {
                     HStack(spacing: 4) {
                         Text("最新").foregroundStyle(.secondary)
                         Text(selected?.last.map { $0.formatted() } ?? "--")
-                            .foregroundStyle(MarketPalette.movement(detailedQuote?.change(basis: changeBasis)))
+                            .foregroundStyle(quoteColor(selected?.last))
                         Spacer(minLength: 0)
                         Text(detailedQuote?.changePercent(basis: changeBasis) ?? "--")
                             .foregroundStyle(MarketPalette.movement(detailedQuote?.change(basis: changeBasis)))
@@ -647,7 +687,7 @@ struct TradingCenterView: View {
             HStack(spacing: 3) {
                 Text(title).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
-                Text(value.map { $0.formatted() } ?? "--").foregroundStyle(MarketPalette.ink)
+                Text(value.map { $0.formatted() } ?? "--").foregroundStyle(quoteColor(value))
                 if let volume { Text(volume.formatted()).foregroundStyle(.secondary) }
             }.font(.system(size: 10)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
         }.buttonStyle(.plain).disabled(value == nil)
@@ -658,7 +698,7 @@ struct TradingCenterView: View {
         } label: {
             VStack(spacing: 4) {
                 Text(title).font(.caption2).foregroundStyle(.secondary)
-                Text(value.map { $0.formatted() } ?? "--").font(.subheadline.weight(.medium)).monospacedDigit()
+                Text(value.map { $0.formatted() } ?? "--").font(.subheadline.weight(.medium)).monospacedDigit().foregroundStyle(quoteColor(value))
             }.frame(maxWidth: .infinity).padding(.vertical, 7)
         }.buttonStyle(.borderless).disabled(value == nil)
     }

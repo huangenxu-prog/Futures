@@ -2,7 +2,8 @@ import Foundation
 
 // This module has NO transport or broker credentials. All state is local
 // rehearsal state. No automatic matching, live orders or exchange connection.
-struct PaperContract: Codable, Equatable, Sendable {
+struct PaperContract: Codable, Equatable, Sendable, Identifiable {
+    var id: String { symbol }
     let symbol:String
     let name:String
     let tick:Double?
