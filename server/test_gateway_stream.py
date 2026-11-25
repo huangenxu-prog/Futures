@@ -20,6 +20,37 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_query_worker_reuses_sdk_on_single_owner_and_recycles(self):
+        import threading
+        from unittest.mock import mock_open, Mock
+        owner_ids = []
+        instances = []
+        worker = gateway.QueryWorker(idle_seconds=60, max_calls=2)
+        def factory(**kwargs):
+            api = Mock()
+            instances.append(api)
+            owner_ids.append(threading.get_ident())
+            return api
+        def query():
+            api = worker.acquire_api()
+            owner_ids.append(threading.get_ident())
+            worker.release_api(api)
+            return len(instances)
+        with patch("builtins.open", mock_open(read_data='{"username":"test","password":"test"}')), patch.object(
+                gateway, "TqApi", side_effect=factory), patch.object(gateway, "TqAuth"):
+            self.assertEqual(worker.submit(query), 1)
+            self.assertEqual(worker.submit(query), 1)
+            instances[0].close.assert_called_once()
+            self.assertEqual(worker.submit(query), 2)
+            worker.submit(query)
+            instances[1].close.assert_called_once()
+        self.assertEqual(len(set(owner_ids)), 1)
+        self.assertNotEqual(owner_ids[0], threading.get_ident())
+
+    def test_query_worker_nested_call_does_not_deadlock(self):
+        worker = gateway.QueryWorker()
+        self.assertEqual(worker.submit(lambda: worker.submit(lambda: 7)), 7)
+
     def test_market_access_optional_and_protects_all_v1_routes(self):
         from types import SimpleNamespace
         key = "x" * 64

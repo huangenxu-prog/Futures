@@ -4,6 +4,7 @@ import hmac
 import json
 import math
 import os
+import queue
 import re
 import tempfile
 import threading
@@ -53,6 +54,96 @@ SHORT_QUERY_GATE = threading.RLock()
 SHORT_QUERY_CACHE = OrderedDict()
 SHORT_QUERY_TTL = 6.0
 SHORT_QUERY_MAX_KEYS = 64
+
+
+class QueryWorker:
+    def __init__(self, idle_seconds=15, max_calls=6):
+        self.idle_seconds = idle_seconds
+        self.max_calls = max_calls
+        self.jobs = queue.Queue(maxsize=2)
+        self.slots = threading.BoundedSemaphore(2)
+        self.local = threading.local()
+        self.lock = threading.Lock()
+        self.thread = None
+        self.api = None
+        self.calls = 0
+
+    def acquire_api(self):
+        if not getattr(self.local, "active", False):
+            with open(AUTH_PATH, encoding="utf-8") as handle:
+                credentials = json.load(handle)
+            return TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+        if self.api is None:
+            with open(AUTH_PATH, encoding="utf-8") as handle:
+                credentials = json.load(handle)
+            self.api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+        return self.api
+
+    def release_api(self, api):
+        if not getattr(self.local, "active", False):
+            api.close()
+        # Shared SDK is closed by its owner thread only.
+
+    def reset(self):
+        api, self.api = self.api, None
+        self.calls = 0
+        if api is not None:
+            try:
+                api.close()
+            except Exception:
+                pass
+
+    def submit(self, function, *args, **kwargs):
+        if getattr(self.local, "active", False):
+            return function(*args, **kwargs)
+        if not self.slots.acquire(blocking=False):
+            raise RuntimeError("market_query_busy")
+        done = threading.Event()
+        result = {}
+        with self.lock:
+            if self.thread is None or not self.thread.is_alive():
+                self.thread = threading.Thread(target=self.run, name="market-query", daemon=True)
+                self.thread.start()
+            self.jobs.put_nowait((function, args, kwargs, done, result))
+        if not done.wait(30):
+            raise RuntimeError("market_query_timeout")
+        if "error" in result:
+            raise result["error"]
+        return result["value"]
+
+    def run(self):
+        self.local.active = True
+        while True:
+            try:
+                function, args, kwargs, done, result = self.jobs.get(timeout=self.idle_seconds)
+            except queue.Empty:
+                self.reset()
+                # Keep a small idle thread; release all SDK resources.
+                continue
+            try:
+                result["value"] = function(*args, **kwargs)
+                self.calls += 1
+                if self.calls >= self.max_calls:
+                    self.reset()
+            except Exception as exc:
+                self.reset()
+                result["error"] = exc
+            finally:
+                self.slots.release()
+                done.set()
+
+
+QUERY_WORKER = QueryWorker()
+QUERY_REUSE = os.environ.get("QIHUI_QUERY_REUSE", "0") == "1"
+
+
+def reusable_query(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if QUERY_REUSE:
+            return QUERY_WORKER.submit(function, *args, **kwargs)
+        return function(*args, **kwargs)
+    return wrapped
 
 
 def short_query(function):
@@ -116,6 +207,7 @@ def product_catalog():
         raise RuntimeError("market_data_unavailable") from exc
 
 
+@reusable_query
 @short_query
 def _refresh_catalog():
     """Discover listed futures from TqSdk's authoritative contract directory."""
@@ -123,9 +215,7 @@ def _refresh_catalog():
     with CATALOG_LOCK:
         if CATALOG_CACHE and time.monotonic() < CATALOG_UNTIL:
             return list(CATALOG_CACHE)
-        with open(AUTH_PATH, encoding="utf-8") as handle:
-            credentials = json.load(handle)
-        api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+        api = QUERY_WORKER.acquire_api()
         try:
             symbols = api.query_quotes(ins_class="FUTURE",
                                        exchange_id=sorted(EXCHANGES), expired=False)
@@ -181,7 +271,7 @@ def _refresh_catalog():
             CATALOG_RETRY_AFTER = 0.0
             return list(result)
         finally:
-            api.close()
+            QUERY_WORKER.release_api(api)
 
 
 def supported_product(product):
@@ -217,15 +307,14 @@ def selected_quotes(products):
     return _selected_quotes_cold(tuple(requested))
 
 
+@reusable_query
 @short_query
 def _selected_quotes_cold(requested):
     key = tuple(requested)
     with DYNAMIC_QUOTE_LOCK:
         if time.monotonic() < QUOTE_BATCH_UNTIL.get(key, 0):
             return QUOTE_BATCH_CACHE.get(key, {})
-        with open(AUTH_PATH, encoding="utf-8") as handle:
-            credentials = json.load(handle)
-        api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+        api = QUERY_WORKER.acquire_api()
         try:
             continuous = api.get_quote_list(["KQ.m@" + p for p in requested])
             deadline = time.time() + 4
@@ -263,7 +352,7 @@ def _selected_quotes_cold(requested):
                 QUOTE_BATCH_UNTIL[key] = time.monotonic() + 8
             return result
         finally:
-            api.close()
+            QUERY_WORKER.release_api(api)
 
 
 def snapshot(quote):
@@ -284,14 +373,13 @@ def snapshot(quote):
     return values
 
 
+@reusable_query
 @short_query
 def main_contracts():
     global contract_cache, contract_cache_until
     if time.monotonic() < contract_cache_until:
         return contract_cache
-    with open(AUTH_PATH, encoding="utf-8") as handle:
-        credentials = json.load(handle)
-    api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+    api = QUERY_WORKER.acquire_api()
     try:
         products = sorted(SYMBOLS)
         continuous = api.get_quote_list(["KQ.m@" + product for product in products])
@@ -309,14 +397,13 @@ def main_contracts():
         contract_cache_until = time.monotonic() + 10
         return result
     finally:
-        api.close()
+        QUERY_WORKER.release_api(api)
 
 
+@reusable_query
 @cached_short_query
 def option_chain(underlying):
-    with open(AUTH_PATH, encoding="utf-8") as handle:
-        credentials = json.load(handle)
-    api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+    api = QUERY_WORKER.acquire_api()
     try:
         codes = list(api.query_options(underlying, expired=False))
         result = []
@@ -335,18 +422,17 @@ def option_chain(underlying):
                     result.append(row)
         return sorted(result, key=lambda row: (row["strike"], row["side"], row["code"]))
     finally:
-        api.close()
+        QUERY_WORKER.release_api(api)
 
 
+@reusable_query
 @cached_short_query
 def listed_contracts(product):
     """Query genuine unexpired delivery months, with quotes if available."""
     if not supported_product(product):
         raise ValueError("unknown product")
     exchange, product_id = product.split(".", 1)
-    with open(AUTH_PATH, encoding="utf-8") as handle:
-        credentials = json.load(handle)
-    api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+    api = QUERY_WORKER.acquire_api()
     try:
         available = api.query_quotes(ins_class="FUTURE", exchange_id=exchange,
                                      product_id=product_id, expired=False)
@@ -374,7 +460,7 @@ def listed_contracts(product):
             contracts.append(row)
         return sorted(contracts, key=lambda row: (row["month"], row["code"]))
     finally:
-        api.close()
+        QUERY_WORKER.release_api(api)
 
 
 @short_query
