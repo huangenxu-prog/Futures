@@ -28,8 +28,7 @@ struct InstrumentDetailView: View {
             if pages.count <= 1 {
                 detail(initial, active: true)
             } else {
-                GeometryReader { viewport in
-                    ScrollViewReader { proxy in
+                ScrollViewReader { proxy in
                     ScrollView(.vertical) {
                         VStack(spacing: 0) {
                             ForEach(Array(pages.enumerated()), id: \.element.id) { index, item in
@@ -40,7 +39,7 @@ struct InstrumentDetailView: View {
                                         MarketPalette.surface
                                     }
                                 }
-                                .frame(height: viewport.size.height)
+                                .containerRelativeFrame(.vertical)
                                 .frame(maxWidth: .infinity)
                                 .clipped()
                                 .pagingTestEdges("contract.page." + item.id)
@@ -48,9 +47,7 @@ struct InstrumentDetailView: View {
                             }
                         }.scrollTargetLayout()
                     }
-                    // Keep the native paging stride; only constrain the viewport
-                    // and eliminate scroll-content margins.
-                    .contentMargins(.vertical, 0, for: .scrollContent)
+                    .pagingTestEdges("contract.viewport")
                     .scrollIndicators(.hidden)
                     .scrollTargetBehavior(.paging)
                     .scrollPosition(id: $visibleID, anchor: .top)
@@ -64,14 +61,22 @@ struct InstrumentDetailView: View {
                     .onAppear {
                         proxy.scrollTo(initial.id, anchor: .top)
                     }
-                    .frame(width: viewport.size.width, height: viewport.size.height)
-                    .clipped()
-                    .pagingTestEdges("contract.viewport")
-                    }
                 }
             }
         }
         .background(MarketPalette.surface.ignoresSafeArea())
+        .overlay {
+            GeometryReader { bounds in
+                VStack(spacing: 0) {
+                    MarketPalette.surface.frame(height: bounds.safeAreaInsets.top)
+                    Spacer(minLength: 0)
+                    MarketPalette.surface.frame(height: bounds.safeAreaInsets.bottom)
+                }
+                .ignoresSafeArea(.container, edges: .vertical)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
         .toolbar(.hidden, for: .navigationBar)
         .onAppear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true) }
         .onDisappear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false) }
