@@ -31,7 +31,7 @@ struct QihuiSettingsView: View {
                 }
                 Section("交易") {
                     Button { account = true } label: {
-                        HStack { Text("交易账户"); Spacer(); Image(systemName: "chevron.right") }
+                        HStack { Text("交易设置"); Spacer(); Image(systemName: "chevron.right") }
                     }
                 }
             }
@@ -39,7 +39,7 @@ struct QihuiSettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
             .sheet(isPresented: $strategy) { StrategyCenterView(instruments: instruments, favoriteIDs: favoriteIDs, mainCodes: mainCodes) }
-            .sheet(isPresented: $account) { TradingCenterView(favoriteIDs: favoriteIDs, mainCodes: mainCodes) }
+            .sheet(isPresented: $account) { TradeConnectionSettingsView() }
         }.tint(MarketPalette.accent)
     }
 }

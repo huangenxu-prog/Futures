@@ -339,6 +339,10 @@ struct TradingCenterView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
+            .disabled(pendingAction != nil)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if let action = pendingAction { orderConfirmationBar(action) }
+            }
             .background(MarketPalette.background)
             .navigationTitle("交易")
             .navigationBarTitleDisplayMode(.inline)
@@ -370,23 +374,12 @@ struct TradingCenterView: View {
             .confirmationDialog("确认已在快期核对委托结果？", isPresented: $unlock) {
                 Button("解除锁定") { session.acknowledgeUncertainOrder() }
             } message: { Text("未知结果可能已经下单，切勿重复提交。") }
-            .confirmationDialog("确认模拟委托", isPresented: Binding(get: { pendingAction != nil }, set: { if !$0 { pendingAction = nil } }), titleVisibility: .visible, presenting: pendingAction) { action in
-                Button("提交 " + action) {
-                    guard let c = selected, validOrder(action) else { pendingAction = nil; return }
-                    let direction = action == "开多" || action == "平空" ? "BUY" : "SELL"
-                    let offset = action.hasPrefix("开") ? "OPEN" : (requiresSplit && closeToday ? "CLOSETODAY" : "CLOSE")
-                    let price = selectedPrice, qty = String(selectedQuantity)
-                    pendingAction = nil; tab = "委托"
-                    Task { await session.submit(symbol: c.symbol, direction: direction, offset: offset, price: price, quantity: qty) }
-                }
-            } message: { action in
-                Text(orderConfirmationText(action))
-            }
             .confirmationDialog("确认撤销该模拟委托？", isPresented: Binding(get: { cancelID != nil }, set: { if !$0 { cancelID = nil } }), titleVisibility: .visible, presenting: cancelID) { id in
                 Button("确认撤单", role: .destructive) { cancelID = nil; Task { await session.cancel(id) } }
             }
             .task(id: selectionRequest) {
                 guard let c = selected else { return }
+                await Task.yield()
                 while !Task.isCancelled {
                     await refreshQuote(c)
                     do { try await Task.sleep(for: .seconds(5)) } catch { return }
@@ -399,7 +392,7 @@ struct TradingCenterView: View {
             .onChange(of: address) { _, newAddress in
                 key = TradeKeychain.load(newAddress); keychainMessage = nil
             }
-            .onChange(of: session.canTrade) { _, _ in openInitialIfReady() }
+            .onChange(of: session.signedIn) { _, _ in openInitialIfReady() }
             .sheet(isPresented: $local) {
                 LocalPaperTradingCenterView(favoriteIDs: favoriteIDs, mainCodes: mainCodes, initialContract: initialContract)
             }
@@ -413,7 +406,7 @@ struct TradingCenterView: View {
         }.tint(MarketPalette.accent)
     }
     private func openInitialIfReady() {
-        guard !openedInitial, initialContract != nil, session.canTrade else { return }
+        guard !openedInitial, initialContract != nil, session.signedIn else { return }
         openedInitial = true
         if let initialContract { choose(initialContract) }
     }
@@ -464,7 +457,8 @@ struct TradingCenterView: View {
             guard let pos = session.snapshot?.positions.first(where: { $0.symbol == c.symbol }) else { return false }
             let total = action == "平多" ? pos.long : pos.short
             let frozen = action == "平多" ? pos.frozen_long : pos.frozen_short
-            return selectedQuantity <= max(0, total - (frozen ?? 0))
+            guard let frozen else { return false }
+            return selectedQuantity <= max(0, total - frozen)
         }
         return true
     }
@@ -524,7 +518,7 @@ struct TradingCenterView: View {
         }.buttonStyle(.borderless).disabled(value == nil)
     }
     private func tradeButton(_ action: String, color: Color) -> some View {
-        Button { pendingAction = action } label: {
+        Button { IndicatorKeyboard.dismiss(); pendingAction = action } label: {
             Text(action).font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white).frame(maxWidth: .infinity).padding(.vertical, 12)
                 .background(color.opacity(validOrder(action) ? 0.85 : 0.25), in: RoundedRectangle(cornerRadius: 8))
@@ -544,7 +538,19 @@ struct TradingCenterView: View {
     }
     private func contractName(_ symbol: String) -> String {
         guard let p = product(symbol) else { return symbol }
-        return p.name + String(symbol.dropFirst(p.id.count))
+        let suffix = String(symbol.dropFirst(p.id.count))
+        if symbol.hasPrefix("CZCE."), suffix.count >= 3 {
+            let digits = suffix.prefix(while: { $0.isNumber })
+            if digits.count == 3, let yearDigit = digits.first?.wholeNumberValue {
+                let calendar = Calendar(identifier: .gregorian)
+                let year = calendar.component(.year, from: Date())
+                let decade = year / 10 * 10
+                let candidates = [decade - 10 + yearDigit, decade + yearDigit, decade + 10 + yearDigit]
+                let contractYear = candidates.min { abs($0-year) < abs($1-year) } ?? year
+                return p.name + String(format: "%02d", contractYear % 100) + String(suffix.dropFirst())
+            }
+        }
+        return p.name + suffix
     }
     private func selectHolding(_ symbol: String) {
         if selected?.symbol == symbol { return }
@@ -614,8 +620,33 @@ struct TradingCenterView: View {
             }
         }
     }
+    private func orderConfirmationBar(_ action: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("确认模拟委托").font(.headline)
+            Text(orderConfirmationText(action)).font(.subheadline).monospacedDigit()
+            HStack(spacing: 12) {
+                Button("取消") { pendingAction = nil }
+                    .buttonStyle(.bordered).frame(maxWidth: .infinity)
+                Button("确认" + action) { submitConfirmed(action) }
+                    .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
+                    .disabled(!validOrder(action))
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MarketPalette.raised)
+        .overlay(alignment: .top) { Divider() }
+    }
+    private func submitConfirmed(_ action: String) {
+        guard let c = selected, validOrder(action) else { return }
+        let direction = action == "开多" || action == "平空" ? "BUY" : "SELL"
+        let offset = action.hasPrefix("开") ? "OPEN" : (requiresSplit && closeToday ? "CLOSETODAY" : "CLOSE")
+        let price = selectedPrice, qty = String(selectedQuantity)
+        pendingAction = nil; tab = "委托"
+        Task { await session.submit(symbol: c.symbol, direction: direction, offset: offset, price: price, quantity: qty) }
+    }
     private func orderConfirmationText(_ action: String) -> String {
-        let name = selected?.displayName ?? ""
+        let name = selected.map { contractName($0.symbol) } ?? ""
         let suffix = action.hasPrefix("平") && requiresSplit ? (closeToday ? "今" : "昨") : ""
         return "\(name) \(action)\(suffix) \(selectedQuantity) 手 @ \(selectedPrice)"
     }
@@ -655,3 +686,41 @@ struct TradingCenterView: View {
     }
 }
 
+
+struct TradeConnectionSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var session = CloudTradeSession.shared
+    @AppStorage("qihui.trade.endpoint.v1") private var address = "https://8.153.96.190"
+    @State private var storedKey = false
+    @State private var message: String?
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("账户状态") {
+                    LabeledContent("交易模式", value: "快期云端模拟")
+                    LabeledContent("登录状态", value: session.signedIn ? "已登录" : "未登录")
+                    if session.signedIn {
+                        Button("退出账户", role: .destructive) { Task { await session.logout() } }.disabled(session.busy)
+                    }
+                }
+                Section("交易网关") {
+                    TextField("HTTPS 网关地址", text: $address)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .disabled(session.signedIn || session.busy)
+                    LabeledContent("访问密钥", value: storedKey ? "本机已保存" : "未保存")
+                    Button("清除已保存密钥", role: .destructive) {
+                        if TradeKeychain.remove(address) { storedKey = false; message = nil }
+                        else { message = "清除失败" }
+                    }.disabled(!storedKey || session.signedIn || session.busy)
+                    Text("登录与下单请使用首页的交易入口。").font(.caption).foregroundStyle(.secondary)
+                    if let message { Text(message).font(.caption).foregroundStyle(.red) }
+                }
+            }
+            .navigationTitle("交易设置")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+            .onAppear { storedKey = !TradeKeychain.load(address).isEmpty }
+            .onChange(of: address) { _, value in storedKey = !TradeKeychain.load(value).isEmpty }
+        }.tint(MarketPalette.accent)
+    }
+}

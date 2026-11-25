@@ -240,7 +240,7 @@ struct LightMarketView: View {
                         live, extra in live.last == nil ? extra : live
                     })
             }
-            .sheet(isPresented:$showingTradingCenter) {
+            .fullScreenCover(isPresented:$showingTradingCenter) {
                 TradingCenterView(favoriteIDs:favorites.ids,mainCodes:contracts.merging(onDemandQuotes) { live,extra in live.last == nil ? extra : live }.mapValues(\.code))
             }
             .sheet(isPresented:$showingStrategyCenter) {

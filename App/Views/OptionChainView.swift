@@ -190,10 +190,9 @@ struct OptionChainView: View {
                 .frame(height: 28)
                 .background(MarketPalette.surface)
             }
-            .sheet(item:$selectedOption) { option in
+            .fullScreenCover(item:$selectedOption) { option in
                 QuickTradeSheet(contract:option.paperContract(underlying:code,name:underlyingName))
-                    .presentationDetents([.large])
-                    .presentationDragIndicator(.visible)
+
             }
             .task(id: code) { await load() }
         }
