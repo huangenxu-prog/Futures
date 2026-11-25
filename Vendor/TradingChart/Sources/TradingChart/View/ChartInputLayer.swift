@@ -144,7 +144,7 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
         case .began:
             let v = gesture.velocity(in: self)
             verticalPan = model.onVerticalSwipe != nil && model.activeDrawingTool == nil
-                && model.selectedDrawingID == nil && abs(v.y) > abs(v.x) * 1.5
+                && model.selectedDrawingID == nil && abs(v.y) > abs(v.x) * 1.2
             if !verticalPan { model.beginTouchScroll() }
         case .changed:
             if !verticalPan { model.touchScroll(translation: gesture.translation(in: self).x, plotWidth: bounds.width) }
@@ -152,7 +152,8 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
             if verticalPan {
                 let t = gesture.translation(in: self)
                 verticalPan = false
-                if abs(t.y) >= 65 && abs(t.y) > abs(t.x) * 1.5 {
+                let v = gesture.velocity(in: self)
+                if (abs(t.y) >= 36 || (abs(t.y) >= 18 && abs(v.y) >= 450)) && abs(t.y) > abs(t.x) * 1.2 {
                     model.onVerticalSwipe?(t.y < 0 ? 1 : -1)
                 }
             } else {

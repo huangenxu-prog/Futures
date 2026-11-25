@@ -24,6 +24,7 @@ struct InstrumentDetailView: View {
     @AppStorage("qihui.chart.period-order.v1") private var storedPeriodOrder = ""
     @State private var showPeriodOrder = false
     @State private var rawBars: [MarketBar] = []
+    @State private var adjacentBars: [String: [MarketBar]] = [:]
     @State private var chartFeed = DirectChartFeed<[MarketBar]>()
     @State private var liveQuote: MarketDataService.MainContract?
     @State private var selectedCandleTime: Int64? = nil
@@ -105,6 +106,34 @@ struct InstrumentDetailView: View {
                         if let tick = contract.priceTick,tick > 0 { currentPriceTick = tick }
                         if let multiple = contract.volumeMultiple,multiple > 0 { currentVolumeMultiple = multiple }
                     }
+                }
+            }
+        }
+        .task(id: chartKey + "/neighbors/" + (scenePhase == .active ? "active" : "paused")) {
+            guard scenePhase == .active,
+                  let index = sequence.firstIndex(where: { $0.id == instrument.id }) else { return }
+            let seconds = periodSeconds
+            let currentKey = chartKey
+            let neighbors = [index + 1, index - 1].filter { sequence.indices.contains($0) }
+            let symbols = neighbors.compactMap { contracts[sequence[$0].id]?.code }
+            for symbol in symbols {
+                guard !Task.isCancelled, chartKey == currentKey else { return }
+                let key = symbol + "/" + String(seconds)
+                if adjacentBars[key] != nil { continue }
+                let cached = await Task.detached(priority: .utility) {
+                    MarketDataService.cached(symbol: symbol, period: seconds)
+                }.value
+                guard !Task.isCancelled, chartKey == currentKey else { return }
+                if let cached, !cached.isEmpty {
+                    adjacentBars[key] = cached
+                } else if let fetched = try? await MarketDataService.fetch(symbol: symbol, period: seconds, count: KlineStartupMerge.initialCount, mergeCached: false),
+                          !Task.isCancelled, chartKey == currentKey, !fetched.isEmpty {
+                    adjacentBars[key] = fetched
+                    MarketDataService.cache(fetched, symbol: symbol, period: seconds)
+                }
+                if adjacentBars.count > 6 {
+                    let keep = Set(symbols.map { $0 + "/" + String(seconds) })
+                    adjacentBars = adjacentBars.filter { keep.contains($0.key) }
                 }
             }
         }
@@ -204,7 +233,7 @@ struct InstrumentDetailView: View {
         lastStreamCandleKey = nil
         mostRecentStreamBar = nil
         lastCachedCandleAt = nil
-        rawBars = MarketDataService.cached(symbol: symbol, period: period) ?? []
+        rawBars = adjacentBars[symbol + "/" + String(period)] ?? MarketDataService.cached(symbol: symbol, period: period) ?? []
         chartFeed.publish(key: chartKey, snapshot: rawBars)
         selectedCandleTime = nil
         loadError = nil

@@ -55,8 +55,7 @@ struct LightMarketView: View {
     @State private var scope: Scope = .favorites
     @State private var search = ""
     @State private var editing = false
-    @State private var dataPage = 0
-    @State private var revealedFavorite: String?
+    @State private var expandedQuoteID: String?
     @AppStorage("qihui.appearance.mode.v1") private var appearanceMode = AppAppearanceMode.dark.rawValue
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedInstrument: FuturesInstrument?
@@ -213,6 +212,16 @@ struct LightMarketView: View {
                             .listRowBackground(MarketPalette.surface)
                             .listRowSeparatorTint(MarketPalette.divider)
                             .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                if favorites.ids.contains(item.id) {
+                                    Button("移出自选", role: .destructive) {
+                                        if expandedQuoteID == item.id { expandedQuoteID = nil }
+                                        favorites.toggle(item.id)
+                                    }
+                                } else {
+                                    Button("加入自选") { favorites.toggle(item.id) }.tint(MarketPalette.accent)
+                                }
+                            }
 
                     }
                     .onMove(perform: move)
@@ -324,7 +333,7 @@ struct LightMarketView: View {
                     scope = option
                     selectedCategory = "全部"
                     editing = false
-                    revealedFavorite = nil
+                    expandedQuoteID = nil
                 } label: {
                     VStack(spacing: 9) {
                         Text(option.rawValue)
@@ -394,26 +403,12 @@ struct LightMarketView: View {
     private var showsFavoriteControl: Bool { scope != .favorites || !search.isEmpty }
 
     private let nameWidth: CGFloat = 115
-    // Three complete fields per page, shared by all rows and the header.
-    private let pages: [[Int]] = [[0,1,2],[3,4,5],[6,7,8],[9,10,4]]
     private let columns = ["最新价","涨跌幅","成交量","持仓量","昨结","日增仓","今开","最高","最低","振幅","中间价"]
-    private func slidingData<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .modifier(MarketHorizontalSwipeModifier { dx in
-                dataPage = min(pages.count - 1, max(0, dataPage + (dx < 0 ? 1 : -1)))
-            })
-    }
     private var columnHeadings: some View {
         HStack(spacing: 5) {
             Text("品种").frame(width: nameWidth, alignment: .leading)
-            slidingData {
-                HStack(spacing: 5) {
-                    ForEach(pages[dataPage], id: \.self) { index in
-                        Text(columns[index]).frame(maxWidth: .infinity, alignment: .trailing)
-                    }
-                }
+            ForEach(0..<3) { index in
+                Text(columns[index]).frame(maxWidth: .infinity, alignment: .trailing)
             }
             if showsFavoriteControl || editing { Color.clear.frame(width: 23) }
         }
@@ -423,23 +418,16 @@ struct LightMarketView: View {
         .background(MarketPalette.background)
         .overlay(alignment: .bottom) { Rectangle().fill(MarketPalette.divider).frame(height: 1) }
     }
-    private func favoriteSwipe(_ id: String, isFavorite: Bool) -> MarketHorizontalSwipeModifier {
-        MarketHorizontalSwipeModifier { dx in
-            guard !editing, isFavorite else { return }
-            if dx > 0 { revealedFavorite = id }
-            else if revealedFavorite == id { revealedFavorite = nil }
-        }
-    }
     private func marketRow(_ item: FuturesInstrument) -> some View {
         let q = quote(for: item.id)
         let isFavorite = favorites.ids.contains(item.id)
-        return HStack(spacing: 5) {
-            ZStack(alignment: .leading) {
+        let expanded = expandedQuoteID == item.id && !editing
+        return VStack(spacing: 0) {
+            HStack(spacing: 5) {
                 Button {
-                    if !editing {
-                        if revealedFavorite == item.id { revealedFavorite = nil }
-                        else { detailSequence = instruments; selectedInstrument = item }
-                    }
+                    guard !editing else { return }
+                    detailSequence = instruments
+                    selectedInstrument = item
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(item.name + (q.map { " " + $0.month } ?? ""))
@@ -448,51 +436,53 @@ struct LightMarketView: View {
                         Text(q?.code ?? item.id)
                             .font(.system(size: 9, design: .monospaced)).foregroundStyle(MarketPalette.muted)
                             .lineLimit(1).minimumScaleFactor(0.7)
-                    }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 57)
+                    }.frame(width: nameWidth, alignment: .leading).frame(height: 57)
+                    .contentShape(Rectangle())
                 }.buttonStyle(.plain)
-                if revealedFavorite == item.id && isFavorite {
-                    HStack(spacing: 4) {
-                        Button(role: .destructive) {
-                            revealedFavorite = nil
-                            favorites.toggle(item.id)
-                        } label: {
-                            Text("移出自选").font(.caption.weight(.medium)).foregroundStyle(.white)
-                                .frame(maxWidth: .infinity).frame(height: 38)
-                                .background(MarketPalette.up, in: RoundedRectangle(cornerRadius: 5))
-                        }.buttonStyle(.plain)
-                        Button { revealedFavorite = nil } label: {
-                            Image(systemName: "xmark").font(.caption).foregroundStyle(MarketPalette.muted)
-                                .frame(width: 22, height: 38)
-                        }.buttonStyle(.plain).accessibilityLabel("收起移出自选")
+                Button {
+                    guard !editing else { return }
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        expandedQuoteID = expanded ? nil : item.id
                     }
-                    .background(MarketPalette.surface)
+                } label: {
+                    HStack(spacing: 5) {
+                        ForEach(0..<3) { index in
+                            Text(dataValue(index, q))
+                                .font(.system(size: index == 0 ? 14 : 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(index < 2 ? MarketPalette.movement(q?.change(basis: changeBasis)) : MarketPalette.ink)
+                                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                    }.frame(height: 57).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                .accessibilityLabel(expanded ? "收起行情详情" : "展开行情详情")
+                if showsFavoriteControl {
+                    Button { favorites.toggle(item.id) } label: {
+                        Image(systemName: isFavorite ? "star.fill" : "star").font(.system(size: 12))
+                            .foregroundStyle(isFavorite ? MarketPalette.accent : MarketPalette.muted)
+                            .frame(width: 23, height: 40)
+                    }.buttonStyle(.borderless)
                 }
-            }
-            .frame(width: nameWidth)
-            .contentShape(Rectangle())
-            .modifier(favoriteSwipe(item.id, isFavorite: isFavorite))
-            .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in
-                if scope == .favorites && search.isEmpty && sortBy == "默认" { revealedFavorite = nil; editing = true }
-            })
-            slidingData {
-                HStack(spacing: 0) {
-                    ForEach(pages[dataPage], id: \.self) { index in
-                        Text(dataValue(index, q))
-                            .font(.system(size: index == 0 ? 14 : 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(index < 2 ? MarketPalette.movement(q?.change(basis: changeBasis)) : MarketPalette.ink)
-                            .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
+            }.frame(height: 57)
+            if expanded {
+                VStack(spacing: 9) {
+                    ForEach(0..<2) { row in
+                        HStack(spacing: 10) {
+                            ForEach(0..<3) { col in
+                                let index = 3 + row * 3 + col
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(columns[index]).font(.caption2).foregroundStyle(MarketPalette.muted)
+                                    Text(dataValue(index, q)).font(.subheadline.weight(.medium))
+                                        .monospacedDigit().foregroundStyle(MarketPalette.ink)
+                                        .lineLimit(1).minimumScaleFactor(0.65)
+                                }.frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
                     }
-                }
+                }.padding(10).background(MarketPalette.raised, in: RoundedRectangle(cornerRadius: 6))
+                    .padding(.bottom, 7)
             }
-            if showsFavoriteControl {
-                Button { favorites.toggle(item.id) } label: {
-                    Image(systemName: isFavorite ? "star.fill" : "star").font(.system(size: 12))
-                        .foregroundStyle(isFavorite ? MarketPalette.accent : MarketPalette.muted)
-                        .frame(width: 23, height: 40)
-                }.buttonStyle(.borderless)
-            }
-        }.frame(height: 57)
+        }
     }
     private func dataValue(_ index: Int, _ q: MarketDataService.MainContract?) -> String {
         func number(_ value: Double?) -> String {
@@ -526,48 +516,5 @@ struct LightMarketView: View {
         let id = instruments[from].id
         let target = destination > from ? destination - 1 : destination
         favorites.move(id, to: min(max(0, target), favorites.ids.count - 1))
-    }
-}
-
-
-// The app requires iOS 18 or newer. Use native direction gating on every device.
-private struct MarketHorizontalSwipeModifier: ViewModifier {
-    let onSwipe: (CGFloat) -> Void
-    func body(content: Content) -> some View {
-        content.gesture(MarketHorizontalSwipe(onSwipe: onSwipe))
-    }
-}
-
-// Reject vertical motion before the gesture begins, not after scrolling ends.
-@available(iOS 18.0, *)
-private struct MarketHorizontalSwipe: UIGestureRecognizerRepresentable {
-    let onSwipe: (CGFloat) -> Void
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
-            let v = pan.velocity(in: pan.view)
-            return abs(v.x) > abs(v.y) * 1.5 && abs(v.x) > 0
-        }
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            false
-        }
-    }
-    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
-    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
-        let pan = UIPanGestureRecognizer()
-        pan.maximumNumberOfTouches = 1
-        pan.delegate = context.coordinator
-        pan.cancelsTouchesInView = true
-        return pan
-    }
-    func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
-        recognizer.delegate = context.coordinator
-    }
-    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
-        guard recognizer.state == .ended else { return }
-        let t = recognizer.translation(in: recognizer.view)
-        guard abs(t.x) > 25, abs(t.x) > abs(t.y) * 1.5 else { return }
-        onSwipe(t.x)
     }
 }
