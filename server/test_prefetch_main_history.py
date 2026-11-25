@@ -26,6 +26,22 @@ class MemoryStore:
         return self.bars.get(key, ([], 0))
 
 class MainPrefetchTests(unittest.TestCase):
+    def test_metadata_connection_closed_before_disk_scan(self):
+        from unittest.mock import Mock
+        api = Mock()
+        api.query_cont_quotes.return_value = ["CZCE.SR701"]
+        def scan(*args):
+            api.close.assert_called_once()
+            return [], {"series_total": 6, "series_cached": 6,
+                        "series_fresh": 6, "series_missing": 0}
+        with patch.object(prefetch, "memory_allows_prefetch", return_value=True), patch.object(
+                prefetch.Path, "read_text", return_value='{"username":"test","password":"test"}'), patch.object(
+                prefetch, "TqApi", return_value=api), patch.object(prefetch, "TqAuth"), patch.object(
+                prefetch, "select_history_jobs", side_effect=scan), patch.object(
+                prefetch, "write_status"), patch.object(prefetch.os, "umask"):
+            prefetch.run(1)
+        api.close.assert_called_once()
+
     def test_memory_guard(self):
         with patch.object(Path, "read_text", return_value="MemAvailable: 307199 kB"):
             self.assertFalse(prefetch.memory_allows_prefetch())

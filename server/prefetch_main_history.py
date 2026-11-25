@@ -162,6 +162,9 @@ def run(limit):
             raise RuntimeError("天勤未返回有效的国内主力合约；不写入虚构数据")
         print("发现国内主力品种:", len(codes),
               "历史周期:", len(KLINE_PERIOD_ORDER), flush=True)
+        # Close the metadata connection before scanning historical files.
+        api.close()
+        api = None
         jobs, coverage = select_history_jobs(codes, store, time.time(), limit)
         write_status(dict(coverage, products=len(codes),
                           attempted=0, succeeded=0, failed=0,
@@ -183,15 +186,17 @@ def run(limit):
             if time.monotonic() - start >= MAX_RUNTIME_SECONDS:
                 print("达到单轮运行时间预算，剩余任务留给下次。", flush=True)
                 break
-            if shutil.disk_usage(store.directory).free < MIN_FREE_BYTES:
+            if shutil.disk_usage(store.directory if store.directory.exists() else ROOT).free < MIN_FREE_BYTES:
                 print("磁盘剩余空间不足160MB，停止预热，保护网关。", flush=True)
                 break
             # TqSdk subscriptions are not unsubscribed by get_kline_serial.
             # Close every 6 series to bound SDK RAM and server-side resources.
-            if i > 0 and i % 6 == 0:
+            if i > 0 and i % 6 == 0 and api is not None:
                 api.close()
-                api = TqApi(auth=TqAuth(auth["username"], auth["password"]))
+                api = None
             try:
+                if api is None:
+                    api = TqApi(auth=TqAuth(auth["username"], auth["password"]))
                 bars = fetch_history(api, key)
                 if not bars:
                     failures += 1
@@ -209,10 +214,19 @@ def run(limit):
                       "有效:", len(bars), "磁盘:", len(saved), flush=True)
             except Exception as exc:
                 failures += 1
-                print("预热失败:", key, type(exc).__name__,
-                      str(exc)[:150], flush=True)
+                print("预热失败:", key, type(exc).__name__, flush=True)
+                if api is not None:
+                    try:
+                        api.close()
+                    except Exception:
+                        pass
+                    api = None
             finally:
                 time.sleep(0.2)  # best-effort gentle pacing
+        # Release SDK memory before parsing cache files again.
+        if api is not None:
+            api.close()
+            api = None
         # Recompute actual disk coverage after successful writes.
         _, coverage = select_history_jobs(codes, store, time.time(), limit=0)
         write_status(dict(coverage, products=len(codes),

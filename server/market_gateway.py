@@ -499,6 +499,9 @@ class LiveQuoteHub:
         self.contracts = {}
         self.version = 0
         self.last_received = 0.0
+        self.last_poll = 0.0
+        self.last_sdk_event = 0.0
+        self.connection_state = "starting"
         self.thread = None
 
     def start(self):
@@ -514,9 +517,21 @@ class LiveQuoteHub:
 
     def status(self):
         with self.condition:
+            now = time.monotonic()
+            def age(stamp):
+                return round(now - stamp, 1) if stamp else None
             return {"products": len(self.contracts),
-                    "last_change_age_seconds": round(time.monotonic() - self.last_received, 1)
-                    if self.last_received else None}
+                    "connection_state": self.connection_state,
+                    "last_change_age_seconds": age(self.last_received),
+                    "last_poll_age_seconds": age(self.last_poll),
+                    "last_sdk_event_age_seconds": age(self.last_sdk_event)}
+
+    def record_poll(self, updated):
+        with self.condition:
+            self.last_poll = time.monotonic()
+            if updated:
+                self.last_sdk_event = self.last_poll
+            self.connection_state = "polling"
 
     def publish(self, contracts):
         with self.condition:
@@ -541,7 +556,8 @@ class LiveQuoteHub:
                 last_published = {}
                 while True:
                     # wait_update is TqSdk's event-driven feed; no periodic HTTP quote polling.
-                    api.wait_update(deadline=time.time() + 0.2)
+                    updated = api.wait_update(deadline=time.time() + 0.2)
+                    self.record_poll(updated)
                     pairs = [(product, q.underlying_symbol)
                              for product, q in zip(products, continuous)
                              if q.underlying_symbol and contract_product(q.underlying_symbol) == product]
@@ -566,14 +582,16 @@ class LiveQuoteHub:
                         last_published = current
                         last_sent = now
             except Exception as exc:
-                print("行情推送连接断开，准备重连:", type(exc).__name__, str(exc)[:180], flush=True)
-                time.sleep(3)
+                with self.condition:
+                    self.connection_state = "reconnecting"
+                print("行情推送连接断开，准备重连:", type(exc).__name__, flush=True)
             finally:
                 if api is not None:
                     try:
                         api.close()
                     except Exception:
                         pass
+            time.sleep(3)
 
 
 LIVE_QUOTES = LiveQuoteHub()

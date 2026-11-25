@@ -20,6 +20,17 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_quote_poll_age_is_distinct_from_quote_change_age(self):
+        hub = gateway.LiveQuoteHub()
+        hub.record_poll(False)
+        status = hub.status()
+        self.assertEqual(status["connection_state"], "polling")
+        self.assertIsNotNone(status["last_poll_age_seconds"])
+        self.assertIsNone(status["last_sdk_event_age_seconds"])
+        self.assertIsNone(status["last_change_age_seconds"])
+        hub.record_poll(True)
+        self.assertIsNotNone(hub.status()["last_sdk_event_age_seconds"])
+
     def test_query_worker_start_failure_releases_admission(self):
         worker = gateway.QueryWorker()
         with patch.object(gateway.threading.Thread, "start", side_effect=RuntimeError("start failed")):
