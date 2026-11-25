@@ -4,6 +4,7 @@ import Foundation
 struct IntradayPane: View {
     let symbol: String
     let previousSettlement: Double?
+    var isActive = true
     @Environment(\.scenePhase) private var scenePhase
     @State private var bars: [MarketBar] = []
     @State private var status = "加载中"
@@ -46,8 +47,8 @@ struct IntradayPane: View {
         }
         .padding(.horizontal,5)
         .background(MarketPalette.surface)
-        .task(id:symbol+(scenePhase == .active ? "/active" : "/paused")) {
-            guard scenePhase == .active else { return }
+        .task(id:symbol+(scenePhase == .active && isActive ? "/active" : "/paused")) {
+            guard scenePhase == .active, isActive else { return }
             await load()
         }
     }

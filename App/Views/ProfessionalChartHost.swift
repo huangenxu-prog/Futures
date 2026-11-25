@@ -112,6 +112,16 @@ struct ProfessionalChartHost: View {
         return s
     }
 
+    private static func exchangeFormatter(_ format: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.dateFormat = format
+        return formatter
+    }
+
+    private static let exchangeDayFormatter = exchangeFormatter("MM/dd")
+    private static let exchangeMinuteFormatter = exchangeFormatter("MM/dd HH:mm")
+
     private var chartTimeFormatter: TimeFormatter {
         // The chart's X values are synthetic, while labels must always reflect
         // the original China futures exchange timestamps.
@@ -119,11 +129,8 @@ struct ProfessionalChartHost: View {
         let daily = period >= 86_400
         return TimeFormatter { chartDate, _, context in
             guard let actual = mapping.nearestActual(for: chartDate) else { return "" }
-            let formatter = DateFormatter()
-            formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
-            formatter.dateFormat = context == .crosshair
-                ? "MM/dd HH:mm"
-                : (daily ? "MM/dd" : "MM/dd HH:mm")
+            let formatter = context == .crosshair || !daily
+                ? Self.exchangeMinuteFormatter : Self.exchangeDayFormatter
             return formatter.string(from: Date(timeIntervalSince1970: Double(actual)))
         }
     }
@@ -174,7 +181,7 @@ struct ProfessionalChartHost: View {
             TradingChartView(model: model)
                 .frame(maxHeight: .infinity)
             if displaySettings.enabled.contains(.intraday), !isReplay {
-                IntradayPane(symbol:symbol,previousSettlement:previousSettlement)
+                IntradayPane(symbol:symbol,previousSettlement:previousSettlement,isActive:isInteractive)
                     .frame(height:120)
                     .id(symbol)
             }
@@ -448,6 +455,15 @@ struct ProfessionalChartHost: View {
         // candle without changing the number of bars or the newest candle.
         // Updating only the newest candle here silently leaves the prior
         // candlestick (and all following indicators) rendered from stale data.
+        // A 500-bar server window rolling forward by one is an append,
+        // provided the entire overlapping closed history is unchanged.
+        if !model.series.isEmpty, let prior = previous.last, let last = incoming.last,
+           model.series.lastTime == sessionAxis.chartTime(for: prior.time),
+           KlineCorrectionPolicy.isUnchangedRollingAppend(previous: previous, incoming: incoming, time: { $0.time }),
+           model.update(chartCandle(last), interval: interval) != .ignored {
+            model.currentPrice = last.close
+            return
+        }
         let earlierCandleChanged = KlineCorrectionPolicy.hasEarlierCorrection(
             previous: previous, incoming: incoming)
         let requiresReset = model.series.isEmpty
