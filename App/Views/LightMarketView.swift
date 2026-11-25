@@ -441,6 +441,7 @@ struct LightMarketView: View {
                     }.frame(width: nameWidth, alignment: .leading).frame(height: 57)
                     .contentShape(Rectangle())
                 }.buttonStyle(.plain)
+                .accessibilityIdentifier("contract.row." + item.id)
                 Button {
                     guard !editing else { return }
                     withAnimation(.easeInOut(duration: 0.18)) {
