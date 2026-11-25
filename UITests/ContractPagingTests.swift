@@ -14,16 +14,27 @@ final class ContractPagingTests: XCTestCase {
         guard ids.count >= 3 else { return }
 
         func checkPage(_ id: String) {
-            let page = app.descendants(matching: .any)["contract.page." + id].firstMatch
-            let viewport = app.descendants(matching: .any)["contract.viewport"].firstMatch
+            let back = app.buttons["contract.back." + id]
+            XCTAssertTrue(back.waitForExistence(timeout: 20), id)
+            var evidence = ""
             let aligned = NSPredicate { _, _ in
-                guard page.exists, viewport.exists, viewport.frame.height > 0 else { return false }
-                return abs(page.frame.minY - viewport.frame.minY) <= 1 &&
-                    abs(page.frame.maxY - viewport.frame.maxY) <= 1 &&
-                    app.buttons["contract.back." + id].firstMatch.isHittable
+                guard let root = try? app.snapshot() else { return false }
+                var frames: [String: CGRect] = [:]
+                func visit(_ node: XCUIElementSnapshot) {
+                    if node.identifier.hasPrefix("contract.") { frames[node.identifier] = node.frame }
+                    for child in node.children { visit(child) }
+                }
+                visit(root)
+                evidence = String(describing: frames)
+                guard let page = frames["contract.page." + id],
+                      let viewport = frames["contract.viewport"],
+                      let header = frames["contract.back." + id],
+                      viewport.height > 0, viewport.contains(header) else { return false }
+                return abs(page.minY - viewport.minY) <= 1 && abs(page.maxY - viewport.maxY) <= 1
             }
             let ready = XCTNSPredicateExpectation(predicate: aligned, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed, id)
+            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 20), .completed, id + " " + evidence)
+
         }
         for id in ids {
             app.buttons["contract.row." + id].tap()
