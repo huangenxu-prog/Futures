@@ -401,7 +401,7 @@ struct LightMarketView: View {
         content()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
-            .gesture(MarketHorizontalSwipe { dx in
+            .modifier(MarketHorizontalSwipeModifier { dx in
                 dataPage = min(pages.count - 1, max(0, dataPage + (dx < 0 ? 1 : -1)))
             })
     }
@@ -423,8 +423,8 @@ struct LightMarketView: View {
         .background(MarketPalette.background)
         .overlay(alignment: .bottom) { Rectangle().fill(MarketPalette.divider).frame(height: 1) }
     }
-    private func favoriteSwipe(_ id: String, isFavorite: Bool) -> MarketHorizontalSwipe {
-        MarketHorizontalSwipe { dx in
+    private func favoriteSwipe(_ id: String, isFavorite: Bool) -> MarketHorizontalSwipeModifier {
+        MarketHorizontalSwipeModifier { dx in
             guard !editing, isFavorite else { return }
             if dx > 0 { revealedFavorite = id }
             else if revealedFavorite == id { revealedFavorite = nil }
@@ -470,7 +470,7 @@ struct LightMarketView: View {
             }
             .frame(width: nameWidth)
             .contentShape(Rectangle())
-            .gesture(favoriteSwipe(item.id, isFavorite: isFavorite))
+            .modifier(favoriteSwipe(item.id, isFavorite: isFavorite))
             .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in
                 if scope == .favorites && search.isEmpty && sortBy == "默认" { revealedFavorite = nil; editing = true }
             })
@@ -530,7 +530,27 @@ struct LightMarketView: View {
 }
 
 
+// Retain the project's older deployment target. Native direction gating is
+// available on iOS 18 and later; older systems retain simultaneous gestures.
+private struct MarketHorizontalSwipeModifier: ViewModifier {
+    let onSwipe: (CGFloat) -> Void
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.gesture(MarketHorizontalSwipe(onSwipe: onSwipe))
+        } else {
+            content.simultaneousGesture(
+                DragGesture(minimumDistance: 25).onEnded { value in
+                    let t = value.translation
+                    guard abs(t.width) > 25, abs(t.width) > abs(t.height) * 1.5 else { return }
+                    onSwipe(t.width)
+                }
+            )
+        }
+    }
+}
+
 // Reject vertical motion before the gesture begins, not after scrolling ends.
+@available(iOS 18.0, *)
 private struct MarketHorizontalSwipe: UIGestureRecognizerRepresentable {
     let onSwipe: (CGFloat) -> Void
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
