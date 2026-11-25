@@ -70,6 +70,22 @@ private struct CloudSnapshot: Decodable {
         let remaining: Int
         let status: String
         let message: String
+        let time_ns: Int64?
+        let display_state: String?
+        var stateText: String {
+            switch display_state {
+            case "ALIVE": return "挂单"
+            case "PARTIAL": return "部分成交"
+            case "FILLED": return "已成"
+            case "CANCELED": return "已撤"
+            case "PARTIAL_CANCELED": return "部成部撤"
+            case "REJECTED": return "废单"
+            default:
+                if status == "ALIVE" { return remaining < quantity ? "部分成交" : "挂单" }
+                if status == "FINISHED" && remaining == 0 { return "已成" }
+                return "已结束"
+            }
+        }
     }
     struct Fill: Decodable, Identifiable {
         let id: String
@@ -127,7 +143,7 @@ private final class CloudTradeSession: ObservableObject {
     private func reconcile(_ data: CloudSnapshot) {
         if let id = awaitingCancelID, let order = data.orders?.first(where: { $0.id == id }), order.status == "FINISHED" {
             awaitingCancelID = nil
-            actionMessage = order.remaining == 0 ? "委托已全部成交" : "委托已结束，请核对撤单结果"
+            actionMessage = "委托状态：" + order.stateText
         }
         if let pendingOrder, data.orders?.contains(where: { $0.id == pendingOrder }) == true {
             clearPending()
@@ -692,16 +708,19 @@ struct TradingCenterView: View {
                 }
                 if session.snapshot?.fills?.isEmpty != false { Text("暂无成交或未取得数据").font(.caption).foregroundStyle(.secondary) }
             } else {
-                let orders = (session.snapshot?.orders ?? []).filter { tab != "挂单" || $0.status == "ALIVE" }
+                let orders = (session.snapshot?.orders ?? []).filter { tab != "挂单" || $0.status == "ALIVE" }.sorted {
+                    ($0.time_ns ?? 0) == ($1.time_ns ?? 0) ? $0.id > $1.id : ($0.time_ns ?? 0) > ($1.time_ns ?? 0)
+                }
                 ForEach(orders) { o in
                     VStack(alignment: .leading, spacing: 5) {
                         HStack { Text(contractName(o.symbol)).fontWeight(.medium); Spacer(); Text(actionName(o.direction,o.offset)) }
                         HStack {
                             Text(orderQuantityText(o))
                             Spacer()
-                            Text(o.status == "ALIVE" ? (o.remaining < o.quantity ? "部分成交" : "挂单") : (o.remaining == 0 ? "全部成交" : "已结束"))
+                            Text(o.stateText)
                             if tab == "挂单" && o.status == "ALIVE" { Button("撤单", role: .destructive) { cancelID = o.id }.buttonStyle(.borderless).disabled(session.busy) }
                         }.font(.caption)
+                        if let ns = o.time_ns, ns > 0 { Text(Date(timeIntervalSince1970: Double(ns)/1e9).formatted(date: .omitted, time: .standard)).font(.caption2).foregroundStyle(.secondary) }
                         if !o.message.isEmpty { Text(o.message).font(.caption2).foregroundStyle(.secondary) }
                     }
                 }

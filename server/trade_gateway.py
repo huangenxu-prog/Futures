@@ -28,12 +28,38 @@ def number(v):
     except (TypeError, ValueError, OverflowError):
         return None
 
+def order_state(status, quantity, remaining, message, is_error, exchange_order_id):
+    if status == "ALIVE":
+        return "PARTIAL" if 0 < remaining < quantity else "ALIVE"
+    if status != "FINISHED":
+        return "UNKNOWN"
+    if quantity > 0 and remaining == 0:
+        return "FILLED"
+    if is_error is True:
+        return "REJECTED"
+    # Do not confuse cancellation rejection with successful cancellation.
+    if any(x in message for x in ("撤单失败", "撤单拒绝", "撤单错误", "无法撤单", "不能撤单")):
+        return "FINISHED"
+    if any(x in message for x in ("已撤", "撤单成功", "撤单完成", "撤单已完成", "撤销成功", "已撤销", "部成部撤", "全部撤单")):
+        return "PARTIAL_CANCELED" if 0 < remaining < quantity else "CANCELED"
+    # A finished, incompletely filled order with an exchange order ID was accepted.
+    # Keep ambiguous terminal results distinct when the SDK supplies no evidence.
+    if is_error is False and exchange_order_id and remaining > 0:
+        return "PARTIAL_CANCELED" if remaining < quantity else "CANCELED"
+    return "FINISHED"
+
 def order_row(oid, o):
+    message = str(o.last_msg or "")
+    is_error = getattr(o, "is_error", None)
+    exchange_order_id = str(getattr(o, "exchange_order_id", "") or "")
     return {"id": oid, "symbol": str(o.exchange_id) + "." + str(o.instrument_id),
             "direction": str(o.direction), "offset": str(o.offset),
             "price": number(o.limit_price), "quantity": int(o.volume_orign),
             "remaining": int(o.volume_left), "status": str(o.status),
-            "message": str(o.last_msg or "")[:200]}
+            "message": message[:200], "time_ns": int(getattr(o, "insert_date_time", 0) or 0),
+            "exchange_order_id": exchange_order_id,
+            "is_error": is_error if isinstance(is_error, bool) else None,
+            "display_state": order_state(str(o.status), int(o.volume_orign), int(o.volume_left), message, is_error, exchange_order_id)}
 
 def fill_row(tid, t):
     return {"id": tid, "order_id": str(t.order_id),
@@ -79,7 +105,7 @@ def snapshot(account, positions, orders=None, fills=None):
                          "frozen_long": number(getattr(pos, "volume_long_frozen", None)),
                          "frozen_short": number(getattr(pos, "volume_short_frozen", None))})
     return {"account": data, "positions": sorted(rows, key=lambda x: x["symbol"]),
-            "orders": [order_row(k, v) for k, v in (orders or {}).items() if v.instrument_id and v.volume_orign > 0],
+            "orders": sorted([order_row(k, v) for k, v in (orders or {}).items() if v.instrument_id and v.volume_orign > 0], key=lambda x: (x["time_ns"], x["id"]), reverse=True),
             "fills": [fill_row(k, v) for k, v in (fills or {}).items() if v.instrument_id and v.volume > 0],
             "simulation_orders": True}
 
