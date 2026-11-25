@@ -28,67 +28,42 @@ struct InstrumentDetailView: View {
             if pages.count <= 1 {
                 detail(initial, active: true)
             } else {
-                GeometryReader { viewport in
-                    let height = max(1, viewport.size.height)
-                    ScrollViewReader { proxy in
-                        ScrollView(.vertical) {
-                            VStack(spacing: 0) {
-                                ForEach(Array(pages.enumerated()), id: \.element.id) { index, item in
-                                    Group {
-                                        if abs(index - activeIndex) <= 1 || item.id == visibleID {
-                                            detail(item, active: item.id == activeID)
-                                        } else {
-                                            MarketPalette.surface
-                                        }
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) {
+                        VStack(spacing: 0) {
+                            ForEach(Array(pages.enumerated()), id: \.element.id) { index, item in
+                                Group {
+                                    if abs(index - activeIndex) <= 1 || item.id == visibleID {
+                                        detail(item, active: item.id == activeID)
+                                    } else {
+                                        MarketPalette.surface
                                     }
-                                    // Both the page stride and viewport use the
-                                    // same safe-area-constrained measurement.
-                                    .frame(width: viewport.size.width, height: height, alignment: .top)
-                                    .background(MarketPalette.surface)
-                                    .clipped()
-                                    .id(item.id)
                                 }
-                            }.scrollTargetLayout()
-                        }
-                        .contentMargins(.vertical, 0, for: .scrollContent)
-                        .scrollIndicators(.hidden)
-                        .scrollTargetBehavior(.paging)
-                        .scrollPosition(id: $visibleID, anchor: .top)
-                        .frame(width: viewport.size.width, height: height)
-                        .clipped()
-                        .onScrollPhaseChange { _, phase, context in
-                            scrolling = phase != .idle
-                            guard phase == .idle else { return }
-                            let offset = context.geometry.contentOffset.y + context.geometry.contentInsets.top
-                            guard offset.isFinite else { return }
-                            let index = Int(min(CGFloat(pages.count - 1), max(0, (offset / height).rounded())))
-                            let id = pages[index].id
-                            activeID = id
-                            visibleID = id
-                            // Native paging normally lands exactly. Correct a
-                            // residual offset only after the gesture has ended.
-                            if abs(offset - CGFloat(index) * height) > 1 {
-                                var transaction = Transaction(animation: nil)
-                                transaction.disablesAnimations = true
-                                withTransaction(transaction) {
-                                    proxy.scrollTo(id, anchor: .top)
-                                }
+                                .containerRelativeFrame(.vertical)
+                                .frame(maxWidth: .infinity)
+                                .clipped()
+                                .id(item.id)
                             }
-                        }
-                        .onAppear {
-                            proxy.scrollTo(initial.id, anchor: .top)
-                        }
-                        .onChange(of: height) { _, _ in
-                            guard !scrolling else { return }
-                            var transaction = Transaction(animation: nil)
-                            transaction.disablesAnimations = true
-                            withTransaction(transaction) {
-                                proxy.scrollTo(activeID, anchor: .top)
-                            }
-                        }
+                        }.scrollTargetLayout()
                     }
+                    // Keep the native paging stride; only constrain the viewport
+                    // and eliminate scroll-content margins.
+                    .contentMargins(.vertical, 0, for: .scrollContent)
+                    .scrollIndicators(.hidden)
+                    .scrollTargetBehavior(.paging)
+                    .scrollPosition(id: $visibleID, anchor: .top)
+                    .onScrollPhaseChange { _, phase in
+                        scrolling = phase != .idle
+                        if phase == .idle, let id = visibleID { activeID = id }
+                    }
+                    .onChange(of: visibleID) { _, id in
+                        if !scrolling, let id { activeID = id }
+                    }
+                    .onAppear {
+                        proxy.scrollTo(initial.id, anchor: .top)
+                    }
+                    .clipped()
                 }
-                .clipped()
             }
         }
         .background(MarketPalette.surface.ignoresSafeArea())

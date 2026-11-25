@@ -242,6 +242,7 @@ struct LightMarketView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(item: $selectedInstrument) { item in
                 InstrumentDetailView(instrument: item, sequence: detailSequence)
+                    .id(item.id)
                     .environment(\.mainContracts, contracts.merging(onDemandQuotes) {
                         live, extra in live.last == nil ? extra : live
                     })
