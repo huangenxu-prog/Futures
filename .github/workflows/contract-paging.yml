@@ -1,5 +1,7 @@
 name: Contract paging acceptance
 on:
+  push:
+    branches: [fix/verified-contract-paging]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -9,6 +11,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - run: brew list xcodegen || brew install xcodegen
       - run: xcodegen generate
       - name: Run entry and paging UI tests
