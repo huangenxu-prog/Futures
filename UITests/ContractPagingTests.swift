@@ -42,7 +42,13 @@ final class ContractPagingTests: XCTestCase {
         for id in ids {
             app.buttons["contract.row." + id].tap()
             checkPage(id)
-            app.buttons["contract.back." + id].firstMatch.tap()
+            let back = app.buttons["contract.back." + id].firstMatch
+            let row = app.buttons["contract.row." + id]
+            back.tap()
+            if !row.waitForExistence(timeout: 5), back.exists && back.isHittable {
+                back.tap()
+            }
+            XCTAssertTrue(row.waitForExistence(timeout: 10), "Return to list from " + id)
         }
         app.buttons["contract.row." + ids[1]].tap()
         checkPage(ids[1])
