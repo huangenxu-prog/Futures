@@ -83,11 +83,28 @@ def main():
         "}", ""
     ]) + "\n"
     updated = (source[:match.start()] + location + source[match.start():]).encode()
-    url = "https://raw.githubusercontent.com/huangenxu-prog/Futures/" + COMMIT + "/server/trade_gateway.py"
-    with urlopen(url, timeout=25) as res:
-        raw = res.read(100000)
-    if hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest() != BLOB:
-        raise RuntimeError("Trade gateway source hash mismatch")
+    import base64
+    import json
+    sources = [
+        ("api", "https://api.github.com/repos/huangenxu-prog/Futures/contents/server/trade_gateway.py?ref=" + COMMIT),
+        ("cdn", "https://cdn.jsdelivr.net/gh/huangenxu-prog/Futures@" + COMMIT + "/server/trade_gateway.py"),
+        ("raw", "https://raw.githubusercontent.com/huangenxu-prog/Futures/" + COMMIT + "/server/trade_gateway.py"),
+    ]
+    for kind, url in sources:
+        try:
+            req = Request(url, headers={"User-Agent": "Qihui-Trade-Installer", "Accept": "application/vnd.github+json"})
+            with urlopen(req, timeout=15) as res:
+                raw = res.read(100000)
+            if kind == "api":
+                raw = base64.b64decode(json.loads(raw)["content"])
+            if hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest() != BLOB:
+                raise RuntimeError("Trade gateway source hash mismatch")
+            print("Verified trade gateway source:", kind, flush=True)
+            break
+        except Exception as exc:
+            print("Download failed:", kind, type(exc).__name__, flush=True)
+    else:
+        raise RuntimeError("No verified trade gateway download available; no changes made")
     compile(raw, str(TARGET), "exec")
     run(str(PY), "-c", "from tqsdk import TqApi, TqAuth, TqKq")
     key = secrets.token_hex(32)
