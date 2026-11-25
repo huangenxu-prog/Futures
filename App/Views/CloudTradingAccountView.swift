@@ -380,7 +380,7 @@ struct TradingCenterView: View {
                     Task { await session.submit(symbol: c.symbol, direction: direction, offset: offset, price: price, quantity: qty) }
                 }
             } message: { action in
-                Text((selected?.displayName ?? "") + " " + action + (action.hasPrefix("平") && requiresSplit ? (closeToday ? "今" : "昨") : "") + " " + String(selectedQuantity) + " 手 @ " + selectedPrice)
+                Text(orderConfirmationText(action))
             }
             .confirmationDialog("确认撤销该模拟委托？", isPresented: Binding(get: { cancelID != nil }, set: { if !$0 { cancelID = nil } }), titleVisibility: .visible, presenting: cancelID) { id in
                 Button("确认撤单", role: .destructive) { cancelID = nil; Task { await session.cancel(id) } }
@@ -592,7 +592,7 @@ struct TradingCenterView: View {
                 ForEach((session.snapshot?.fills ?? []).sorted { $0.time_ns > $1.time_ns }) { f in
                     VStack(alignment: .leading, spacing: 5) {
                         HStack { Text(contractName(f.symbol)).fontWeight(.medium); Spacer(); Text(actionName(f.direction, f.offset)) }
-                        HStack { Text((f.price.map { $0.formatted() } ?? "--") + " × " + String(f.quantity)); Spacer(); Text(Date(timeIntervalSince1970: Double(f.time_ns)/1e9).formatted(date: .omitted, time: .standard)) }.font(.caption).foregroundStyle(.secondary)
+                        HStack { Text(fillQuantityText(f)); Spacer(); Text(Date(timeIntervalSince1970: Double(f.time_ns)/1e9).formatted(date: .omitted, time: .standard)) }.font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 if session.snapshot?.fills?.isEmpty != false { Text("暂无成交或未取得数据").font(.caption).foregroundStyle(.secondary) }
@@ -602,7 +602,7 @@ struct TradingCenterView: View {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack { Text(contractName(o.symbol)).fontWeight(.medium); Spacer(); Text(actionName(o.direction,o.offset)) }
                         HStack {
-                            Text((o.price.map { $0.formatted() } ?? "--") + " · " + String(o.quantity-o.remaining) + "/" + String(o.quantity) + "手")
+                            Text(orderQuantityText(o))
                             Spacer()
                             Text(o.status == "ALIVE" ? (o.remaining < o.quantity ? "部分成交" : "挂单") : (o.remaining == 0 ? "全部成交" : "已结束"))
                             if o.status == "ALIVE" { Button("撤单", role: .destructive) { cancelID = o.id }.buttonStyle(.borderless).disabled(session.busy) }
@@ -613,6 +613,20 @@ struct TradingCenterView: View {
                 if orders.isEmpty { Text(tab == "挂单" ? "暂无挂单" : "暂无委托或未取得数据").font(.caption).foregroundStyle(.secondary) }
             }
         }
+    }
+    private func orderConfirmationText(_ action: String) -> String {
+        let name = selected?.displayName ?? ""
+        let suffix = action.hasPrefix("平") && requiresSplit ? (closeToday ? "今" : "昨") : ""
+        return "\(name) \(action)\(suffix) \(selectedQuantity) 手 @ \(selectedPrice)"
+    }
+    private func fillQuantityText(_ fill: CloudSnapshot.Fill) -> String {
+        let price = fill.price?.formatted() ?? "--"
+        return "\(price) × \(fill.quantity)"
+    }
+    private func orderQuantityText(_ order: CloudSnapshot.Order) -> String {
+        let price = order.price?.formatted() ?? "--"
+        let filled = order.quantity - order.remaining
+        return "\(price) · \(filled)/\(order.quantity)手"
     }
     private func positionRow(_ p: CloudSnapshot.Position, long: Bool) -> some View {
         let qty = long ? p.long : p.short
