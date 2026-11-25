@@ -161,8 +161,23 @@ WantedBy=multi-user.target
         replace_config(updated, mode)
         run("nginx", "-t")
         run("systemctl", "reload", "nginx")
-        if code(BASE + "/v1/trade/snapshot") != 403 or code(BASE + "/v1/trade/snapshot", key) != 401 or code(BASE + "/health") != 200:
-            raise RuntimeError("HTTPS authorization or market health check failed")
+        # systemctl reload returns before the new Nginx workers accept connections.
+        # Check all routes separately, never print the secret or response bodies.
+        for attempt in range(1, 13):
+            time.sleep(1)
+            statuses = []
+            for url, access in ((BASE + "/health", None),
+                                (BASE + "/v1/trade/snapshot", None),
+                                (BASE + "/v1/trade/snapshot", key)):
+                try:
+                    statuses.append(code(url, access))
+                except OSError as exc:
+                    statuses.append(type(exc).__name__)
+            print("HTTPS attempt", attempt, "market/unauthenticated/authorized:", *statuses, flush=True)
+            if statuses == [200, 403, 401]:
+                break
+        else:
+            raise RuntimeError("HTTPS authorization or market health check failed: " + str(statuses))
         run("systemctl", "enable", SERVICE)
         print("TRADE_DEPLOY_OK: market health=200; unauthenticated=403; authorized without session=401")
         print("Access key stored privately in /etc/qihui-trade.env; not printed.")
