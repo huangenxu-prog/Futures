@@ -416,7 +416,7 @@ struct LightMarketView: View {
                 dataOffset = clampedOffset(dataOffset - value.translation.width, width: dataViewport)
             }
     }
-    private func slidingData<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    private func slidingData<Content: View>(@ViewBuilder content: @escaping () -> Content) -> some View {
         GeometryReader { geometry in
             content()
                 .frame(width: contentWidth, alignment: .leading)
