@@ -4,6 +4,7 @@ import TradingChart
 enum ChartIndicatorKind: String, Codable, CaseIterable, Hashable, Identifiable {
     case sma, emaFast, emaSlow, wma, boll, volume, macd, rsi, kdj, atr, sar, opi, chan, hunt, intraday
     var id: String { rawValue }
+    static var available: [Self] { allCases.filter { $0 != .chan && $0 != .hunt } }
 
     var title: String {
         switch self {
@@ -59,7 +60,7 @@ struct ChartDisplaySettings: Codable, Equatable {
     init(from decoder: Decoder) throws {
         self.init()
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = try c.decodeIfPresent(Set<ChartIndicatorKind>.self, forKey: .enabled) ?? enabled
+        enabled = (try c.decodeIfPresent(Set<ChartIndicatorKind>.self, forKey: .enabled) ?? enabled).subtracting([.chan, .hunt])
         sma = try c.decodeIfPresent(Int.self, forKey: .sma) ?? sma
         emaFast = try c.decodeIfPresent(Int.self, forKey: .emaFast) ?? emaFast
         emaSlow = try c.decodeIfPresent(Int.self, forKey: .emaSlow) ?? emaSlow
@@ -217,7 +218,7 @@ struct ChartDisplaySettings: Codable, Equatable {
 
     func indicators() -> [any ChartIndicator] {
         var result: [any ChartIndicator] = []
-        for kind in ChartIndicatorKind.allCases where enabled.contains(kind) {
+        for kind in ChartIndicatorKind.available where enabled.contains(kind) {
             switch kind {
             case .sma: result.append(Self.movingAverage(type: .sma, period: sma))
             case .emaFast: result.append(Self.movingAverage(type: .ema, period: emaFast))
@@ -231,8 +232,8 @@ struct ChartDisplaySettings: Codable, Equatable {
             case .atr: result.append(QihuiATR(period: atrPeriod))
             case .sar: result.append(QihuiSAR(step: sarStep, maximum: sarMaximum))
             case .opi: result.append(QihuiOpenInterest())
-            case .chan: result.append(QihuiChanStructure())
-            case .hunt: result.append(QihuiHuntPreview(showStructure:!enabled.contains(.chan)))
+            case .chan: break
+            case .hunt: break
             case .intraday: break // Independent minute-series pane, not a main-period indicator.
             }
         }

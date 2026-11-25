@@ -147,13 +147,7 @@ struct IndicatorSettingsView: View {
                     Toggle("显示 RSI", isOn: enabledBinding(.rsi))
                     parameter("RSI 周期", value: $draft.rsi, id:"rsi")
                 }
-                Section("结构指标（试验）") {
-                    Toggle("缠论分型、笔与重叠区", isOn: enabledBinding(.chan))
-                    Toggle("猎杀结构与提示", isOn: enabledBinding(.hunt))
-                    Text("缠论只显示结构线及重叠区，不显示顶底文字。猎杀显示结构、趋势及猎杀/等/确认状态；图上为本周期研究提示，并非完整多周期交易资格。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section("自定义公式指标") {
+                Section("自定义指标") {
                     ForEach($draft.formulas) { $formula in
                         HStack {
                             Toggle(formula.name, isOn: $formula.enabled)
@@ -212,7 +206,7 @@ struct IndicatorSettingsView: View {
             .onSubmit { dismissInput() }
             .scrollContentBackground(.hidden)
             .background(MarketPalette.background.ignoresSafeArea())
-            .navigationTitle("指标参数")
+            .navigationTitle("指标管理")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement:.keyboard) {

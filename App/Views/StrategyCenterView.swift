@@ -27,7 +27,7 @@ struct StrategyCenterView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("选择回测品种，再选择具体月份合约及周期。支持自定义公式与猎杀研究；模拟本金5万元，不会发送真实交易指令。")
+                    Text("选择回测品种，再选择具体月份合约及周期。支持自定义公式；默认回测本金5万元，不会发送真实交易指令。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("选择品种") {
@@ -97,7 +97,7 @@ private struct StrategyContractPicker: View {
                     Text("60分钟").tag(3600)
                     Text("日线").tag(86400)
                 }
-                Text("多周期猎杀固定5分钟执行。使用具体月份合约，不拼接不同合约的价格。")
+                Text("使用具体月份合约，不拼接不同合约的价格。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {

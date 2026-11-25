@@ -520,7 +520,7 @@ struct InstrumentDetailView: View {
 
 
 /// Reorder the existing supported periods without introducing new server intervals.
-private struct PeriodOrderView: View {
+struct PeriodOrderView: View {
     @Environment(\.dismiss) private var dismiss
     @State var order: [String]
     let label: (String) -> String

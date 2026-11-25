@@ -11,6 +11,7 @@ struct BacktestParameters: Sendable {
     var stopRisk: Double
     var targetR: Double
     var breakEvenAfterProfit = false
+    var ignoreMargin = false
     var valid: Bool {
         [initial,multiplier,tick,marginRate,feePerSide,stopRisk,targetR].allSatisfy(\.isFinite)
         && initial > 0 && multiplier > 0 && tick > 0 && marginRate > 0 && marginRate <= 1
@@ -146,7 +147,7 @@ enum FuturesBacktest {
                         let margin = abs(entry)*unit*p.marginRate
                         // No adding, no partial margin financing, no entry
                         // with a structural stop farther than the risk cap.
-                        if risk > 0 && netRisk <= p.stopRisk+1e-8 && cash >= margin+2*cost && cash > 0 {
+                        if risk > 0 && netRisk <= p.stopRisk+1e-8 && (p.ignoreMargin || (cash >= margin+2*cost && cash > 0)) {
                             // Net target includes both fees and adverse exit slippage.
                             let distance = (netRisk*p.targetR+2*cost)/unit+slip
                             let target = tickRound(entry+Double(side)*distance,up:side > 0)
@@ -168,7 +169,7 @@ enum FuturesBacktest {
                     close(pos,pos.target,i,"止盈")
                 } else {
                     let marked = cash+(bar.close-pos.entry)*Double(pos.side)*unit-2*cost
-                    if marked < abs(bar.close)*unit*p.marginRate {
+                    if !p.ignoreMargin && marked < abs(bar.close)*unit*p.marginRate {
                         marginCalls += 1
                         close(pos,bar.close,i,"模拟保证金不足")
                     } else if i == bars.count-1 {

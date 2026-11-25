@@ -170,9 +170,6 @@ struct ProfessionalChartHost: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if displaySettings.enabled.contains(.hunt) {
-                huntStatusStrip
-            }
             TradingChartView(model: model)
                 .frame(maxHeight: .infinity)
             if displaySettings.enabled.contains(.intraday), !isReplay {
@@ -243,27 +240,11 @@ struct ProfessionalChartHost: View {
         }
     }
 
-    private var huntStatusStrip: some View {
-        let id = QihuiHuntPreview(showStructure:!displaySettings.enabled.contains(.chan)).id
-        let status = model.output(for:id)?.statusText ?? "本周期 · 趋势：数据不足 · 等"
-        return HStack {
-            Text(status)
-                .font(.system(size:11,weight:.medium))
-                .foregroundStyle(MarketPalette.ink)
-                .lineLimit(2)
-            Spacer(minLength:0)
-        }
-        .padding(.horizontal,8)
-        .padding(.vertical,4)
-        .background(MarketPalette.surface)
-        .accessibilityLabel(status+"，单周期研究提示，非多周期交易资格")
-    }
-
     private var indicatorToolbar: some View {
         HStack(spacing: 2) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 3) {
-                    ForEach(ChartIndicatorKind.allCases) { kind in
+                    ForEach(ChartIndicatorKind.available) { kind in
                         Button {
                             displaySettings = displaySettings.toggle(kind)
                         } label: {
