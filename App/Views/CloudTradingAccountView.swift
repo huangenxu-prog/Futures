@@ -4,18 +4,18 @@ import Foundation
 import Security
 
 private enum TradeKeychain {
-    private static func query(_ address: String) -> [String: Any]? {
+    private static func query(_ address: String, kind: String = "gateway") -> [String: Any]? {
         guard let parts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
               parts.scheme?.lowercased() == "https", let host = parts.host?.lowercased(),
               parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil else { return nil }
         let scope = "https://" + host + ":" + String(parts.port ?? 443) + parts.path
         return [kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: "com.huangenxu.futures.trade.gateway",
+                kSecAttrService as String: "com.huangenxu.futures.trade." + kind,
                 kSecAttrAccount as String: scope,
                 kSecAttrSynchronizable as String: false]
     }
-    static func load(_ address: String) -> String {
-        guard var q = query(address) else { return "" }
+    static func load(_ address: String, kind: String = "gateway") -> String {
+        guard var q = query(address, kind: kind) else { return "" }
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -23,8 +23,8 @@ private enum TradeKeychain {
               let data = result as? Data else { return "" }
         return String(data: data, encoding: .utf8) ?? ""
     }
-    static func save(_ key: String, address: String) -> Bool {
-        guard let q = query(address), !key.isEmpty else { return false }
+    static func save(_ key: String, address: String, kind: String = "gateway") -> Bool {
+        guard let q = query(address, kind: kind), !key.isEmpty else { return false }
         let attributes: [String: Any] = [kSecValueData as String: Data(key.utf8)]
         let status = SecItemUpdate(q as CFDictionary, attributes as CFDictionary)
         if status == errSecSuccess { return true }
@@ -34,8 +34,8 @@ private enum TradeKeychain {
         item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
     }
-    static func remove(_ address: String) -> Bool {
-        guard let q = query(address) else { return false }
+    static func remove(_ address: String, kind: String = "gateway") -> Bool {
+        guard let q = query(address, kind: kind) else { return false }
         let status = SecItemDelete(q as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
     }
@@ -113,6 +113,43 @@ private final class CloudTradeSession: ObservableObject {
     private var accessKey = ""
     private var endpoint: URL?
     private var generation = UUID()
+    private var activeAddress = ""
+    private var recovering = false
+    private var retryAfter = Date.distantPast
+    private var manualLogout = false
+    private var savedPendingAddress = ""
+    private func clearPending() {
+        pendingOrder = nil
+        if !savedPendingAddress.isEmpty { _ = TradeKeychain.remove(savedPendingAddress, kind: "pending") }
+    }
+    func allowManualLogin() { manualLogout = false; retryAfter = .distantPast }
+    private func reconcile(_ data: CloudSnapshot) {
+        if let pendingOrder, data.orders?.contains(where: { $0.id == pendingOrder }) == true {
+            clearPending()
+            actionMessage = "已收到委托记录"
+        }
+    }
+    private func install(_ data: CloudSnapshot, token: String, url: URL, address: String, key: String) {
+        self.token = token; endpoint = url; accessKey = key; activeAddress = address
+        generation = UUID()
+        savedPendingAddress = address
+        let unresolved = TradeKeychain.load(address, kind: "pending")
+        if !unresolved.isEmpty { pendingOrder = unresolved }
+        reconcile(data)
+        snapshot = data; signedIn = true
+        error = nil
+    }
+    func recover(address: String) async {
+        guard !manualLogout, !busy, !signedIn, !recovering, Date() >= retryAfter else { return }
+        let key = TradeKeychain.load(address)
+        let user = TradeKeychain.load(address, kind: "username")
+        let password = TradeKeychain.load(address, kind: "password")
+        guard !key.isEmpty, !user.isEmpty, !password.isEmpty else { return }
+        recovering = true
+        retryAfter = Date().addingTimeInterval(20)
+        defer { recovering = false }
+        await login(address: address, key: key, username: user, password: password)
+    }
     @Published private(set) var pendingOrder: String?
     @Published private(set) var actionMessage: String?
     private var mutating = false
@@ -122,6 +159,11 @@ private final class CloudTradeSession: ObservableObject {
         mutating = true; busy = true
         defer { mutating = false; busy = false }
         let id = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        guard !activeAddress.isEmpty, TradeKeychain.save(id, address: activeAddress, kind: "pending") else {
+            actionMessage = "无法保存委托保护记录，未发送委托"
+            return
+        }
+        savedPendingAddress = activeAddress
         pendingOrder = id
         actionMessage = "正在提交模拟委托"
         do {
@@ -146,7 +188,7 @@ private final class CloudTradeSession: ObservableObject {
         await refresh()
     }
     func acknowledgeUncertainOrder() {
-        pendingOrder = nil
+        clearPending()
         actionMessage = "已手动解除提交锁定，请先核对快期委托记录"
     }
     private let http: URLSession = {
@@ -167,17 +209,32 @@ private final class CloudTradeSession: ObservableObject {
         busy = true; error = nil
         defer { busy = false }
         do {
+            let previous = TradeKeychain.load(address, kind: "session")
+            if !previous.isEmpty,
+               TradeKeychain.load(address, kind: "username") == username,
+               TradeKeychain.load(address, kind: "password") == password {
+                do {
+                    let reply = try await request(base: url, action: "snapshot", key: key, token: previous, body: nil)
+                    guard let data = reply.snapshot else { throw CloudTradeError.unavailable }
+                    install(data, token: previous, url: url, address: address, key: key)
+                    return
+                } catch let failure as CloudTradeError {
+                    guard case .expired = failure else { throw failure }
+                    _ = TradeKeychain.remove(address, kind: "session")
+                }
+            }
             let reply = try await request(base: url, action: "login", key: key, token: nil,
                                           body: ["username": username, "password": password])
             guard let session = reply.token, !session.isEmpty, let data = reply.snapshot else { throw CloudTradeError.unavailable }
-            token = session; accessKey = key; endpoint = url
-            generation = UUID()
-            if let pendingOrder, data.orders?.contains(where: { $0.id == pendingOrder }) == true {
-                self.pendingOrder = nil; actionMessage = "已恢复委托记录"
-            } else if pendingOrder == nil { actionMessage = nil }
-            snapshot = data; signedIn = true
-            if !TradeKeychain.save(key, address: address) {
-                self.error = "登录成功，但设备安全存储未保存网关密钥"
+            install(data, token: session, url: url, address: address, key: key)
+            let saved = [
+                TradeKeychain.save(key, address: address),
+                TradeKeychain.save(username, address: address, kind: "username"),
+                TradeKeychain.save(password, address: address, kind: "password"),
+                TradeKeychain.save(session, address: address, kind: "session")
+            ]
+            if saved.contains(false) {
+                self.error = "登录成功，但设备安全存储未能完整保存登录信息"
             }
         } catch {
             self.error = error.localizedDescription
@@ -191,15 +248,14 @@ private final class CloudTradeSession: ObservableObject {
             guard current == generation, !Task.isCancelled else { return }
             guard let data = reply.snapshot else { throw CloudTradeError.unavailable }
             snapshot = data; error = nil
-            if let pendingOrder, data.orders?.contains(where: { $0.id == pendingOrder }) == true {
-                self.pendingOrder = nil
-                actionMessage = "已收到委托记录"
-            }
+            reconcile(data)
         } catch {
             guard current == generation, !Task.isCancelled else { return }
             snapshot = nil
             if let failure = error as? CloudTradeError, case .expired = failure {
                 generation = UUID()
+                _ = TradeKeychain.remove(activeAddress, kind: "session")
+                retryAfter = .distantPast
                 self.token = nil; self.endpoint = nil; self.accessKey = ""
                 signedIn = false
                 self.error = "交易会话已失效，请重新登录。网关密钥已保留。"
@@ -212,6 +268,11 @@ private final class CloudTradeSession: ObservableObject {
         guard !busy else { return }
         busy = true
         let url = endpoint, session = token, key = accessKey
+        manualLogout = true
+        if !activeAddress.isEmpty {
+            _ = TradeKeychain.remove(activeAddress, kind: "password")
+            _ = TradeKeychain.remove(activeAddress, kind: "session")
+        }
         generation = UUID(); snapshot = nil; signedIn = false
         token = nil; endpoint = nil; accessKey = ""; error = nil
         defer { busy = false }
@@ -234,7 +295,8 @@ private final class CloudTradeSession: ObservableObject {
         case 200: return try JSONDecoder().decode(CloudReply.self, from: data)
         case 401,403: throw token == nil ? CloudTradeError.rejected : CloudTradeError.expired
         case 409: throw CloudTradeError.conflict
-        default: throw CloudTradeError.unavailable
+        case 429: throw CloudTradeError.unavailable
+        default: throw NSError(domain: "QihuiTrade", code: status, userInfo: [NSLocalizedDescriptionKey: "交易服务 HTTP " + String(status) + "，请重试"])
         }
     }
 }
@@ -311,22 +373,26 @@ struct TradingCenterView: View {
                         Section("交易网关") {
                             TextField("HTTPS 网关地址", text: $address)
                                 .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            SecureField("网关访问密钥", text: $key)
+                            if key.isEmpty {
+                                SecureField("网关访问密钥", text: $key)
+                            } else {
+                                LabeledContent("网关访问密钥", value: "已填写")
+                            }
                             Button("清除已保存密钥", role: .destructive) {
-                                if TradeKeychain.remove(address) { key = ""; keychainMessage = nil }
+                                if TradeKeychain.remove(address) { key = ""; keychainMessage = nil; _ = TradeKeychain.remove(address, kind: "password"); _ = TradeKeychain.remove(address, kind: "session") }
                                 else { keychainMessage = "无法清除设备钥匙串密钥" }
                             }.disabled(session.busy)
                             if let keychainMessage { Text(keychainMessage).font(.caption).foregroundStyle(.red) }
-                            Text("登录成功后自动记住网关密钥，仅保存在本机钥匙串。快期密码不保存。")
+                            Text("首次登录成功后，本机钥匙串安全记住模拟账户及密钥，之后自动恢复。退出账户将停止自动登录。")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Section {
                             Button {
                                 let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
                                 let secret = password
-                                password = ""
                                 let access = key
-                                Task { await session.login(address: address, key: access, username: user, password: secret) }
+                                session.allowManualLogin()
+                                Task { await session.login(address: address, key: access, username: user, password: secret); if session.signedIn { password = "" } }
                             } label: {
                                 HStack {
                                     Spacer()
@@ -396,10 +462,12 @@ struct TradingCenterView: View {
             }
             .onAppear {
                 if key.isEmpty { key = TradeKeychain.load(address) }
+                if username.isEmpty { username = TradeKeychain.load(address, kind: "username") }
                 openInitialIfReady()
             }
             .onChange(of: address) { _, newAddress in
                 key = TradeKeychain.load(newAddress); keychainMessage = nil
+                username = TradeKeychain.load(newAddress, kind: "username"); password = ""
             }
             .onChange(of: session.signedIn) { _, signedIn in
                 if signedIn {
@@ -412,10 +480,11 @@ struct TradingCenterView: View {
             .sheet(isPresented: $local) {
                 LocalPaperTradingCenterView(favoriteIDs: favoriteIDs, mainCodes: mainCodes, initialContract: initialContract)
             }
-            .task(id: "\(session.signedIn)-\(scenePhase)") {
-                guard session.signedIn, scenePhase == .active else { return }
+            .task(id: "\(address)-\(scenePhase)") {
+                guard scenePhase == .active else { return }
                 while !Task.isCancelled {
-                    await session.refresh()
+                    if session.signedIn { await session.refresh() }
+                    else if !real { await session.recover(address: address) }
                     do { try await Task.sleep(for: .seconds(3)) } catch { return }
                 }
             }
@@ -725,7 +794,7 @@ struct TradeConnectionSettingsView: View {
                         .disabled(session.signedIn || session.busy)
                     LabeledContent("访问密钥", value: storedKey ? "本机已保存" : "未保存")
                     Button("清除已保存密钥", role: .destructive) {
-                        if TradeKeychain.remove(address) { storedKey = false; message = nil }
+                        if TradeKeychain.remove(address) { storedKey = false; message = nil; _ = TradeKeychain.remove(address, kind: "password"); _ = TradeKeychain.remove(address, kind: "session") }
                         else { message = "清除失败" }
                     }.disabled(!storedKey || session.signedIn || session.busy)
                     Text("登录与下单请使用首页的交易入口。").font(.caption).foregroundStyle(.secondary)
