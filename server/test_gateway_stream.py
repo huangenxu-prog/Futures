@@ -20,6 +20,15 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_query_worker_start_failure_releases_admission(self):
+        worker = gateway.QueryWorker()
+        with patch.object(gateway.threading.Thread, "start", side_effect=RuntimeError("start failed")):
+            with self.assertRaises(RuntimeError):
+                worker.submit(lambda: None)
+        self.assertTrue(worker.slots.acquire(blocking=False))
+        self.assertTrue(worker.slots.acquire(blocking=False))
+        self.assertFalse(worker.slots.acquire(blocking=False))
+
     def test_query_worker_reuses_sdk_on_single_owner_and_recycles(self):
         import threading
         from unittest.mock import mock_open, Mock

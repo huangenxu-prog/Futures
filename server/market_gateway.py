@@ -100,11 +100,15 @@ class QueryWorker:
             raise RuntimeError("market_query_busy")
         done = threading.Event()
         result = {}
-        with self.lock:
-            if self.thread is None or not self.thread.is_alive():
-                self.thread = threading.Thread(target=self.run, name="market-query", daemon=True)
-                self.thread.start()
-            self.jobs.put_nowait((function, args, kwargs, done, result))
+        try:
+            with self.lock:
+                if self.thread is None or not self.thread.is_alive():
+                    self.thread = threading.Thread(target=self.run, name="market-query", daemon=True)
+                    self.thread.start()
+                self.jobs.put_nowait((function, args, kwargs, done, result))
+        except BaseException:
+            self.slots.release()
+            raise
         if not done.wait(30):
             raise RuntimeError("market_query_timeout")
         if "error" in result:
@@ -1422,7 +1426,8 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/health":
             self.reply(200, {"ok": True, "quote_stream": True, "bar_stream": True,
                              "kline_cache": KLINE_HUB.status(),
-                             "quote_feed": LIVE_QUOTES.status()})
+                             "quote_feed": LIVE_QUOTES.status(),
+                             "query_reuse_enabled": QUERY_REUSE})
             return
         if url.path == "/v1/stream/quotes":
             self.stream_quotes()

@@ -154,6 +154,8 @@ class Session:
         self.data = None
         self.commands = queue.Queue(maxsize=16)
         self.seen = {}
+        self.submitted = set()
+        self.snapshot_monotonic = None
         self.last_access = time.monotonic()
         self.worker = threading.Thread(target=self.run, args=(username, password), daemon=True)
         self.worker.start()
@@ -185,21 +187,11 @@ class Session:
                             oid, symbol, direction, offset, qty, price = payload
                             audit("order_attempt", id=oid, symbol=symbol, direction=direction,
                                   offset=offset, quantity=qty, price=price)
-                            if oid in self.seen:
-                                if self.seen[oid] != payload:
-                                    result["status"] = 409
-                                else:
-                                    result["status"] = 200
-                            elif oid in orders:
-                                result["status"] = 409
-                            elif len(self.seen) >= 1000:
-                                result["status"] = 429
+                            if (self.snapshot_monotonic is None
+                                    or time.monotonic() - self.snapshot_monotonic > 5):
+                                result["status"] = 503
                             else:
-                                # Never retry an uncertain SDK submission automatically.
-                                self.seen[oid] = payload
-                                api.insert_order(symbol=symbol, direction=direction, offset=offset,
-                                                 volume=qty, limit_price=price, order_id=oid)
-                                result["status"] = 200
+                                result["status"] = self.submit_order(api, orders, payload)
                         else:
                             audit("cancel_attempt", id=payload)
                             order = orders.get(payload)
@@ -221,6 +213,7 @@ class Session:
                 data = snapshot(account, positions, orders, fills)
                 with self.data_lock:
                     self.data = data
+                    self.snapshot_monotonic = time.monotonic() if data is not None else None
                 if data is not None:
                     self.ready.set()
         except Exception as exc:
@@ -237,9 +230,35 @@ class Session:
                 except Exception:
                     pass
 
+    def submit_order(self, api, orders, payload):
+        # Owner thread only. Record intent before SDK submission; never replay
+        # an uncertain request, even if insert_order raised after transmission.
+        oid, symbol, direction, offset, qty, price = payload
+        if oid in self.seen:
+            if self.seen[oid] != payload:
+                return 409
+            if oid in self.submitted or oid in orders:
+                return 200
+            return 503
+        if oid in orders:
+            return 409
+        if len(self.seen) >= 1000:
+            return 429
+        self.seen[oid] = payload
+        api.insert_order(symbol=symbol, direction=direction, offset=offset,
+                         volume=qty, limit_price=price, order_id=oid)
+        self.submitted.add(oid)
+        return 200
+
     def read(self):
         with self.data_lock:
-            return self.data
+            if self.data is None:
+                return None
+            result = dict(self.data)
+            # Measures worker snapshot age, not upstream exchange connectivity.
+            result["snapshot_age_ms"] = (int((time.monotonic() - self.snapshot_monotonic) * 1000)
+                                         if self.snapshot_monotonic is not None else None)
+            return result
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
@@ -334,7 +353,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(405)
         if data is None:
             return self.reply(503)
+        age = data.get("snapshot_age_ms")
         action = self.path[len(PREFIX):]
+        if action == "order" and (age is None or age > 5000):
+            return self.reply(503)
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= 8192:
