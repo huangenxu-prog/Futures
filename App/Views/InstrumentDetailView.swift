@@ -7,7 +7,8 @@ struct InstrumentDetailView: View {
     private let initialContract: MarketDataService.ContractQuote?
     private let pages: [FuturesInstrument]
     @State private var period = "15分"
-    @State private var visibleID: String?
+    @State private var position: ScrollPosition
+    private var visibleID: String? { position.viewID(type: String.self) }
     @State private var activeID: String
     @State private var scrolling = false
 
@@ -17,7 +18,7 @@ struct InstrumentDetailView: View {
         var seen = Set<String>()
         let unique = sequence.filter { seen.insert($0.id).inserted }
         pages = unique.contains(where: { $0.id == instrument.id }) ? unique : [instrument]
-        _visibleID = State(initialValue: instrument.id)
+        _position = State(initialValue: ScrollPosition(id: instrument.id, anchor: .top))
         _activeID = State(initialValue: instrument.id)
     }
 
@@ -28,8 +29,7 @@ struct InstrumentDetailView: View {
             if pages.count <= 1 {
                 detail(initial, active: true)
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical) {
+                ScrollView(.vertical) {
                         VStack(spacing: 0) {
                             ForEach(Array(pages.enumerated()), id: \.element.id) { index, item in
                                 Group {
@@ -50,8 +50,8 @@ struct InstrumentDetailView: View {
                     // and eliminate scroll-content margins.
                     .contentMargins(.vertical, 0, for: .scrollContent)
                     .scrollIndicators(.hidden)
-                    .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
-                    .scrollPosition(id: $visibleID, anchor: .top)
+                    .scrollTargetBehavior(.paging)
+                    .scrollPosition($position, anchor: .top)
                     .onScrollPhaseChange { _, phase in
                         scrolling = phase != .idle
                         if phase == .idle, let id = visibleID { activeID = id }
@@ -59,11 +59,7 @@ struct InstrumentDetailView: View {
                     .onChange(of: visibleID) { _, id in
                         if !scrolling, let id { activeID = id }
                     }
-                    .onAppear {
-                        proxy.scrollTo(initial.id, anchor: .top)
-                    }
                     .clipped()
-                }
             }
         }
         .background(MarketPalette.surface.ignoresSafeArea())
@@ -168,7 +164,6 @@ private struct InstrumentDetailPage: View {
                 }
         }
         .padding(.horizontal, 3)
-        .padding(.top, 2)
         .background(MarketPalette.surface)
         .toolbar(.hidden, for: .navigationBar)
         .task(id: chartSymbol + (isActive ? "/active" : "/preview")) {
