@@ -334,6 +334,10 @@ struct TradingCenterView: View {
     @State private var selectedQuantity = 1
     @State private var pendingAction: String?
     @State private var closeToday = false
+    @State private var closingSide: Bool? = nil
+    @State private var closePrice = ""
+    @State private var closeQuantity = 1
+    @State private var closeConfirm = false
     @State private var tab = "持仓"
     @State private var quoteStamp: Date?
     @State private var quoteError = false
@@ -342,22 +346,29 @@ struct TradingCenterView: View {
     var favoriteIDs: [String] = []
     var mainCodes: [String:String] = [:]
     var initialContract: PaperContract? = nil
+    var quickOnly = false
 
     var body: some View {
         NavigationStack {
-            List {
+            Group {
                 if session.signedIn {
-                    accountHeader
-                    orderPanel
-                    recordsPanel
+                    VStack(spacing: 0) {
+                        if !quickOnly { accountHeader; Divider() }
+                        orderPanel
+                        if !quickOnly { Divider(); recordsPanel }
+                        else { Spacer(minLength: 0) }
                     if let message = session.actionMessage { Section { Text(message).font(.caption) } }
                     if session.pendingOrder != nil {
                         Section { Button("已核对官方委托，解除锁定") { unlock = true }.disabled(session.busy) }
                     }
                     if session.snapshot?.simulation_orders != true {
-                        Section { Text("暂不可提交委托，请确认交易网关连接").font(.caption).foregroundStyle(.secondary) }
+                        Text("暂不可提交委托，请确认交易网关连接").font(.caption).foregroundStyle(.secondary)
                     }
+                    if let message = session.error { Text(message).font(.caption).foregroundStyle(.red) }
+                    }
+                    .padding(.horizontal, 12)
                 } else {
+                    List {
                     Section {
                         Picker("账户类型", selection: $real) {
                             Text("模拟交易").tag(false)
@@ -413,20 +424,20 @@ struct TradingCenterView: View {
                         Button("进入本地演练账户") { local = true }.disabled(session.busy)
                         Text("本地演练不与快期同步，保留原有模拟账本。").font(.caption).foregroundStyle(.secondary)
                     }
-                }
-                if let message = session.error {
-                    Section { Text(message).font(.caption).foregroundStyle(.red) }
+                    if let message = session.error { Section { Text(message).font(.caption).foregroundStyle(.red) } }
+                    }
+                    .listStyle(.insetGrouped)
                 }
             }
-            .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .disabled(pendingAction != nil || cancelID != nil)
+            .disabled(pendingAction != nil || cancelID != nil || closingSide != nil)
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if let id = cancelID { cancelConfirmationBar(id) }
+                if let side = closingSide { closingBar(side) }
+                else if let id = cancelID { cancelConfirmationBar(id) }
                 else if let action = pendingAction { orderConfirmationBar(action) }
             }
             .background(MarketPalette.background)
-            .navigationTitle("交易")
+            .navigationTitle(quickOnly ? "快捷开仓" : "交易")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
             .sheet(isPresented: $selecting) {
@@ -477,7 +488,7 @@ struct TradingCenterView: View {
                 if signedIn {
                     openInitialIfReady()
                 } else {
-                    pendingAction = nil; cancelID = nil
+                    pendingAction = nil; cancelID = nil; closingSide = nil; closeConfirm = false
                     key = TradeKeychain.load(address)
                 }
             }
@@ -501,7 +512,7 @@ struct TradingCenterView: View {
     }
 
     private var accountHeader: some View {
-        Section {
+        VStack(spacing: 5) {
             HStack {
                 Text("快期云端模拟").font(.caption.weight(.semibold))
                 Spacer()
@@ -520,7 +531,7 @@ struct TradingCenterView: View {
                 Text("浮盈 " + money(session.snapshot?.account.float_profit, suffix: false))
                     .foregroundStyle(MarketPalette.movement(session.snapshot?.account.float_profit))
             }.font(.caption).monospacedDigit()
-        }
+        }.padding(.vertical, 6)
     }
     private var usage: String {
         guard let a = session.snapshot?.account, let b = a.balance, let m = a.margin, b > 0 else { return "--" }
@@ -536,30 +547,24 @@ struct TradingCenterView: View {
         selected?.symbol.hasPrefix("SHFE.") == true || selected?.symbol.hasPrefix("INE.") == true
     }
     private func validOrder(_ action: String) -> Bool {
+        guard action == "开多" || action == "开空" else { return false }
         guard session.canTrade, let c = selected, let p = Double(selectedPrice), p.isFinite, p > 0, (1...10).contains(selectedQuantity) else { return false }
         guard let tick = c.tick, tick.isFinite, tick > 0 else { return false }
         do {
             let steps = p / tick
             if abs(steps - steps.rounded()) > 0.00001 { return false }
         }
-        if action.hasPrefix("平") {
-            guard let pos = session.snapshot?.positions.first(where: { $0.symbol == c.symbol }) else { return false }
-            let total = action == "平多" ? pos.long : pos.short
-            let frozen = action == "平多" ? pos.frozen_long : pos.frozen_short
-            guard let frozen else { return false }
-            return selectedQuantity <= max(0, total - frozen)
-        }
         return true
     }
     private var orderPanel: some View {
-        Section {
-            Button { selecting = true } label: {
+        VStack(spacing: 7) {
+            Button { if !quickOnly { selecting = true } } label: {
                 HStack {
                     Image(systemName: "magnifyingglass")
                     Text(selected.map { contractName($0.symbol) } ?? "选择交易合约")
                     Spacer()
                     Text(selected?.symbol ?? "").font(.caption2).foregroundStyle(.secondary)
-                    Image(systemName: "chevron.right").font(.caption2)
+                    if !quickOnly { Image(systemName: "chevron.right").font(.caption2) }
                 }.foregroundStyle(MarketPalette.ink)
             }
             HStack(spacing: 6) {
@@ -581,20 +586,11 @@ struct TradingCenterView: View {
                 TextField("手数", value: $selectedQuantity, format: .number.grouping(.never)).keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit()
                 Button { selectedQuantity = min(10, selectedQuantity + 1) } label: { Image(systemName: "plus.circle") }.buttonStyle(.borderless)
             }
-            if requiresSplit {
-                Picker("平仓类型", selection: $closeToday) {
-                    Text("平昨").tag(false)
-                    Text("平今").tag(true)
-                }.pickerStyle(.segmented)
-            }
-            HStack(spacing: 7) {
+            HStack(spacing: 8) {
                 tradeButton("开多", color: MarketPalette.up)
                 tradeButton("开空", color: MarketPalette.down)
-                tradeButton("平多", color: MarketPalette.down)
-                tradeButton("平空", color: MarketPalette.up)
             }
-            Text("仅限价模拟委托 · 单笔1–10手 · 提交前确认").font(.caption2).foregroundStyle(.secondary)
-        }
+        }.padding(.vertical, 8)
     }
     private func priceButton(_ title: String, _ value: Double?) -> some View {
         Button {
@@ -608,7 +604,7 @@ struct TradingCenterView: View {
     }
     private func tradeButton(_ action: String, color: Color) -> some View {
         Button { IndicatorKeyboard.dismiss(); pendingAction = action } label: {
-            Text(action).font(.system(size: 15, weight: .semibold))
+            Text(selected?.option != nil ? (action == "开多" ? "买开" : "卖开") : action).font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white).frame(maxWidth: .infinity).padding(.vertical, 12)
                 .background(color.opacity(validOrder(action) ? 0.85 : 0.25), in: RoundedRectangle(cornerRadius: 8))
         }.buttonStyle(.borderless).disabled(!validOrder(action))
@@ -665,10 +661,12 @@ struct TradingCenterView: View {
         }
     }
     private var recordsPanel: some View {
-        Section {
+        VStack(spacing: 5) {
             Picker("交易记录", selection: $tab) {
                 ForEach(["持仓","挂单","委托","成交"], id: \.self) { Text($0) }
             }.pickerStyle(.segmented)
+            ScrollView {
+            LazyVStack(spacing: 0) {
             if session.snapshot == nil {
                 Text("账户数据暂不可用").font(.caption).foregroundStyle(.secondary)
             } else if tab == "持仓" {
@@ -707,7 +705,87 @@ struct TradingCenterView: View {
                 }
                 if orders.isEmpty { Text(tab == "挂单" ? "暂无挂单" : "暂无委托或未取得数据").font(.caption).foregroundStyle(.secondary) }
             }
-        }
+            }
+            }
+        }.padding(.top, 5).frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private func beginClose(_ p: CloudSnapshot.Position, long: Bool) {
+        IndicatorKeyboard.dismiss()
+        if selected?.symbol != p.symbol { selectHolding(p.symbol) }
+        closePrice = selected?.last.map { String($0) } ?? ""
+        closeQuantity = 1
+        closeToday = false
+        closeConfirm = false
+        closingSide = long
+    }
+    private func availableToClose(_ long: Bool) -> Int? {
+        guard let symbol = selected?.symbol,
+              let p = session.snapshot?.positions.first(where: { $0.symbol == symbol }),
+              let frozen = long ? p.frozen_long : p.frozen_short else { return nil }
+        return max(0, (long ? p.long : p.short) - frozen)
+    }
+    private func validClose(_ long: Bool) -> Bool {
+        guard !quickOnly, closingSide == long, session.canTrade,
+              let available = availableToClose(long), (1...10).contains(closeQuantity),
+              closeQuantity <= available, let tick = selected?.tick, tick.isFinite, tick > 0,
+              let price = Double(closePrice), price.isFinite, price > 0 else { return false }
+        let steps = price / tick
+        return steps.isFinite && abs(steps - steps.rounded()) < 0.00001
+    }
+    private func closingBar(_ long: Bool) -> some View {
+        let available = availableToClose(long)
+        let title = long ? "卖出平多" : "买入平空"
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(selected.map { contractName($0.symbol) } ?? "--").font(.headline)
+            Text((long ? "多头持仓" : "空头持仓") + " · 可平 " + (available.map { String($0) } ?? "--") + " 手").font(.caption)
+            if !closeConfirm {
+                HStack {
+                    Button("买一 " + (selected?.bid.map { $0.formatted() } ?? "--")) {
+                        if let v = selected?.bid { closePrice = String(v) }
+                    }.buttonStyle(.borderless)
+                    Spacer()
+                    Button("卖一 " + (selected?.ask.map { $0.formatted() } ?? "--")) {
+                        if let v = selected?.ask { closePrice = String(v) }
+                    }.buttonStyle(.borderless)
+                }.font(.caption)
+                HStack {
+                    Text("平仓价格")
+                    TextField("限价", text: $closePrice).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                }
+                HStack {
+                    Text("平仓手数")
+                    TextField("手数", value: $closeQuantity, format: .number.grouping(.never)).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                    Button("全部") { closeQuantity = min(10, available ?? 0) }.buttonStyle(.borderless).disabled((available ?? 0) <= 0)
+                }
+                if requiresSplit {
+                    Picker("平仓类型", selection: $closeToday) {
+                        Text("平昨").tag(false)
+                        Text("平今").tag(true)
+                    }.pickerStyle(.segmented)
+                    Text("平今/平昨具体可平量以柜台回报为准").font(.caption2).foregroundStyle(.secondary)
+                }
+            } else {
+                Text("\(title) \(closeQuantity) 手 @ \(closePrice)").monospacedDigit()
+                if requiresSplit { Text(closeToday ? "平今" : "平昨").font(.caption) }
+            }
+            HStack {
+                Button("取消") { closingSide = nil; closeConfirm = false }.buttonStyle(.bordered).frame(maxWidth: .infinity)
+                Button(closeConfirm ? "确认" + title : title) {
+                    IndicatorKeyboard.dismiss()
+                    if closeConfirm { submitClose(long) } else { closeConfirm = true }
+                }.buttonStyle(.borderedProminent).tint(long ? MarketPalette.down : MarketPalette.up)
+                    .frame(maxWidth: .infinity).disabled(!validClose(long))
+            }
+        }.padding(16).background(MarketPalette.raised)
+    }
+    private func submitClose(_ long: Bool) {
+        guard validClose(long), let c = selected else { return }
+        let direction = long ? "SELL" : "BUY"
+        let offset = requiresSplit && closeToday ? "CLOSETODAY" : "CLOSE"
+        let price = closePrice, qty = String(closeQuantity)
+        closingSide = nil; closeConfirm = false; tab = "委托"
+        Task { await session.submit(symbol: c.symbol, direction: direction, offset: offset, price: price, quantity: qty) }
     }
     private func cancelConfirmationBar(_ id: String) -> some View {
         let order = session.snapshot?.orders?.first(where: { $0.id == id })
@@ -752,15 +830,15 @@ struct TradingCenterView: View {
     }
     private func submitConfirmed(_ action: String) {
         guard let c = selected, validOrder(action) else { return }
-        let direction = action == "开多" || action == "平空" ? "BUY" : "SELL"
-        let offset = action.hasPrefix("开") ? "OPEN" : (requiresSplit && closeToday ? "CLOSETODAY" : "CLOSE")
+        let direction = action == "开多" ? "BUY" : "SELL"
+        let offset = "OPEN"
         let price = selectedPrice, qty = String(selectedQuantity)
         pendingAction = nil; tab = "委托"
         Task { await session.submit(symbol: c.symbol, direction: direction, offset: offset, price: price, quantity: qty) }
     }
     private func orderConfirmationText(_ action: String) -> String {
         let name = selected.map { contractName($0.symbol) } ?? ""
-        let suffix = action.hasPrefix("平") && requiresSplit ? (closeToday ? "今" : "昨") : ""
+        let suffix = ""
         return "\(name) \(action)\(suffix) \(selectedQuantity) 手 @ \(selectedPrice)"
     }
     private func fillQuantityText(_ fill: CloudSnapshot.Fill) -> String {
@@ -777,7 +855,7 @@ struct TradingCenterView: View {
         let frozen = long ? p.frozen_long : p.frozen_short
         let average = long ? p.open_price_long : p.open_price_short
         let profit = (long ? p.float_profit_long : p.float_profit_short) ?? ((p.long == 0 || p.short == 0) ? p.float_profit : nil)
-        return Button { selectHolding(p.symbol) } label: {
+        return Button { beginClose(p, long: long) } label: {
             HStack(spacing: 4) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(contractName(p.symbol)).font(.caption.weight(.medium)).lineLimit(1)
@@ -787,7 +865,7 @@ struct TradingCenterView: View {
                 Text(average.map { $0.formatted() } ?? "--").frame(width: 67, alignment: .trailing)
                 Text(money(profit, suffix: false)).foregroundStyle(MarketPalette.movement(profit)).frame(width: 65, alignment: .trailing)
             }.font(.caption).monospacedDigit().foregroundStyle(MarketPalette.ink)
-        }.buttonStyle(.borderless)
+        }.buttonStyle(.borderless).padding(.vertical, 8)
     }
     private func actionName(_ direction: String, _ offset: String) -> String {
         if offset == "OPEN" { return direction == "BUY" ? "开多" : "开空" }
