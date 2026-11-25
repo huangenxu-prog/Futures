@@ -181,7 +181,7 @@ def snapshot(quote):
     if not quote.datetime:
         return {}
     fields = {
-        "last": "last_price", "settlement": "pre_settlement", "bid": "bid_price1",
+        "last": "last_price", "settlement": "pre_settlement", "opening": "open", "bid": "bid_price1",
         "ask": "ask_price1", "volume": "volume", "interest": "open_interest",
         "previousInterest": "pre_open_interest",
         "bidVolume": "bid_volume1", "askVolume": "ask_volume1",

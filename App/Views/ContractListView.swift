@@ -2,6 +2,7 @@ import SwiftUI
 
 /// TqSdk's real listed delivery months, not a hard-coded contract calendar.
 struct ContractListView: View {
+    @AppStorage("qihui.change.basis.v1") private var changeBasis = "settlement"
     let instrument: FuturesInstrument
     var currentCode: String? = nil
     var onSelect: ((MarketDataService.ContractQuote) -> Void)? = nil
@@ -84,11 +85,11 @@ struct ContractListView: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(contract.last?.formatted() ?? "--")
                         .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    Text(contract.changePercent)
+                    Text(contract.changePercent(basis: changeBasis))
                         .font(.system(size: 12, design: .rounded))
                 }
                 .monospacedDigit()
-                .foregroundStyle(MarketPalette.movement(contract.change))
+                .foregroundStyle(MarketPalette.movement(contract.change(basis: changeBasis)))
             }
             .padding(.vertical, 6)
             if currentCode == contract.code {

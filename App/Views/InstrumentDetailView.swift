@@ -50,9 +50,10 @@ struct InstrumentDetailView: View {
     @State private var mostRecentStreamBar: MarketBar?
     @State private var lastCachedCandleAt: Date?
 
-    private var displayedChange: Double? { selectedContract == nil ? quote?.change : selectedContract?.change }
+    @AppStorage("qihui.change.basis.v1") private var changeBasis = "settlement"
+    private var displayedChange: Double? { selectedContract == nil ? quote?.change(basis: changeBasis) : selectedContract?.change(basis: changeBasis) }
     private var changeColor: Color { MarketPalette.movement(displayedChange) }
-    private var changeText: String { (selectedContract == nil ? quote?.changePercent : selectedContract?.changePercent) ?? "--" }
+    private var changeText: String { (selectedContract == nil ? quote?.changePercent(basis: changeBasis) : selectedContract?.changePercent(basis: changeBasis)) ?? "--" }
     private var currentLast: Double? {
         (displayedKey == chartKey ? rawBars.last?.close : nil) ?? (selectedContract == nil ? quote?.last : selectedContract?.last)
     }

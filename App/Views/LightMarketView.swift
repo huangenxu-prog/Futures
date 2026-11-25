@@ -57,6 +57,7 @@ struct LightMarketView: View {
     @AppStorage("qihui.appearance.mode.v1") private var appearanceMode = AppAppearanceMode.dark.rawValue
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedInstrument: FuturesInstrument?
+    @AppStorage("qihui.change.basis.v1") private var changeBasis = "settlement"
     @State private var showingStrategyCenter = false
     @State private var showingTradingCenter = false
     @State private var selectedCategory = "全部"
@@ -149,9 +150,7 @@ struct LightMarketView: View {
     }
 
     private func changePercentage(_ item: FuturesInstrument) -> Double? {
-        guard let quote = quote(for: item.id), let change = quote.change,
-              let settlement = quote.settlement, settlement > 0 else { return nil }
-        return change / settlement
+        quote(for: item.id)?.ratio(basis: changeBasis)
     }
 
     private var instruments: [FuturesInstrument] {
@@ -445,14 +444,14 @@ struct LightMarketView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     Text(quote?.last?.formatted() ?? "--")
                         .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(MarketPalette.movement(quote?.change))
+                        .foregroundStyle(MarketPalette.movement(quote?.change(basis: changeBasis)))
                         .monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.65)
                         .frame(width: lastWidth, alignment: .trailing)
-                    Text(quote?.changePercent ?? "--")
+                    Text(quote?.changePercent(basis: changeBasis) ?? "--")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(MarketPalette.movement(quote?.change))
+                        .foregroundStyle(MarketPalette.movement(quote?.change(basis: changeBasis)))
                         .monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)

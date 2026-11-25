@@ -125,6 +125,7 @@ enum MarketDataService {
         let month: String
         let last, settlement, bid, ask, volume, interest, previousInterest: Double?
         let bidVolume, askVolume: Double?
+        var opening: Double? = nil
         let time: String?
 
         var identity: MainContract {
@@ -134,13 +135,23 @@ enum MarketDataService {
         }
 
         var change: Double? {
-            guard let last, let settlement, settlement > 0 else { return nil }
-            return last - settlement
+            change(basis: "settlement")
+        }
+        func change(basis: String) -> Double? {
+            guard let last, last.isFinite, let reference = basis == "open" ? opening : settlement, reference.isFinite, reference > 0 else { return nil }
+            return last - reference
         }
 
         var changePercent: String {
-            guard let change, let settlement else { return "--" }
-            return String(format: "%+.2f%%", change / settlement * 100)
+            changePercent(basis: "settlement")
+        }
+        func ratio(basis: String) -> Double? {
+            guard let change = change(basis: basis), let reference = basis == "open" ? opening : settlement, reference > 0 else { return nil }
+            return change / reference
+        }
+        func changePercent(basis: String) -> String {
+            guard let ratio = ratio(basis: basis) else { return "--" }
+            return String(format: "%+.2f%%", ratio * 100)
         }
 
         var interestChange: Double? {
@@ -154,16 +165,27 @@ enum MarketDataService {
         let month: String
         let last, settlement, bid, ask, volume, interest, priceTick, volumeMultiple: Double?
         let bidVolume, askVolume: Double?
+        var opening: Double? = nil
         let time: String?
         var id: String { code }
 
         var change: Double? {
-            guard let last, let settlement, settlement > 0 else { return nil }
-            return last - settlement
+            change(basis: "settlement")
+        }
+        func change(basis: String) -> Double? {
+            guard let last, last.isFinite, let reference = basis == "open" ? opening : settlement, reference.isFinite, reference > 0 else { return nil }
+            return last - reference
         }
         var changePercent: String {
-            guard let change, let settlement else { return "--" }
-            return String(format: "%+.2f%%", change / settlement * 100)
+            changePercent(basis: "settlement")
+        }
+        func ratio(basis: String) -> Double? {
+            guard let change = change(basis: basis), let reference = basis == "open" ? opening : settlement, reference > 0 else { return nil }
+            return change / reference
+        }
+        func changePercent(basis: String) -> String {
+            guard let ratio = ratio(basis: basis) else { return "--" }
+            return String(format: "%+.2f%%", ratio * 100)
         }
     }
 
