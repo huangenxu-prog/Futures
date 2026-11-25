@@ -10,8 +10,8 @@ import time
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
-COMMIT = "4fde6177d317205ef8c7fd57b28432e95dee0d00"
-BLOB = "c7c79812d33395ecd7541782a1680e766a57d41f"
+COMMIT = "f8482db76f5155ce901c9d413cb6f6344e0d9f10"
+BLOB = "c485584b71963566ea47ceaafc27c19fee280b2e"
 TARGET = Path("/root/tq_test/server/trade_gateway.py")
 ENV = Path("/etc/qihui-trade.env")
 SERVICE = "qihui-trade.service"
@@ -77,7 +77,7 @@ def main():
     if blob(old) == BLOB:
         print("Already upgraded; no restart")
         return
-    if blob(old) != "3043a1bf998ecc8b202cec3d6ae77ba25ec86d1d":
+    if blob(old) not in ("3043a1bf998ecc8b202cec3d6ae77ba25ec86d1d", "c7c79812d33395ecd7541782a1680e766a57d41f"):
         raise RuntimeError("Unexpected existing gateway version; no changes made")
     key = ENV.read_text().strip().split("=", 1)[1]
     subprocess.run(["systemctl", "is-active", "--quiet", SERVICE], check=True)

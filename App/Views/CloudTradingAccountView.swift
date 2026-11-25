@@ -50,13 +50,14 @@ private struct CloudReply: Decodable {
     let snapshot: CloudSnapshot?
 }
 private enum CloudTradeError: LocalizedError {
-    case invalidURL, rejected, unavailable, expired
+    case invalidURL, rejected, unavailable, expired, conflict
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "请输入有效的 HTTPS 交易网关地址"
         case .rejected: return "登录或授权失败，请检查快期账户及网关访问密钥"
         case .unavailable: return "交易网关或快期服务暂不可用"
         case .expired: return "会话已失效，请退出后重新登录"
+        case .conflict: return "上一次会话仍在使用，请退出旧会话或等待释放"
         }
     }
 }
@@ -180,6 +181,7 @@ private final class CloudTradeSession: ObservableObject {
         switch status {
         case 200: return try JSONDecoder().decode(CloudReply.self, from: data)
         case 401,403: throw token == nil ? CloudTradeError.rejected : CloudTradeError.expired
+        case 409: throw CloudTradeError.conflict
         default: throw CloudTradeError.unavailable
         }
     }
@@ -399,7 +401,8 @@ struct TradingCenterView: View {
     }
     private func validOrder(_ action: String) -> Bool {
         guard session.canTrade, let c = selected, let p = Double(selectedPrice), p.isFinite, p > 0, (1...10).contains(selectedQuantity) else { return false }
-        if let tick = c.tick, tick > 0 {
+        guard let tick = c.tick, tick.isFinite, tick > 0 else { return false }
+        do {
             let steps = p / tick
             if abs(steps - steps.rounded()) > 0.00001 { return false }
         }

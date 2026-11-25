@@ -245,7 +245,7 @@ struct LightMarketView: View {
                 TradingCenterView(favoriteIDs:favorites.ids,mainCodes:contracts.merging(onDemandQuotes) { live,extra in live.last == nil ? extra : live }.mapValues(\.code))
             }
             .sheet(isPresented:$showingStrategyCenter) {
-                StrategyCenterView(instruments:catalog, favoriteIDs:favorites.ids,
+                QihuiSettingsView(instruments:catalog, favoriteIDs:favorites.ids,
                                    mainCodes:contracts.merging(onDemandQuotes) { live,extra in live.last == nil ? extra : live }.mapValues(\.code))
             }
             .task(id: quoteRequestKey) {
@@ -293,9 +293,9 @@ struct LightMarketView: View {
                 showingStrategyCenter = true
             } label: {
                 HStack(spacing:3) {
-                    Image(systemName:"chart.xyaxis.line")
+                    Image(systemName:"gearshape")
                         .font(.system(size:15,weight:.medium))
-                    Text("策略").font(.system(size:13,weight:.medium))
+                    Text("设置").font(.system(size:13,weight:.medium))
                 }
                 .foregroundStyle(MarketPalette.accent)
                 .frame(height:36)
@@ -303,7 +303,7 @@ struct LightMarketView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("策略中心")
+            .accessibilityLabel("设置")
             Button {
                 IndicatorKeyboard.dismiss()
                 showingTradingCenter = true
@@ -314,17 +314,7 @@ struct LightMarketView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("交易中心")
-            Button {
-                appearanceMode = (colorScheme == .dark ? AppAppearanceMode.light : .dark).rawValue
-            } label: {
-                Image(systemName: colorScheme == .dark ? "sun.max" : "moon")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(MarketPalette.muted)
-                    .frame(width: 36, height: 36)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(colorScheme == .dark ? "切换浅色" : "切换深色")
+
         }
         .padding(.horizontal, 12)
         .padding(.top, 3)

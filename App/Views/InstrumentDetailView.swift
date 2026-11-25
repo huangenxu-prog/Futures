@@ -158,7 +158,7 @@ struct InstrumentDetailView: View {
         .sheet(isPresented:$showingTrade) {
             if let tradeContract {
                 QuickTradeSheet(contract:tradeContract)
-                    .presentationDetents([.height(360),.large])
+                    .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
             }
         }

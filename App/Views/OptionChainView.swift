@@ -192,7 +192,7 @@ struct OptionChainView: View {
             }
             .sheet(item:$selectedOption) { option in
                 QuickTradeSheet(contract:option.paperContract(underlying:code,name:underlyingName))
-                    .presentationDetents([.height(420),.large])
+                    .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
             }
             .task(id: code) { await load() }
