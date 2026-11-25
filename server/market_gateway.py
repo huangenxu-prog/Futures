@@ -384,6 +384,12 @@ class LiveQuoteHub:
         with self.condition:
             return dict(self.contracts)
 
+    def status(self):
+        with self.condition:
+            return {"products": len(self.contracts),
+                    "last_change_age_seconds": round(time.monotonic() - self.last_received, 1)
+                    if self.last_received else None}
+
     def publish(self, contracts):
         with self.condition:
             if self.contracts == contracts:
@@ -642,6 +648,8 @@ class SharedKlineHub:
         self.live_timing = {}       # key -> (version, TqSdk observation epoch)
         self.last_saved = {}
         self.file_write_lock = threading.Lock()
+        self.pending_disk_writes = OrderedDict()
+        self.disk_writer = None
         self.last_history = {}
         self.pending_history = set()
         self.urgent_history = deque()
@@ -722,8 +730,7 @@ class SharedKlineHub:
                 entry["waiters"] += 1
             bars = self.cache.get(key, ([], 0))[0]
             refreshed = self.last_history.get(key, 0)
-            if (len(bars) < KLINE_HISTORY_LENGTH - 2
-                    or time.time() - refreshed > KLINE_HISTORY_REFRESH_SECONDS):
+            if (not bars or time.time() - refreshed > KLINE_HISTORY_REFRESH_SECONDS):
                 self._schedule_locked(key, urgent=True)
             self.condition.notify_all()
         self.start()
@@ -797,13 +804,50 @@ class SharedKlineHub:
                     self.live_tail.pop(oldest, None)
                     self.live_timing.pop(oldest, None)
         if to_save is not None:
-            # Serialize writes and take the newest version after acquiring the
-            # lock: a simultaneous live tick must never overwrite an already
-            # completed 200-bar history snapshot with an older 2-bar file.
-            with self.file_write_lock:
-                with self.condition:
-                    newest = self.cache.get(key, (to_save, 0))[0]
-                self.store.write(key, newest)
+            if history:
+                self._persist_latest(key, to_save)
+            else:
+                self._queue_live_write(key, to_save)
+
+    def _persist_latest(self, key, fallback):
+        with self.file_write_lock:
+            with self.condition:
+                newest = self.cache.get(key, (fallback, 0))[0]
+            self.store.write(key, newest)
+
+    def _queue_live_write(self, key, bars):
+        with self.condition:
+            self.pending_disk_writes[key] = bars
+            self.pending_disk_writes.move_to_end(key)
+            while len(self.pending_disk_writes) > KLINE_MAX_SERIES:
+                dropped, _ = self.pending_disk_writes.popitem(last=False)
+                self.last_saved.pop(dropped, None)
+            if self.disk_writer is None or not self.disk_writer.is_alive():
+                self.disk_writer = threading.Thread(target=self._run_disk_writer,
+                                                    name="kline-disk", daemon=True)
+                self.disk_writer.start()
+            self.condition.notify_all()
+
+    def _run_disk_writer(self):
+        while True:
+            with self.condition:
+                while not self.pending_disk_writes:
+                    self.condition.wait()
+            try:
+                # Lock order matches history pagination. Do not hold the hub
+                # condition during disk I/O. Coalesce by key before writing.
+                with self.file_write_lock:
+                    with self.condition:
+                        if not self.pending_disk_writes:
+                            continue
+                        key, fallback = self.pending_disk_writes.popitem(last=False)
+                        newest = self.cache.get(key, ([], 0))[0]
+                    # Evicted keys are already recoverable from disk/history;
+                    # don't persist an obsolete queued frame over newer data.
+                    if newest:
+                        self.store.write(key, newest)
+            except Exception as exc:
+                print("K线异步写盘失败:", type(exc).__name__, flush=True)
 
     def timing_for(self, key, version):
         with self.condition:
@@ -1015,6 +1059,9 @@ KLINE_HUB = SharedKlineHub(store=KlineFileCache())
 # This lock serializes only cold historical pagination. It never blocks
 # quote updates; actual TqApi objects are not shared between threads.
 HISTORY_QUERY_LOCK = threading.Lock()
+HISTORY_SHORT_PROBES = OrderedDict()
+HISTORY_SHORT_PROBE_TTL = 300
+HISTORY_SHORT_PROBE_MAX = 128
 
 
 def historical_page(symbol, period, before, count, depth):
@@ -1049,7 +1096,18 @@ def historical_page(symbol, period, before, count, depth):
         older = older_rows(stored)
         if len(older) >= count or len(stored) >= depth:
             return older[-count:]
+        probe_key = (key, depth)
+        previous_probe = HISTORY_SHORT_PROBES.get(probe_key)
+        if (previous_probe is not None and time.monotonic() < previous_probe[0]
+                and stored and stored[0]["time"] <= previous_probe[1]):
+            return older[-count:]
         fetched = load_bars(symbol, period, depth)
+        if fetched and len(fetched) < depth - 2:
+            HISTORY_SHORT_PROBES[probe_key] = (time.monotonic() + HISTORY_SHORT_PROBE_TTL,
+                                              fetched[0]["time"])
+            HISTORY_SHORT_PROBES.move_to_end(probe_key)
+            while len(HISTORY_SHORT_PROBES) > HISTORY_SHORT_PROBE_MAX:
+                HISTORY_SHORT_PROBES.popitem(last=False)
         if not fetched:
             return older[-count:]
         if KLINE_HUB.store is None:
@@ -1197,7 +1255,8 @@ class Handler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         if url.path == "/health":
             self.reply(200, {"ok": True, "quote_stream": True, "bar_stream": True,
-                             "kline_cache": KLINE_HUB.status()})
+                             "kline_cache": KLINE_HUB.status(),
+                             "quote_feed": LIVE_QUOTES.status()})
             return
         if url.path == "/v1/stream/quotes":
             self.stream_quotes()

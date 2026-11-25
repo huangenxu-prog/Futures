@@ -34,3 +34,5 @@ jobs:
         run: |
           python3 -m py_compile server/trade_gateway.py server/upgrade_trade_gateway.py
           python3 -m unittest discover -s server -p 'test_trade_gateway.py' -v
+          python3 -m unittest discover -s server -p 'test_trade_order_state.py' -v
+          python3 -m unittest discover -s server -p 'test_trade_session_recovery.py' -v

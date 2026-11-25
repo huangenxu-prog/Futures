@@ -20,6 +20,41 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_live_disk_queue_coalesces_and_is_bounded(self):
+        hub = gateway.SharedKlineHub(store=object())
+        hub.disk_writer = SimpleNamespace(is_alive=lambda: True)
+        key = ("CZCE.SR701", 900)
+        hub._queue_live_write(key, [{"time": 1}])
+        hub._queue_live_write(key, [{"time": 2}])
+        self.assertEqual(hub.pending_disk_writes[key], [{"time": 2}])
+        for i in range(30):
+            hub._queue_live_write(("DCE.m2701", i), [{"time": i}])
+        self.assertLessEqual(len(hub.pending_disk_writes), gateway.KLINE_MAX_SERIES)
+
+    def test_short_history_repeated_depth_uses_disk_during_cooldown(self):
+        rows = [{"time": t, "open": 1., "high": 2., "low": 0.,
+                 "close": 1.5, "volume": 5} for t in range(100, 150)]
+        import tempfile
+        with tempfile.TemporaryDirectory() as dirname:
+            store = gateway.KlineFileCache(dirname)
+            hub = gateway.SharedKlineHub(store=store)
+            with patch.object(gateway, "KLINE_HUB", hub), patch.object(
+                    gateway, "HISTORY_SHORT_PROBES", gateway.OrderedDict()), patch.object(
+                    gateway, "load_bars", return_value=rows) as sdk:
+                args = ("CZCE.SR701", 900, 100, 300, 1100)
+                self.assertEqual(gateway.historical_page(*args), [])
+                self.assertEqual(gateway.historical_page(*args), [])
+                self.assertEqual(sdk.call_count, 1)
+                gateway.historical_page("CZCE.SR701", 900, 100, 300, 2000)
+                self.assertEqual(sdk.call_count, 2)
+
+    def test_quote_health_reports_age_without_assuming_market_open(self):
+        hub = gateway.LiveQuoteHub()
+        self.assertIsNone(hub.status()["last_change_age_seconds"])
+        hub.publish({"CZCE.SR": {"last": 5000}})
+        self.assertEqual(hub.status()["products"], 1)
+        self.assertGreaterEqual(hub.status()["last_change_age_seconds"], 0)
+
     def test_http_preview_does_not_evict_live_subscription(self):
         hub = gateway.SharedKlineHub(max_series=1)
         with patch.object(hub, "start"):
