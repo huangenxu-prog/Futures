@@ -9,11 +9,13 @@ struct InstrumentDetailView: View {
     @State private var tradeContract: PaperContract?
     @State private var showContracts = false
     @State private var showChartIndicatorSettings = false
-    let instrument: FuturesInstrument
+    @State private var instrument: FuturesInstrument
+    private let sequence: [FuturesInstrument]
     @State private var selectedContract: MarketDataService.ContractQuote?
 
-    init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote? = nil) {
-        self.instrument = instrument
+    init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote? = nil, sequence: [FuturesInstrument] = []) {
+        _instrument = State(initialValue: instrument)
+        self.sequence = sequence
         _selectedContract = State(initialValue: selectedContract)
     }
 
@@ -77,7 +79,8 @@ struct InstrumentDetailView: View {
                         contractMultiplier: selectedContract?.volumeMultiple ?? currentVolumeMultiple,
                         previousSettlement: selectedContract == nil ? quote?.settlement : selectedContract?.settlement,
                         showingIndicatorSettings: $showChartIndicatorSettings,
-                        selectedCandleTime: $selectedCandleTime
+                        selectedCandleTime: $selectedCandleTime,
+                        onVerticalSwipe: { step in switchInstrument(step) }
                     )
                     .id(chartKey)
                     .frame(maxHeight: .infinity)
@@ -182,6 +185,22 @@ struct InstrumentDetailView: View {
         .onDisappear {
             NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false)
         }
+    }
+    @MainActor
+    private func switchInstrument(_ step: Int) {
+        guard !showingTrade, !showOptions, !showContracts, !showChartIndicatorSettings, !showPeriodOrder,
+              selectedCandleTime == nil,
+              let index = sequence.firstIndex(where: { $0.id == instrument.id }),
+              sequence.indices.contains(index + step) else { return }
+        let next = sequence[index + step]
+        guard next.id != instrument.id else { return }
+        instrument = next
+        selectedContract = nil
+        liveQuote = nil
+        tradeContract = nil
+        currentPriceTick = nil
+        currentVolumeMultiple = nil
+        prepareCachedCandles(symbol: chartSymbol, period: periodSeconds)
     }
     @MainActor
     private func prepareCachedCandles(symbol: String, period: Int) {

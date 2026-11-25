@@ -17,6 +17,7 @@ struct ProfessionalChartHost: View {
     @Binding var selectedCandleTime: Int64?
     var isReplay = false
     var onReplayApplied: ((MarketBar, Double) -> Void)? = nil
+    var onVerticalSwipe: ((Int) -> Void)? = nil
     @State private var feedOwner = UUID()
     @AppStorage(CandleAppearance.hollowKey) private var hollowRising = true
     @AppStorage(CandleAppearance.upKey) private var candleUp = CandleAppearance.automatic
@@ -204,6 +205,7 @@ struct ProfessionalChartHost: View {
         .tradingChartStrings(chartStrings)
         .background(MarketPalette.surface)
         .onAppear {
+            model.onVerticalSwipe = isReplay ? nil : onVerticalSwipe
             model.style = .candles
             model.indicators = displaySettings.indicators()
             configureChart()
@@ -230,6 +232,7 @@ struct ProfessionalChartHost: View {
         .onDisappear {
             feed.detach(owner: feedOwner)
             model.onEvent = nil
+            model.onVerticalSwipe = nil
             historyTask?.cancel()
             historyTask = nil
             model.activeDrawingTool = nil

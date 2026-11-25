@@ -57,6 +57,7 @@ struct LightMarketView: View {
     @AppStorage("qihui.appearance.mode.v1") private var appearanceMode = AppAppearanceMode.dark.rawValue
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedInstrument: FuturesInstrument?
+    @State private var detailSequence: [FuturesInstrument] = []
     @AppStorage("qihui.change.basis.v1") private var changeBasis = "settlement"
     @State private var showingStrategyCenter = false
     @State private var showingTradingCenter = false
@@ -235,7 +236,7 @@ struct LightMarketView: View {
             .background(MarketPalette.background.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(item: $selectedInstrument) { item in
-                InstrumentDetailView(instrument: item)
+                InstrumentDetailView(instrument: item, sequence: detailSequence)
                     .environment(\.mainContracts, contracts.merging(onDemandQuotes) {
                         live, extra in live.last == nil ? extra : live
                     })
@@ -426,7 +427,7 @@ struct LightMarketView: View {
         let isFavorite = favorites.ids.contains(item.id)
         return HStack(spacing: 5) {
             Button {
-                if !editing { selectedInstrument = item }
+                if !editing { detailSequence = instruments; selectedInstrument = item }
             } label: {
                 HStack(spacing: 5) {
                     VStack(alignment: .leading, spacing: 4) {

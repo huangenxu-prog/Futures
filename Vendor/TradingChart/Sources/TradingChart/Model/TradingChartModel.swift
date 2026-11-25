@@ -203,6 +203,7 @@ public final class TradingChartModel {
     /// the crosshair or the drawings: the last assignment wins and the paging stops.
     @ObservationIgnored
     public var onEvent: (@MainActor (TradingChartEvent) -> Void)?
+    public var onVerticalSwipe: ((Int) -> Void)?
 
     /// The viewport configuration every geometry calculation uses: ``configuration``'s viewport with the right padding
     /// and the live-edge tolerance adapted to the zoom level, and the padding widened so that the last bar stays clear

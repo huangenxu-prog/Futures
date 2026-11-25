@@ -61,6 +61,7 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
     var firstTouch = CGPoint.zero
     /// Whether the drawing pan in progress grabbed the drawing.
     private var isDraggingDrawing = false
+    private var verticalPan = false
 
     init(model: TradingChartModel, takesDrawingTouches: Bool) {
         self.model = model
@@ -141,12 +142,24 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
         guard !isSelecting, pinchAnchor == nil else { return }
         switch gesture.state {
         case .began:
-            model.beginTouchScroll()
+            let v = gesture.velocity(in: self)
+            verticalPan = model.onVerticalSwipe != nil && model.activeDrawingTool == nil
+                && model.selectedDrawingID == nil && abs(v.y) > abs(v.x) * 1.5
+            if !verticalPan { model.beginTouchScroll() }
         case .changed:
-            model.touchScroll(translation: gesture.translation(in: self).x, plotWidth: bounds.width)
+            if !verticalPan { model.touchScroll(translation: gesture.translation(in: self).x, plotWidth: bounds.width) }
         case .ended:
-            model.endTouchScroll(velocity: gesture.velocity(in: self).x, plotWidth: bounds.width)
+            if verticalPan {
+                let t = gesture.translation(in: self)
+                verticalPan = false
+                if abs(t.y) >= 65 && abs(t.y) > abs(t.x) * 1.5 {
+                    model.onVerticalSwipe?(t.y < 0 ? 1 : -1)
+                }
+            } else {
+                model.endTouchScroll(velocity: gesture.velocity(in: self).x, plotWidth: bounds.width)
+            }
         default:
+            verticalPan = false
             model.cancelTouchScroll()
         }
     }
@@ -177,6 +190,7 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
     @objc func handlePinchWatch(_ gesture: UIPinchGestureRecognizer) {
         switch gesture.state {
         case .began:
+            verticalPan = false
             guard model.configuration.isZoomEnabled,bounds.width > 0 else { return }
             let fraction = min(1,max(0,Double(gesture.location(in:self).x/bounds.width)))
             pinchAnchor = model.isAtLiveEdge ? .liveEdge : .fraction(fraction)
