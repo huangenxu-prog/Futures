@@ -20,6 +20,24 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_http_preview_does_not_evict_live_subscription(self):
+        hub = gateway.SharedKlineHub(max_series=1)
+        with patch.object(hub, "start"):
+            active = hub.reserve("CZCE.SR701", 900, listener=True)
+            preview = ("DCE.m2701", 900)
+            hub.publish(preview, [{"time": 100}], history=True)
+            self.assertEqual(hub.snapshot(*preview, 1, timeout=0), [{"time": 100}])
+        self.assertEqual(set(hub.entries), {active})
+        self.assertEqual(hub.generation, 0)
+
+    def test_busy_catalog_validation_returns_json(self):
+        output = []
+        handler = SimpleNamespace(path="/v1/contracts?product=SHFE.zn",
+                                  reply=lambda status, payload: output.append((status, payload)))
+        with patch.object(gateway, "supported_product", side_effect=RuntimeError("market_query_busy")):
+            gateway.Handler.do_GET(handler)
+        self.assertEqual(output, [(503, {"error": "market_query_busy"})])
+
     def test_short_query_cache_reuses_result_and_expires(self):
         with patch.object(gateway, "SHORT_QUERY_CACHE", gateway.OrderedDict()):
             calls = []

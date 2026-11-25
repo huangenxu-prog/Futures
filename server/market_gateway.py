@@ -825,12 +825,17 @@ class SharedKlineHub:
                 self.condition.wait(timeout=remaining)
 
     def snapshot(self, symbol, period, count, timeout=11):
-        key = self.reserve(symbol, period, waiter=True)
-        try:
-            bars, _ = self.read(key, timeout=timeout)
-            return bars[-count:]
-        finally:
-            self.release(key, waiter=True)
+        # HTTP previews never consume a live subscription slot.
+        key = (quote_symbol(symbol), period)
+        with self.condition:
+            self._restore_locked(key)
+            bars = self.cache.get(key, ([], 0))[0]
+            if (not bars or time.time() - self.last_history.get(key, 0)
+                    > KLINE_HISTORY_REFRESH_SECONDS):
+                self._schedule_locked(key, urgent=True)
+        self.start()
+        bars, _ = self.read(key, timeout=timeout)
+        return bars[-count:]
 
     def warm_symbols(self, symbols):
         accepted = 0
@@ -1037,7 +1042,9 @@ def historical_page(symbol, period, before, count, depth):
 
     # One cold request can download missing history; subsequent requests will
     # be served entirely from disk, including after a gateway restart.
-    with HISTORY_QUERY_LOCK:
+    if not HISTORY_QUERY_LOCK.acquire(timeout=3):
+        raise RuntimeError("history_query_busy")
+    try:
         stored = available()
         older = older_rows(stored)
         if len(older) >= count or len(stored) >= depth:
@@ -1060,10 +1067,13 @@ def historical_page(symbol, period, before, count, depth):
         merged = merge_kline_bars(
             fetched, persisted or stored, limit=KLINE_DISK_HISTORY_LENGTH)
         return older_rows(merged)[-count:]
+    finally:
+        HISTORY_QUERY_LOCK.release()
 
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    timeout = 30
 
     def begin_stream(self):
         self.send_response(200)
@@ -1175,6 +1185,15 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def do_GET(self):
+        try:
+            Handler.handle_get(self)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+        except RuntimeError as exc:
+            self.reply(503, {"error": "market_query_busy" if str(exc) == "market_query_busy"
+                             else "market_data_unavailable"})
+
+    def handle_get(self):
         url = urlsplit(self.path)
         if url.path == "/health":
             self.reply(200, {"ok": True, "quote_stream": True, "bar_stream": True,

@@ -24,9 +24,11 @@ enum SSEReceiveTrace {
     }
 
     private static let writer = Writer()
-    static func record(_ message: String) {
+    static func record(_ message: @autoclosure () -> String) {
+        #if DEBUG
         let timestamp = String(format: "%.3f", Date().timeIntervalSince1970)
-        writer.record(timestamp + " " + message)
+        writer.record(timestamp + " " + message())
+        #endif
     }
 
     static func ms(_ seconds: Double) -> String {

@@ -214,10 +214,12 @@ private struct InstrumentDetailPage: View {
             // Never put that request in the live update's critical path.
             var hydration: Task<Void, Never>?
             defer { hydration?.cancel() }
+            var retryDelay = 1.0
             while !Task.isCancelled {
                 do {
                     try await MarketDataService.streamCandles(symbol: symbol, period: seconds) { event in
                         guard !Task.isCancelled, chartSymbol == symbol, periodSeconds == seconds else { return }
+                        retryDelay = 1
                         applyLiveCandle(event)
                         if event.bars != nil, rawBars.count < KlineStartupMerge.initialCount,
                            hydration == nil {
@@ -230,7 +232,8 @@ private struct InstrumentDetailPage: View {
                     if hydration == nil, rawBars.count < KlineStartupMerge.initialCount {
                         hydration = Task { @MainActor in await loadCandles(reset: false) }
                     }
-                    do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                    do { try await Task.sleep(for: .seconds(retryDelay + Double.random(in: 0...0.5))) } catch { return }
+                    retryDelay = min(30, retryDelay * 2)
                 }
             }
         }

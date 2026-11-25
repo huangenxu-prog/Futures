@@ -67,9 +67,11 @@ struct ContentView: View {
             // The persistent server-side feed sends its most recent quote
             // snapshot immediately on SSE connection. Do not delay that fast
             // path with a separate cold HTTP/TqSdk query first.
+            var retryDelay = 10.0
             while !Task.isCancelled {
                 do {
                     try await MarketDataService.streamQuotes { live in
+                        retryDelay = 10
                         applyContracts(live)
                     }
                 } catch is CancellationError {
@@ -81,7 +83,8 @@ struct ContentView: View {
                     } else {
                         contracts = contracts.mapValues(\.identity)
                     }
-                    do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                    do { try await Task.sleep(for: .seconds(retryDelay + Double.random(in: 0...0.5))) } catch { return }
+                    retryDelay = min(30, retryDelay * 2)
                 }
             }
         }

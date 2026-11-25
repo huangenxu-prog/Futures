@@ -92,6 +92,7 @@ struct IntradayPane: View {
             } catch {}
         }
         defer { history.cancel() }
+        var retryDelay = 3.0
         while !Task.isCancelled {
             do {
                 try await MarketDataService.streamCandles(symbol:symbol,period:60,count:500) { event in
@@ -99,13 +100,15 @@ struct IntradayPane: View {
                     if let full = event.bars { merge(full,live:true) }
                     if let bar = event.bar { merge([bar],live:true) }
                     if let first = bars.first,let last = bars.last,IntradaySession.day(first.time) != IntradaySession.day(last.time) { historyReady = true }
+                    retryDelay = 3
                     status = "已连接"
                 }
             } catch is CancellationError { return }
             catch {
                 guard !Task.isCancelled else { return }
                 status = "重连中"
-                do { try await Task.sleep(for:.seconds(3)) } catch { return }
+                do { try await Task.sleep(for:.seconds(retryDelay + Double.random(in: 0...0.5))) } catch { return }
+                retryDelay = min(30, retryDelay * 2)
             }
         }
     }
