@@ -50,7 +50,7 @@ struct InstrumentDetailView: View {
                     // and eliminate scroll-content margins.
                     .contentMargins(.vertical, 0, for: .scrollContent)
                     .scrollIndicators(.hidden)
-                    .scrollTargetBehavior(.paging)
+                    .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
                     .scrollPosition(id: $visibleID, anchor: .top)
                     .onScrollPhaseChange { _, phase in
                         scrolling = phase != .idle
@@ -507,6 +507,10 @@ private struct InstrumentDetailPage: View {
             }
             }
             }
+            if isActive {
+                CandleCountdownView(barStart: displayedKey == chartKey ? rawBars.last?.time : nil,
+                                    period: periodSeconds, running: scenePhase == .active)
+            }
             actions
         }
         .padding(.horizontal, 7)
@@ -607,6 +611,36 @@ private struct InstrumentDetailPage: View {
 
 }
 
+
+/// Only a confirmed bar timestamp anchors the timer. Do not invent a new
+/// candle during exchange breaks or show calendar-day/week countdowns.
+private struct CandleCountdownView: View {
+    let barStart: Int64?
+    let period: Int
+    let running: Bool
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text(label(at: context.date))
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(MarketPalette.muted)
+                .frame(minWidth: 48)
+                .lineLimit(1)
+                .accessibilityLabel("当前K线剩余时间")
+        }
+    }
+
+    private func label(at date: Date) -> String {
+        guard running, period > 0, period < 86400, let barStart else { return "--:--" }
+        let remaining = Double(barStart) + Double(period) - date.timeIntervalSince1970
+        guard remaining > 0, remaining <= Double(period) else { return "--:--" }
+        let seconds = Int(remaining.rounded(.up))
+        if seconds >= 3600 {
+            return String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
+        }
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+}
 
 enum QihuiPeriods {
     static let all = ["1分","3分","5分","10分","15分","30分","60分","120分","日线","周线"]
