@@ -200,7 +200,7 @@ private final class CloudTradeSession: ObservableObject {
             snapshot = nil
             if let failure = error as? CloudTradeError, case .expired = failure {
                 generation = UUID()
-                token = nil; endpoint = nil; accessKey = ""
+                self.token = nil; self.endpoint = nil; self.accessKey = ""
                 signedIn = false
                 self.error = "交易会话已失效，请重新登录。网关密钥已保留。"
             } else {
