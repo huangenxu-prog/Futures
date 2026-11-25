@@ -123,7 +123,12 @@ private final class CloudTradeSession: ObservableObject {
         if !savedPendingAddress.isEmpty { _ = TradeKeychain.remove(savedPendingAddress, kind: "pending") }
     }
     func allowManualLogin() { manualLogout = false; retryAfter = .distantPast }
+    private var awaitingCancelID: String?
     private func reconcile(_ data: CloudSnapshot) {
+        if let id = awaitingCancelID, let order = data.orders?.first(where: { $0.id == id }), order.status == "FINISHED" {
+            awaitingCancelID = nil
+            actionMessage = order.remaining == 0 ? "委托已全部成交" : "委托已结束，请核对撤单结果"
+        }
         if let pendingOrder, data.orders?.contains(where: { $0.id == pendingOrder }) == true {
             clearPending()
             actionMessage = "已收到委托记录"
@@ -181,6 +186,7 @@ private final class CloudTradeSession: ObservableObject {
         defer { mutating = false; busy = false }
         do {
             _ = try await request(base: url, action: "cancel", key: accessKey, token: token, body: ["id": id])
+            awaitingCancelID = id
             actionMessage = "撤单指令已交给SDK，等待回报"
         } catch {
             actionMessage = "撤单结果未确认，请核对委托状态"
@@ -414,9 +420,10 @@ struct TradingCenterView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .disabled(pendingAction != nil)
+            .disabled(pendingAction != nil || cancelID != nil)
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if let action = pendingAction { orderConfirmationBar(action) }
+                if let id = cancelID { cancelConfirmationBar(id) }
+                else if let action = pendingAction { orderConfirmationBar(action) }
             }
             .background(MarketPalette.background)
             .navigationTitle("交易")
@@ -449,9 +456,6 @@ struct TradingCenterView: View {
             .confirmationDialog("确认已在快期核对委托结果？", isPresented: $unlock) {
                 Button("解除锁定") { session.acknowledgeUncertainOrder() }
             } message: { Text("未知结果可能已经下单，切勿重复提交。") }
-            .confirmationDialog("确认撤销该模拟委托？", isPresented: Binding(get: { cancelID != nil }, set: { if !$0 { cancelID = nil } }), titleVisibility: .visible, presenting: cancelID) { id in
-                Button("确认撤单", role: .destructive) { cancelID = nil; Task { await session.cancel(id) } }
-            }
             .task(id: selectionRequest) {
                 guard let c = selected else { return }
                 await Task.yield()
@@ -704,6 +708,30 @@ struct TradingCenterView: View {
                 if orders.isEmpty { Text(tab == "挂单" ? "暂无挂单" : "暂无委托或未取得数据").font(.caption).foregroundStyle(.secondary) }
             }
         }
+    }
+    private func cancelConfirmationBar(_ id: String) -> some View {
+        let order = session.snapshot?.orders?.first(where: { $0.id == id })
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("确认撤销模拟委托").font(.headline)
+            if let order {
+                Text(contractName(order.symbol) + " · " + actionName(order.direction, order.offset))
+                Text(orderQuantityText(order)).font(.subheadline).monospacedDigit()
+            } else {
+                Text("委托状态暂不可用").font(.subheadline)
+            }
+            HStack(spacing: 12) {
+                Button("取消") { cancelID = nil }.buttonStyle(.bordered).frame(maxWidth: .infinity)
+                Button("确认撤单", role: .destructive) {
+                    cancelID = nil
+                    Task { await session.cancel(id) }
+                }.buttonStyle(.borderedProminent).tint(.red).frame(maxWidth: .infinity)
+                    .disabled(order?.status != "ALIVE" || session.busy)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MarketPalette.raised)
+        .overlay(alignment: .top) { Divider() }
     }
     private func orderConfirmationBar(_ action: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
