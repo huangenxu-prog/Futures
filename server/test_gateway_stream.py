@@ -20,6 +20,21 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_two_short_depths_signal_temporary_history_pause(self):
+        import tempfile
+        rows = [{"time": t, "open": 1., "high": 2., "low": 0.,
+                 "close": 1.5, "volume": 5} for t in range(100, 150)]
+        with tempfile.TemporaryDirectory() as directory:
+            hub = gateway.SharedKlineHub(store=gateway.KlineFileCache(directory))
+            with patch.object(gateway, "KLINE_HUB", hub), patch.object(
+                    gateway, "HISTORY_SHORT_PROBES", gateway.OrderedDict()), patch.object(
+                    gateway, "load_bars", return_value=rows):
+                first, second = {}, {}
+                gateway.historical_page("CZCE.SR701", 900, 100, 300, 1100, page_info=first)
+                gateway.historical_page("CZCE.SR701", 900, 100, 300, 2000, page_info=second)
+                self.assertNotIn("retry_after_seconds", first)
+                self.assertEqual(second["retry_after_seconds"], 300)
+
     def test_common_quote_does_not_acquire_short_query_gate(self):
         live = {"CZCE.SR": {"last": 5000}}
         with patch.object(gateway.LIVE_QUOTES, "current", return_value=live), patch.object(

@@ -3,6 +3,7 @@ import Foundation
 private struct KlineResponse: Decodable {
     let symbol: String
     let bars: [MarketBar]
+    let retry_after_seconds: Int?
 }
 
 enum MarketDataError: LocalizedError {
@@ -337,6 +338,13 @@ enum MarketDataService {
         symbol: String, period: Int, before: Int64,
         count: Int = 300, depth: Int = 1100
     ) async throws -> [MarketBar] {
+        try await fetchOlderPage(symbol: symbol, period: period, before: before, count: count, depth: depth).bars
+    }
+
+    static func fetchOlderPage(
+        symbol: String, period: Int, before: Int64,
+        count: Int = 300, depth: Int = 1100
+    ) async throws -> (bars: [MarketBar], retryAfter: Int?) {
         let url = try baseURL().appendingPathComponent("v1/history")
             .appending(queryItems: [
                 URLQueryItem(name: "symbol", value: symbol),
@@ -353,7 +361,7 @@ enum MarketDataService {
         }
         let result = try JSONDecoder().decode(KlineResponse.self, from: data)
         guard result.symbol == symbol else { throw MarketDataError.invalidResponse }
-        return result.bars.filter { $0.time < before }.sorted { $0.time < $1.time }
+        return (result.bars.filter { $0.time < before }.sorted { $0.time < $1.time }, result.retry_after_seconds)
     }
 
     /// Read-only backtest history, separate from the live chart cache.

@@ -537,11 +537,12 @@ struct ProfessionalChartHost: View {
             // TqSdk's rolling serial has a bounded depth. Expand the lookback
             // only when needed; the chart keeps the user's historical anchor.
             while !Task.isCancelled {
-                let older = try await MarketDataService.fetchOlder(
+                let page = try await MarketDataService.fetchOlderPage(
                     symbol: symbol, period: period, before: before,
                     count: KlineStartupMerge.historyPageCount, depth: historyDepth
                 )
                 try Task.checkCancellation()
+                let older = page.bars
                 if !older.isEmpty {
                     sessionAxis.register(older.map(\.time), period: period)
                     model.prependHistory(ChartSeries(candles: older.map(chartCandle),
@@ -550,6 +551,12 @@ struct ProfessionalChartHost: View {
                     if older.count < KlineStartupMerge.historyPageCount && historyDepth == 8964 {
                         model.hasMoreHistory = false
                     }
+                    return
+                }
+                if page.retryAfter != nil {
+                    // No older bars at two depths; stop this chart's search.
+                    // Reopening the chart can retry a transient upstream gap.
+                    model.hasMoreHistory = false
                     return
                 }
                 if historyDepth >= 8964 {

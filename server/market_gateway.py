@@ -1091,7 +1091,7 @@ HISTORY_SHORT_PROBE_TTL = 300
 HISTORY_SHORT_PROBE_MAX = 128
 
 
-def historical_page(symbol, period, before, count, depth):
+def historical_page(symbol, period, before, count, depth, *, page_info=None):
     """Serve prior candles from Aliyun disk; fetch only a genuinely missing page.
 
     Disk can retain up to 8964 genuine TqSdk bars per symbol/period. A 1200-bar
@@ -1130,6 +1130,16 @@ def historical_page(symbol, period, before, count, depth):
             return older[-count:]
         fetched = load_bars(symbol, period, depth)
         if fetched and len(fetched) < depth - 2:
+            # A short SDK response is not proof of listing-date exhaustion.
+            # Two different depths with the same earliest timestamp justify
+            # pausing this interactive search, not declaring permanent EOF.
+            if page_info is not None and fetched[0]["time"] >= before:
+                now = time.monotonic()
+                if any(other_key == key and other_depth < depth
+                       and expiry > now and earliest == fetched[0]["time"]
+                       for (other_key, other_depth), (expiry, earliest)
+                       in HISTORY_SHORT_PROBES.items()):
+                    page_info["retry_after_seconds"] = 300
             HISTORY_SHORT_PROBES[probe_key] = (time.monotonic() + HISTORY_SHORT_PROBE_TTL,
                                               fetched[0]["time"])
             HISTORY_SHORT_PROBES.move_to_end(probe_key)
@@ -1421,8 +1431,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(400, {"error": "invalid_history_parameters"})
                 return
             try:
-                older = historical_page(symbol, period, before, count, depth)
-                self.reply(200, {"symbol": symbol, "period": period, "bars": older})
+                page_info = {}
+                older = historical_page(symbol, period, before, count, depth, page_info=page_info)
+                self.reply(200, {"symbol": symbol, "period": period, "bars": older, **page_info})
             except Exception:
                 self.reply(503, {"error": "history_unavailable"})
             return
