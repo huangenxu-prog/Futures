@@ -923,7 +923,7 @@ struct TradingCenterView: View {
             if session.snapshot == nil {
                 Text("账户数据暂不可用").font(.caption).foregroundStyle(.secondary)
             } else if tab == "持仓" {
-                HStack {
+                HStack(spacing: 4) {
                     Text("合约 / 多空").frame(maxWidth: .infinity, alignment: .leading)
                     Text("手数 / 可平").frame(width: 65)
                     Text("开仓均价").frame(width: 67, alignment: .trailing)
@@ -1161,11 +1161,10 @@ struct TradingCenterView: View {
         return "\(price) · \(filled)/\(order.quantity)手"
     }
     private var positionSummaryUnavailable: some View {
-        positionSummaryBar(rows: nil, lots: nil, closable: nil, profit: nil)
+        positionSummaryBar(lots: nil, closable: nil, profit: nil)
     }
     private func positionSummary(_ positions: [CloudSnapshot.Position]) -> some View {
         let lots = positions.reduce(0) { $0 + $1.long + $1.short }
-        let rows = positions.reduce(0) { $0 + ($1.long > 0 ? 1 : 0) + ($1.short > 0 ? 1 : 0) }
         var closable = 0
         var completeClosable = true
         var profit = 0.0
@@ -1185,28 +1184,25 @@ struct TradingCenterView: View {
             }
         }
         let totalProfit: Double? = completeProfit && profit.isFinite ? profit : nil
-        return positionSummaryBar(rows: rows, lots: lots,
+        return positionSummaryBar(lots: lots,
                                   closable: completeClosable ? closable : nil, profit: totalProfit)
     }
-    private func positionSummaryBar(rows: Int?, lots: Int?, closable: Int?, profit: Double?) -> some View {
+    private func positionSummaryBar(lots: Int?, closable: Int?, profit: Double?) -> some View {
         VStack(spacing: 0) {
             Divider()
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("持仓汇总").font(.caption.weight(.semibold)).foregroundStyle(MarketPalette.ink)
-                    Text(rows.map { "\($0) 笔方向持仓" } ?? "数据待确认").font(.caption2).foregroundStyle(MarketPalette.muted)
-                }
-                Spacer(minLength: 0)
-                metric("总手数", lots.map { String($0) } ?? "--")
-                metric("可平手数", closable.map { String($0) } ?? "--")
-                VStack(alignment: .trailing, spacing: 3) {
-                    Text("浮动盈亏").font(.caption2).foregroundStyle(MarketPalette.muted)
-                    Text(money(profit, suffix: false)).font(.system(size: 15, weight: .semibold))
-                        .monospacedDigit().foregroundStyle(MarketPalette.movement(profit))
-                        .lineLimit(1).minimumScaleFactor(0.65)
-                }.frame(minWidth: 88, alignment: .trailing)
-            }.padding(.horizontal, 8).padding(.vertical, 9)
-        }.background(MarketPalette.raised, in: RoundedRectangle(cornerRadius: 7))
+            HStack(spacing: 4) {
+                Text("合计").frame(maxWidth: .infinity, alignment: .leading)
+                Text((lots.map { String($0) } ?? "--") + "/" + (closable.map { String($0) } ?? "--"))
+                    .lineLimit(1).minimumScaleFactor(0.65).frame(width: 65)
+                Text("—").frame(width: 67, alignment: .trailing).foregroundStyle(MarketPalette.muted)
+                Text(money(profit, suffix: false))
+                    .foregroundStyle(MarketPalette.movement(profit))
+                    .lineLimit(1).minimumScaleFactor(0.65)
+                    .frame(width: 65, alignment: .trailing)
+            }
+            .font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(MarketPalette.ink)
+            .padding(.vertical, 9)
+        }
     }
     private func positionRow(_ p: CloudSnapshot.Position, long: Bool) -> some View {
         let qty = long ? p.long : p.short
