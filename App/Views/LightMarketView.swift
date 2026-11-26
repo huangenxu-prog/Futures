@@ -76,6 +76,7 @@ private enum HomeMarketPalette {
     }
 }
 struct LightMarketView: View {
+    private var backgroundStyle = MarketBackgroundStyle()
     private enum Scope: String, CaseIterable {
         case favorites = "自选"
         case catalog = "全部品种"
@@ -268,8 +269,8 @@ struct LightMarketView: View {
                 List {
                     ForEach(instruments) { item in
                         reorderableRow(item)
-                            .listRowBackground(HomeMarketPalette.surface)
-                            .listRowSeparatorTint(HomeMarketPalette.divider)
+                            .listRowBackground(backgroundStyle.surface)
+                            .listRowSeparatorTint(backgroundStyle.divider)
                             .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 if favorites.ids.contains(item.id) {
@@ -294,10 +295,10 @@ struct LightMarketView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                .background(HomeMarketPalette.background)
+                .background(backgroundStyle.surface)
                 .environment(\.editMode, .constant(editing ? .active : .inactive))
             }
-            .background(HomeMarketPalette.header.ignoresSafeArea())
+            .background(backgroundStyle.raised.ignoresSafeArea())
             .tint(HomeMarketPalette.accent)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(item: $detailSelection) { selection in
@@ -357,8 +358,8 @@ struct LightMarketView: View {
             }
             .padding(.horizontal, 11)
             .frame(height: 36)
-            .background(HomeMarketPalette.surface, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(HomeMarketPalette.divider.opacity(0.7), lineWidth: 0.6))
+            .background(backgroundStyle.surface, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(backgroundStyle.divider.opacity(0.7), lineWidth: 0.6))
             Button {
                 showingStrategyCenter = true
             } label: {
@@ -446,9 +447,9 @@ struct LightMarketView: View {
                             .foregroundStyle(selectedCategory == group ? HomeMarketPalette.accent : HomeMarketPalette.muted)
                             .padding(.horizontal, 12)
                             .frame(height: 28)
-                            .background(selectedCategory == group ? HomeMarketPalette.accent.opacity(0.08) : HomeMarketPalette.surface,
+                            .background(selectedCategory == group ? HomeMarketPalette.accent.opacity(0.08) : backgroundStyle.surface,
                                         in: Capsule())
-                            .overlay(Capsule().stroke(HomeMarketPalette.divider, lineWidth: 0.8))
+                            .overlay(Capsule().stroke(backgroundStyle.divider, lineWidth: 0.8))
                     }
                     .buttonStyle(.plain)
                 }
@@ -474,8 +475,8 @@ struct LightMarketView: View {
         .font(.system(size: 10, weight: .medium))
         .foregroundStyle(HomeMarketPalette.muted)
         .padding(.horizontal, 12).frame(height: 33)
-        .background(HomeMarketPalette.header)
-        .overlay(alignment: .bottom) { Rectangle().fill(HomeMarketPalette.divider).frame(height: 1) }
+        .background(backgroundStyle.raised)
+        .overlay(alignment: .bottom) { Rectangle().fill(backgroundStyle.divider).frame(height: 1) }
     }
     @ViewBuilder private func reorderableRow(_ item: FuturesInstrument) -> some View {
         if scope == .favorites && search.isEmpty && sortBy == "默认" {

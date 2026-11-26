@@ -3,6 +3,7 @@ import UIKit
 import Combine
 
 struct InstrumentDetailView: View {
+    private var backgroundStyle = MarketBackgroundStyle()
     let instrument: FuturesInstrument
     let selectedContract: MarketDataService.ContractQuote?
     private let pages: [FuturesInstrument]
@@ -35,7 +36,7 @@ struct InstrumentDetailView: View {
                 .environmentObject(favorites))
         }
         .id(instrument.id)
-        .background(MarketPalette.surface.ignoresSafeArea())
+        .background(backgroundStyle.surface.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .onAppear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true) }
         .onDisappear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false) }
@@ -228,6 +229,7 @@ private struct DetailPager: UIViewControllerRepresentable {
 }
 
 private struct InstrumentDetailPage: View {
+    private var backgroundStyle = MarketBackgroundStyle()
     @Environment(\.mainContracts) private var contracts
     @EnvironmentObject private var favorites: Favorites
     @State private var showOptions = false
@@ -320,7 +322,7 @@ private struct InstrumentDetailPage: View {
                 }
         }
         .padding(.horizontal, 3)
-        .background(MarketPalette.surface)
+        .background(backgroundStyle.surface)
         .toolbar(.hidden, for: .navigationBar)
         .task(id: chartSymbol + (isActive ? "/active" : "/preview") + (scenePhase == .active ? "/foreground" : "/paused")) {
             guard isActive, scenePhase == .active else { return }
@@ -751,7 +753,7 @@ private struct InstrumentDetailPage: View {
     }
 
     private var quoteSeparator: some View {
-        Rectangle().fill(MarketPalette.divider).frame(height: 0.5)
+        Rectangle().fill(backgroundStyle.divider).frame(height: 0.5)
     }
 
     private func smallQuote(_ label: String, _ value: String, _ tint: Color) -> some View {

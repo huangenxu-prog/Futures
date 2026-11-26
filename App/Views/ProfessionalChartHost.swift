@@ -5,6 +5,7 @@ import TradingChart
 /// Qihui retains its own toolbar, quote strip, colors and TqSdk data source.
 @available(iOS 17.0, *)
 struct ProfessionalChartHost: View {
+    private var backgroundStyle = MarketBackgroundStyle()
     let symbol: String
     let period: Int
     let bars: [MarketBar]
@@ -140,7 +141,7 @@ struct ProfessionalChartHost: View {
         var value = TradingChartTheme.standard
         value.bullish = MarketPalette.up
         value.bearish = MarketPalette.down
-        value.grid = MarketPalette.divider.opacity(0.55)
+        value.grid = backgroundStyle.divider.opacity(0.55)
         value.axisLabel = MarketPalette.muted
         value.crosshair = MarketPalette.ink.opacity(0.65)
         value.line = MarketPalette.accent
@@ -154,10 +155,10 @@ struct ProfessionalChartHost: View {
         value.yAxisLabelWidth = 32
         value.indicatorPalette = [MarketPalette.sma, MarketPalette.ema20,
                                   MarketPalette.ema50, MarketPalette.wma]
-        value.paneSeparator = MarketPalette.divider
-        value.crosshairLabelBackground = MarketPalette.raised
+        value.paneSeparator = backgroundStyle.divider
+        value.crosshairLabelBackground = backgroundStyle.raised
         value.crosshairLabelText = MarketPalette.ink
-        value.tooltipBackground = MarketPalette.raised.opacity(0.98)
+        value.tooltipBackground = backgroundStyle.raised.opacity(0.98)
         value.tooltipText = MarketPalette.ink
         value.legendText = MarketPalette.ink
         value.legendLabel = MarketPalette.muted
@@ -206,13 +207,13 @@ struct ProfessionalChartHost: View {
                 drawingMenu
             }
             .padding(.horizontal, 6)
-            .background(MarketPalette.surface)
+            .background(backgroundStyle.surface)
         }
         .tradingChartTheme(theme)
         .tradingChartTimeFormatter(chartTimeFormatter)
         .tradingChartPriceFormatter(chartPriceFormatter)
         .tradingChartStrings(chartStrings)
-        .background(MarketPalette.surface)
+        .background(backgroundStyle.surface)
         .onAppear {
             model.onVerticalSwipe = isReplay ? nil : onVerticalSwipe
             model.style = .candles

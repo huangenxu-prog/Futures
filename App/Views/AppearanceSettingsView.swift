@@ -3,13 +3,15 @@ import UIKit
 
 /// User-selected appearance. Default is dark, with an explicit system option.
 enum AppAppearanceMode: String, CaseIterable, Identifiable {
-    case system, dark, light
+    case system, dark, light, black, gray
 
     var id: String { rawValue }
     var title: String {
         switch self {
         case .system: return "跟随系统"
         case .dark: return "深色"
+        case .black: return "纯黑"
+        case .gray: return "纯灰"
         case .light: return "浅色"
         }
     }
@@ -17,19 +19,22 @@ enum AppAppearanceMode: String, CaseIterable, Identifiable {
         switch self {
         case .system: return "iphone.gen3"
         case .dark: return "moon.fill"
+        case .black: return "circle.fill"
+        case .gray: return "circle.lefthalf.filled"
         case .light: return "sun.max.fill"
         }
     }
     var colorScheme: ColorScheme? {
         switch self {
         case .system: return nil
-        case .dark: return .dark
+        case .dark, .black, .gray: return .dark
         case .light: return .light
         }
     }
 }
 
 struct AppearanceSettingsView: View {
+    private var backgroundStyle = MarketBackgroundStyle()
     @AppStorage("qihui.appearance.mode.v1") private var selectedMode = AppAppearanceMode.dark.rawValue
     @Environment(\.dismiss) private var dismiss
 
@@ -67,7 +72,7 @@ struct AppearanceSettingsView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(MarketPalette.background.ignoresSafeArea())
+            .background(backgroundStyle.surface.ignoresSafeArea())
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -253,4 +258,21 @@ struct QuoteAppearanceFields: View {
         Binding(get: { QuoteAppearance.color(value.wrappedValue, fallback: fallback) },
                 set: { if let rgb = CandleAppearance.rgb($0) { value.wrappedValue = rgb } })
     }
+}
+
+
+/// Background roles only; never changes quote, candle or indicator colors.
+struct MarketBackgroundStyle: DynamicProperty {
+    @AppStorage("qihui.appearance.mode.v1") private var mode = AppAppearanceMode.dark.rawValue
+    @Environment(\.colorScheme) private var scheme
+
+    var isCustom: Bool { scheme == .dark && (mode == AppAppearanceMode.black.rawValue || mode == AppAppearanceMode.gray.rawValue) }
+
+    private func role(_ original: Color, black: Int, gray: Int) -> Color {
+        guard isCustom else { return original }
+        return CandleAppearance.color(mode == AppAppearanceMode.black.rawValue ? black : gray, fallback: original)
+    }
+    var surface: Color { role(MarketPalette.surface, black: 0x000000, gray: 0x242424) }
+    var raised: Color { role(MarketPalette.raised, black: 0x101010, gray: 0x303030) }
+    var divider: Color { role(MarketPalette.divider, black: 0x242424, gray: 0x414141) }
 }

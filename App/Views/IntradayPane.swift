@@ -2,6 +2,7 @@ import SwiftUI
 import Foundation
 
 struct IntradayPane: View {
+    private var backgroundStyle = MarketBackgroundStyle()
     let symbol: String
     let previousSettlement: Double?
     var isActive = true
@@ -46,7 +47,7 @@ struct IntradayPane: View {
             }
         }
         .padding(.horizontal,5)
-        .background(MarketPalette.surface)
+        .background(backgroundStyle.surface)
         .task(id:symbol+(scenePhase == .active && isActive ? "/active" : "/paused")) {
             guard scenePhase == .active, isActive else { return }
             await load()
@@ -116,6 +117,7 @@ struct IntradayPane: View {
 }
 
 private struct IntradayCanvas: View {
+    private var backgroundStyle = MarketBackgroundStyle()
     let bars:[MarketBar]
     let averages:[Double?]
     let reference:Double?
@@ -135,7 +137,7 @@ private struct IntradayCanvas: View {
                 for k in 0...2 {
                     let v = high-(high-low)*Double(k)/2,py = y(v)
                     var path = Path(); path.move(to:CGPoint(x:0,y:py)); path.addLine(to:CGPoint(x:w,y:py))
-                    context.stroke(path,with:.color(MarketPalette.divider),lineWidth:0.5)
+                    context.stroke(path,with:.color(backgroundStyle.divider),lineWidth:0.5)
                     context.draw(Text(v.formatted(.number.precision(.fractionLength(0...2)))).font(.system(size:8)).foregroundColor(MarketPalette.muted),at:CGPoint(x:w+3,y:max(5,min(height-5,py))),anchor:.leading)
                 }
                 if let reference {

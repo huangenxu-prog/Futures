@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct QihuiSettingsView: View {
+    private var backgroundStyle = MarketBackgroundStyle()
     @Environment(\.dismiss) private var dismiss
     @AppStorage("qihui.appearance.mode.v1") private var appearance = AppAppearanceMode.dark.rawValue
     @AppStorage("qihui.change.basis.v1") private var changeBasis = "settlement"
@@ -29,8 +30,10 @@ struct QihuiSettingsView: View {
                     Picker("主题", selection: $appearance) {
                         Text("浅色").tag(AppAppearanceMode.light.rawValue)
                         Text("深色").tag(AppAppearanceMode.dark.rawValue)
+                        Text("纯黑").tag(AppAppearanceMode.black.rawValue)
+                        Text("纯灰").tag(AppAppearanceMode.gray.rawValue)
                         Text("跟随系统").tag(AppAppearanceMode.system.rawValue)
-                    }.pickerStyle(.segmented)
+                    }.pickerStyle(.menu)
 
                 }
                 QuoteAppearanceFields()
@@ -65,6 +68,8 @@ struct QihuiSettingsView: View {
                 }
 
             }
+            .scrollContentBackground(backgroundStyle.isCustom ? .hidden : .automatic)
+            .background(backgroundStyle.isCustom ? backgroundStyle.surface : Color.clear)
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
