@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Python syntax and offline stream checks
         run: |
           python3 -m py_compile server/market_gateway.py server/upgrade_gateway.py server/diagnose_kline.py server/benchmark_cold_kline.py server/prefetch_main_history.py
