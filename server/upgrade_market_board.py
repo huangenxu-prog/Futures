@@ -16,8 +16,8 @@ from urllib.request import Request, urlopen
 
 ROOT = Path("/root/tq_test")
 TARGET = ROOT / "server/market_gateway.py"
-COMMIT = "60c35d57a05a61ba7da50a7bbb2193ddc13929fe"
-BLOB = "5341213df43f5b3584e9b3772bde79c8415975f4"
+COMMIT = "f84137059b112936d3f097274085633e4b6d6404"
+BLOB = "1bde26b5fbadfbc3cca2394e65a651ccbd171bd5"
 SERVICE = "qihui-gateway.service"
 BASE = "http://127.0.0.1:8765"
 
