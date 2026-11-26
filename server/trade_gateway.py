@@ -141,6 +141,34 @@ def validate_order(body):
         raise ValueError("invalid price or volume")
     return oid, symbol, direction, offset, quantity, price
 
+def close_capacity(positions, symbol, direction, offset):
+    """Local SDK position guard. Unknown quantities fail closed."""
+    pos = positions.get(symbol) if positions is not None else None
+    if pos is None:
+        return None
+    side = "long" if direction == "SELL" else "short"
+
+    def count(field):
+        value = number(getattr(pos, field, None))
+        if value is None or value < 0 or int(value) != value:
+            return None
+        return int(value)
+
+    total = count("pos_" + side)
+    frozen = count("volume_" + side + "_frozen")
+    if total is None or frozen is None:
+        return None
+    capacity = max(0, total - frozen)
+    if symbol.split(".")[0] in ("SHFE", "INE"):
+        bucket = "today" if offset == "CLOSETODAY" else "his"
+        held = count("pos_" + side + "_" + bucket)
+        locked = count("volume_" + side + "_frozen_" + bucket)
+        if held is None or locked is None:
+            return None
+        capacity = min(capacity, max(0, held - locked))
+    return capacity
+
+
 def snapshot(account, positions, orders=None, fills=None):
     fields = ("balance", "available", "margin", "float_profit", "close_profit")
     data = {field: number(getattr(account, field, None)) for field in fields}
@@ -272,7 +300,7 @@ class Session:
                                     or time.monotonic() - self.snapshot_monotonic > 5):
                                 result["status"] = 503
                             else:
-                                result["status"] = self.submit_order(api, orders, payload)
+                                result["status"] = self.submit_order(api, orders, payload, positions)
                         else:
                             audit("cancel_attempt", id=payload)
                             order = orders.get(payload)
@@ -342,7 +370,7 @@ class Session:
             identity = "TqAccount:" + os.environ.get("QIHUI_LIVE_BROKER", "") + ":" + os.environ.get("QIHUI_LIVE_ACCOUNT", "")
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
-    def submit_order(self, api, orders, payload):
+    def submit_order(self, api, orders, payload, positions=None):
         # Owner thread only. Record intent before SDK submission; never replay
         # an uncertain request, even if insert_order raised after transmission.
         if self.mode != "simulation":
@@ -371,6 +399,16 @@ class Session:
             return 200
         if len(self.seen) >= 1000:
             return 429
+        if offset != "OPEN":
+            # Existing durable intents must remain uncertain, not be interpreted
+            # as rejected merely because the position has changed.
+            prior = ORDER_LEDGER.lookup(self.ledger_namespace(), oid) if ORDER_LEDGER is not None else None
+            if prior is not None:
+                return 503 if prior == payload else 409
+            capacity = close_capacity(positions, symbol, direction, offset)
+            if capacity is None or qty > capacity:
+                audit("close_capacity_rejected", id=oid, quantity=qty, capacity=capacity)
+                return 422
         if ORDER_LEDGER is not None:
             namespace = self.ledger_namespace()
             reservation = ORDER_LEDGER.reserve(namespace, payload)
