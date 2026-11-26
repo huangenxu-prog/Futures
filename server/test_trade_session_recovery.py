@@ -170,6 +170,35 @@ class RecoveryTests(unittest.TestCase):
                 self.assertFalse(g.start_configured_session())
                 factory.assert_called_once_with("test", "test-password", keepalive=True)
 
+    def test_recovery_supervisor_backoff_and_pause(self):
+        with patch.object(g, "SESSION", None), patch.object(g, "MAINTENANCE", g.threading.Event()), patch.object(g, "AUTO_RECOVERY_PAUSED", g.threading.Event()), patch.object(g, "start_configured_session", return_value=True) as start:
+            supervisor = g.RecoverySupervisor(minimum=30, maximum=300)
+            self.assertTrue(supervisor.tick(0))
+            self.assertFalse(supervisor.tick(29))
+            self.assertTrue(supervisor.tick(30))
+            self.assertFalse(supervisor.tick(89))
+            g.AUTO_RECOVERY_PAUSED.set()
+            self.assertFalse(supervisor.tick(90))
+            g.AUTO_RECOVERY_PAUSED.clear()
+            self.assertTrue(supervisor.tick(90))
+            g.MAINTENANCE.set()
+            self.assertFalse(supervisor.tick(1000))
+            self.assertEqual(start.call_count, 3)
+
+    def test_scheduled_restart_slots_and_deduplication(self):
+        import os
+        import tempfile
+        from datetime import datetime, timezone
+        self.assertEqual(g.scheduled_restart_slot(datetime(2026, 11, 26, 0, 30, tzinfo=timezone.utc)), "2026-11-26 08:30")
+        self.assertEqual(g.scheduled_restart_slot(datetime(2026, 11, 26, 4, 0, tzinfo=timezone.utc)), "2026-11-26 12:00")
+        self.assertEqual(g.scheduled_restart_slot(datetime(2026, 11, 26, 12, 30, tzinfo=timezone.utc)), "2026-11-26 20:30")
+        self.assertIsNone(g.scheduled_restart_slot(datetime(2026, 11, 26, 12, 31, tzinfo=timezone.utc)))
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "restart.sqlite3")
+            self.assertTrue(g.claim_restart_slot(path, "2026-11-26 08:30"))
+            self.assertFalse(g.claim_restart_slot(path, "2026-11-26 08:30"))
+            self.assertTrue(g.claim_restart_slot(path, "2026-11-26 12:00"))
+
     def test_password_verifier(self):
         with patch.object(g.threading.Thread, "start"):
             s = g.Session("test", "password")
