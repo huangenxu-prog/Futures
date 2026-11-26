@@ -10,6 +10,7 @@ import queue
 import re
 import os
 import secrets
+import signal
 import sqlite3
 import threading
 import time
@@ -18,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PREFIX = "/v1/trade/"
 IDLE = 1200
 LOCK = threading.Lock()
+MAINTENANCE = threading.Event()
 SESSION = None
 LAST_LOGIN = 0.0
 TRADE_MODE = os.environ.get("QIHUI_TRADE_MODE", "simulation")
@@ -381,6 +383,9 @@ class Session:
                                            if self.sdk_update_monotonic is not None else None)
             # Neither timestamp proves an authenticated broker connection.
             result["broker_connection_verified"] = False
+            result["maintenance"] = MAINTENANCE.is_set()
+            if MAINTENANCE.is_set():
+                result["order_submission_enabled"] = False
             result["snapshot_age_ms"] = (int((time.monotonic() - self.snapshot_monotonic) * 1000)
                                          if self.snapshot_monotonic is not None else None)
             return result
@@ -429,6 +434,8 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError, KeyError, OSError):
                 return self.reply(400)
             with LOCK:
+                if MAINTENANCE.is_set():
+                    return self.reply(503, {"error": "maintenance"})
                 now = time.monotonic()
                 if now - LAST_LOGIN < 5:
                     return self.reply(429)
@@ -450,6 +457,8 @@ class Handler(BaseHTTPRequestHandler):
             if not s.ready.wait(60):
                 return self.reply(503)
             with LOCK:
+                if MAINTENANCE.is_set():
+                    return self.reply(503, {"error": "maintenance"})
                 if s is not SESSION or s.stop.is_set():
                     return self.reply(503)
                 data = s.read()
@@ -498,6 +507,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(400)
         done, result = threading.Event(), {}
         with LOCK:
+            if MAINTENANCE.is_set():
+                return self.reply(503, {"error": "maintenance"})
             if s is not SESSION or s.stop.is_set() or not equal(self.headers.get("Authorization", ""), "Bearer " + s.token):
                 return self.reply(401)
             if s.inflight:
@@ -512,6 +523,29 @@ class Handler(BaseHTTPRequestHandler):
             audit("command_wait_timeout", action=action, id=payload[0] if action == "order" else payload)
             return self.reply(503)
         return self.reply(result.get("status", 503))
+
+def drain_session(timeout=30):
+    """Stop admission, wait for local command processing, then close SDK worker.
+    This is not a broker acknowledgement; durable intents remain authoritative
+    for replay protection when the outcome is uncertain.
+    """
+    with LOCK:
+        MAINTENANCE.set()
+        s = SESSION
+    deadline = time.monotonic() + timeout
+    while True:
+        with LOCK:
+            if s is None:
+                return True
+            if not s.inflight:
+                s.stop.set()
+                break
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    s.worker.join(max(0.0, deadline - time.monotonic()))
+    return not s.worker.is_alive()
+
 
 def main():
     global ORDER_LEDGER
@@ -531,7 +565,21 @@ def main():
         configure_audit("trade-audit.jsonl")
         ORDER_LEDGER = OrderIntentLedger("trade-intents.sqlite3")
         port = 8766
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    def request_maintenance(signum, frame):
+        MAINTENANCE.set()
+
+    signal.signal(signal.SIGTERM, request_maintenance)
+    signal.signal(signal.SIGINT, request_maintenance)
+    with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
+        server.timeout = 0.5
+        while not MAINTENANCE.is_set():
+            server.handle_request()
+        audit("maintenance_started")
+        # Never force-close an in-flight local command ourselves. External
+        # service-manager stop timeouts must be configured separately.
+        while not drain_session():
+            audit("maintenance_drain_pending")
+        audit("maintenance_drained")
 
 if __name__ == "__main__":
     main()
