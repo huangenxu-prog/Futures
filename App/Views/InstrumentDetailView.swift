@@ -408,8 +408,8 @@ private struct InstrumentDetailPage: View {
                 .presentationDetents([.height(460), .large])
                 .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showOptions) {
-            OptionChainView(code: chartSymbol, underlyingLast: currentLast,underlyingName:instrument.name)
+        .fullScreenCover(isPresented: $showOptions) {
+            OptionChainView(code: chartSymbol, underlyingLast: currentLast,underlyingName:instrument.name, productID: instrument.id)
         }
         .sheet(isPresented: $showContracts) {
             ContractListView(instrument: instrument, currentCode: chartSymbol) { contract in

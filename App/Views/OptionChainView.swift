@@ -13,8 +13,15 @@ struct OptionChainView: View {
     let code: String
     let underlyingLast: Double?
     let underlyingName: String
-    init(code: String, underlyingLast: Double? = nil, underlyingName: String? = nil) {
+    let productID: String
+    @State private var activeCode: String
+    @State private var months: [MarketDataService.ContractQuote] = []
+    @State private var monthError = false
+    @State private var loadID = UUID()
+    init(code: String, underlyingLast: Double? = nil, underlyingName: String? = nil, productID: String? = nil) {
         self.code = code; self.underlyingLast = underlyingLast; self.underlyingName = underlyingName ?? code
+        self.productID = productID ?? String(code.prefix(while: { !$0.isNumber }))
+        _activeCode = State(initialValue: code)
     }
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -30,8 +37,27 @@ struct OptionChainView: View {
     @State private var sort = 0
     @State private var descending = false
     private let headings = ["最新价","涨幅%","持仓量","成交量","日增仓","买一","卖一","买一量","卖一量","今开","最高","最低","昨结"]
-    private var spot: Double? { last ?? underlyingLast }
-    private var name: String { underlyingName + String(code.reversed().prefix(while: { $0.isNumber }).reversed()) }
+    private var spot: Double? { last ?? (activeCode == code ? underlyingLast : nil) }
+    private var name: String { underlyingName + monthLabel(activeCode) }
+    private func monthLabel(_ symbol: String) -> String {
+        if let month = months.first(where: { $0.code == symbol })?.month, month.count == 4 { return month }
+        let digits = String(symbol.reversed().prefix(while: { $0.isNumber }).reversed())
+        if digits.count == 3, let yearDigit = digits.first?.wholeNumberValue {
+            var cal = Calendar(identifier: .gregorian)
+            cal.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+            let year = cal.component(.year, from: Date())
+            let decade = year / 10 * 10
+            let possible = [decade - 10 + yearDigit, decade + yearDigit, decade + 10 + yearDigit]
+            let nearest = possible.min { abs($0-year) < abs($1-year) } ?? year
+            return String(format: "%02d", nearest % 100) + String(digits.suffix(2))
+        }
+        return digits
+    }
+    private func switchMonth(_ symbol: String) {
+        guard symbol != activeCode else { return }
+        loadID = UUID(); rows = []; last = nil; error = nil; loading = false
+        initialPosition = false; anchor = nil; activeCode = symbol
+    }
     private var nearest: Double? {
         guard let spot else { return nil }
         return rows.map(\.strike).min { abs($0-spot) < abs($1-spot) }
@@ -69,26 +95,28 @@ struct OptionChainView: View {
                 else if rows.isEmpty { Spacer(); Text(error ?? "暂无挂牌期权"); Button("重试") { Task { await load() } }; Spacer() }
                 else {
                     if let error { Text(error).font(.caption).foregroundStyle(MarketPalette.muted) }
+                    GeometryReader { geometry in
+                    let columnWidth = max(58, (geometry.size.width - 54) / 4)
                     ScrollViewReader { proxy in
                         ScrollView(.vertical) {
                             HStack(alignment: .top, spacing: 0) {
                                 VStack(spacing: 0) {
-                                    Button("行权价") { changeSort(0) }.font(.caption.weight(.semibold)).frame(width: 66, height: 32)
+                                    Button("行权价") { changeSort(0) }.font(.caption.weight(.semibold)).frame(width: 54, height: 32)
                                     ForEach(visible) { q in
                                         Button { selected = q } label: {
                                             Text(optionNumber(q.strike)).font(.system(size: 14, weight: .semibold)).monospacedDigit()
                                                 .foregroundStyle(q.strike == nearest ? MarketPalette.countdown : MarketPalette.ink)
-                                                .frame(width: 66, height: 43).contentShape(Rectangle())
+                                                .frame(width: 54, height: 43).contentShape(Rectangle())
                                         }.buttonStyle(.plain).id(q.strike)
                                         Divider().frame(height: 1)
                                     }
-                                }.background(MarketPalette.raised)
+                                }.frame(width: 54).clipped().background(MarketPalette.raised)
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     VStack(spacing: 0) {
                                         HStack(spacing: 0) {
                                             ForEach(headings.indices, id: \.self) { j in
                                                 Button(headings[j] + (sort == j+1 ? (descending ? "↓" : "↑") : "")) { changeSort(j+1) }
-                                                    .font(.caption).foregroundStyle(MarketPalette.muted).frame(width: 75, height: 32)
+                                                    .font(.caption).foregroundStyle(MarketPalette.muted).frame(width: columnWidth, height: 32)
                                             }
                                         }
                                         ForEach(visible) { q in
@@ -99,16 +127,19 @@ struct OptionChainView: View {
                                                         Text(optionNumber(v) + (j == 1 && v != nil ? "%" : ""))
                                                             .font(.system(size: 13)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
                                                             .foregroundStyle(j == 1 || j == 4 ? MarketPalette.movement(v) : MarketPalette.ink)
-                                                            .frame(width: 75, height: 43)
+                                                            .frame(width: columnWidth, height: 43)
                                                     }
                                                 }.contentShape(Rectangle())
                                             }.buttonStyle(.plain)
                                             Divider().frame(height: 1)
                                         }
                                     }
-                                }
-                            }
+                                }.frame(width: max(0, geometry.size.width - 54)).clipped()
+                            }.frame(width: geometry.size.width, alignment: .leading)
                         }.refreshable { await load() }
+                        .onAppear {
+                            if !initialPosition, let nearest { initialPosition = true; anchor = nearest; proxy.scrollTo(nearest, anchor: .center) }
+                        }
                         .onChange(of: rows.count) { _, count in
                             if count > 0 && !initialPosition, let nearest { initialPosition = true; anchor = nearest; proxy.scrollTo(nearest, anchor: .center) }
                         }
@@ -116,14 +147,35 @@ struct OptionChainView: View {
                             if let target = anchor ?? nearest { proxy.scrollTo(target, anchor: .center) }
                         }
                     }
+                    }
                 }
             }.background(MarketPalette.background)
             .navigationTitle(name + " 期权").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } }
-            .navigationDestination(isPresented: Binding(get: { selected != nil }, set: { if !$0 { selected = nil } })) {
-                if let q = selected { OptionDetailView(underlying: code, name: name, initial: q, initialSpot: spot) }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        if months.isEmpty {
+                            Button(monthError ? "重新加载月份" : "加载月份") { Task { await loadMonths() } }
+                        }
+                        ForEach(months) { month in
+                            Button {
+                                switchMonth(month.code)
+                            } label: {
+                                if month.code == activeCode { Label(monthLabel(month.code), systemImage: "checkmark") }
+                                else { Text(monthLabel(month.code)) }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 3) { Text(monthLabel(activeCode)); Image(systemName: "chevron.down") }.font(.subheadline)
+                    }
+                }
             }
-            .task(id: "\(code)-\(scenePhase)-\(selected?.code ?? "")") {
+            .task(id: productID) { await loadMonths() }
+            .navigationDestination(isPresented: Binding(get: { selected != nil }, set: { if !$0 { selected = nil } })) {
+                if let q = selected { OptionDetailView(underlying: activeCode, name: name, initial: q, initialSpot: spot) }
+            }
+            .task(id: "\(activeCode)-\(scenePhase)-\(selected?.code ?? "")") {
                 guard scenePhase == .active, selected == nil else { return }
                 repeat { await load(); do { try await Task.sleep(for: .seconds(20)) } catch { return } } while !Task.isCancelled
             }
@@ -132,14 +184,24 @@ struct OptionChainView: View {
     private func changeSort(_ column: Int) {
         if sort == column { descending.toggle() } else { sort = column; descending = column != 0 }
     }
-    @MainActor private func load() async {
-        guard !loading else { return }; loading = true; defer { loading = false }
+    @MainActor private func loadMonths() async {
         do {
-            let result = try await MarketDataService.options(for: code)
+            let result = try await MarketDataService.listedContracts(for: productID)
             guard !Task.isCancelled else { return }
+            months = result; monthError = false
+        } catch { if !Task.isCancelled { monthError = true } }
+    }
+    @MainActor private func load() async {
+        guard !loading else { return }
+        let request = UUID(), symbol = activeCode
+        loadID = request; loading = true
+        defer { if loadID == request { loading = false } }
+        do {
+            let result = try await MarketDataService.options(for: symbol)
+            guard !Task.isCancelled, loadID == request, activeCode == symbol else { return }
             rows = result; error = nil
-            if let q = try? await MarketDataService.contractQuote(symbol: code), !Task.isCancelled { last = q.last }
-        } catch { if !Task.isCancelled { self.error = "行情更新失败，请重试" } }
+            if let q = try? await MarketDataService.contractQuote(symbol: symbol), !Task.isCancelled, loadID == request, activeCode == symbol { last = q.last }
+        } catch { if !Task.isCancelled, loadID == request, activeCode == symbol { self.error = "行情更新失败，请重试" } }
     }
 }
 
@@ -190,11 +252,15 @@ private struct OptionDetailView: View {
                     metric("到期盈亏平衡价", optionNumber(q.last.map { put ? q.strike-$0 : q.strike+$0 }))
                 }
                 Text("按最新权利金估算，未计手续费").font(.caption2).foregroundStyle(MarketPalette.muted)
-                Button { trading = true } label: {
-                    Text("快捷交易").font(.headline).frame(maxWidth: .infinity).padding(12)
-                }.buttonStyle(.borderedProminent)
             }.padding(12)
         }.background(MarketPalette.background)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Button { trading = true } label: {
+                Text("快捷交易").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
+            }.buttonStyle(.borderedProminent)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(MarketPalette.background)
+        }
         .navigationTitle(name + " " + label).navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $trading) {
             QuickTradeSheet(contract: q.paperContract(underlying: underlying, name: name))
@@ -233,8 +299,12 @@ private struct OptionDetailView: View {
     private func chartSection(_ title: String, bars: [MarketBar]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.subheadline.weight(.semibold))
+            if bars.isEmpty {
+                Text("暂无K线 · 正在请求行情").font(.caption).foregroundStyle(MarketPalette.muted).frame(maxWidth: .infinity).frame(height: 155)
+            } else {
             OptionCandles(bars: bars, axis: Array(Set(underlyingBars.map(\.time) + optionBars.map(\.time))).sorted().suffix(52).map { $0 }, selectedTime: $selectedTime)
                 .frame(height: 155)
+            }
             if let selectedTime, let bar = bars.first(where: { $0.time == selectedTime }) {
                 Text("收 " + optionNumber(bar.close) + "  高 " + optionNumber(bar.high) + "  低 " + optionNumber(bar.low)).font(.caption2)
             }
