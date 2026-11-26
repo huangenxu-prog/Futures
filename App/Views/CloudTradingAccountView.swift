@@ -400,6 +400,8 @@ struct TradingCenterView: View {
     @State private var selectedPrice = ""
     @State private var selectedQuantity = 1
     @State private var pendingAction: String?
+    @State private var showQuickConfirmation = false
+    @State private var quickConfirmationError: String?
     @State private var chooseCloseSide = false
     @State private var closeToday = false
     @State private var closingSide: Bool? = nil
@@ -420,25 +422,14 @@ struct TradingCenterView: View {
         NavigationStack {
             Group {
                 if session.signedIn {
-                    VStack(spacing: 0) {
-                        if !quickOnly { accountHeader; Divider() }
-                        else { Text(session.isLive ? "实盘只读" : "快期云端模拟").font(.caption).foregroundStyle(.secondary) }
-                        if session.isLive {
-                            Text("实盘只读 · 禁止下单及撤单").font(.caption).foregroundStyle(.secondary)
-                            if quickOnly { Button("退出账户") { Task { await session.logout() } } }
-                        } else if quickOnly { quickOrderPanel } else { orderPanel }
-                        if !quickOnly { Divider(); recordsPanel }
-                        else { Spacer(minLength: 0) }
-                    if let message = session.actionMessage { Text(message).font(.caption).lineLimit(2) }
-                    if session.pendingOrder != nil {
-                        Button("已核对官方委托，解除锁定") { unlock = true }.disabled(session.busy).font(.caption)
+                    if quickOnly {
+                        ScrollView {
+                            signedInPanel
+                        }
+                        .scrollDismissesKeyboard(.interactively)
+                    } else {
+                        signedInPanel
                     }
-                    if session.snapshot?.simulation_orders != true {
-                        Text("暂不可提交委托，请确认交易网关连接").font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let message = session.error { Text(message).font(.caption).foregroundStyle(.red) }
-                    }
-                    .padding(.horizontal, 12)
                 } else {
                     List {
                     Section {
@@ -511,9 +502,13 @@ struct TradingCenterView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if let side = closingSide { closingBar(side) }
                 else if let id = cancelID { cancelConfirmationBar(id) }
-                else if let action = pendingAction { orderConfirmationBar(action) }
+                else if !quickOnly, let action = pendingAction { orderConfirmationBar(action) }
             }
             .background(MarketPalette.background)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if quickOnly { quickHeader }
+            }
+            .toolbar(quickOnly ? .hidden : .visible, for: .navigationBar)
             .navigationTitle(quickOnly ? "快捷开仓" : "交易")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
@@ -545,6 +540,19 @@ struct TradingCenterView: View {
                     .navigationTitle(session.isLive ? "实盘只读账户" : "模拟账户")
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showAccount = false } } }
                 }
+            }
+            .alert("确认模拟委托", isPresented: $showQuickConfirmation, presenting: openingDraft) { draft in
+                Button("确认" + draft.title) {
+                    if validDraft(draft.action) && pendingAction == draft.action {
+                        submitConfirmed(draft.action)
+                    } else {
+                        pendingAction = nil; openingDraft = nil
+                        quickConfirmationError = "委托条件已变化，请重新核对报价后下单"
+                    }
+                }
+                Button("取消", role: .cancel) { pendingAction = nil; openingDraft = nil }
+            } message: { draft in
+                Text("\(contractName(draft.symbol)) \(draft.title) \(draft.quantity) 手 @ \(draft.price)")
             }
             .confirmationDialog("确认已在快期核对委托结果？", isPresented: $unlock) {
                 Button("解除锁定") { session.acknowledgeUncertainOrder() }
@@ -578,7 +586,7 @@ struct TradingCenterView: View {
                 if signedIn {
                     openInitialIfReady()
                 } else {
-                    pendingAction = nil; cancelID = nil; closingSide = nil; closeConfirm = false
+                    pendingAction = nil; openingDraft = nil; showQuickConfirmation = false; cancelID = nil; closingSide = nil; closeConfirm = false
                     recentTradeQuotes.removeAll(); expandedHolding = nil
                     key = TradeKeychain.load(address)
                 }
@@ -595,6 +603,40 @@ struct TradingCenterView: View {
                 }
             }
         }.tint(MarketPalette.accent)
+    }
+    private var signedInPanel: some View {
+        VStack(spacing: 0) {
+                        if !quickOnly { accountHeader; Divider() }
+                        else { Text(session.isLive ? "实盘只读" : "快期云端模拟").font(.caption).foregroundStyle(.secondary) }
+                        if session.isLive {
+                            Text("实盘只读 · 禁止下单及撤单").font(.caption).foregroundStyle(.secondary)
+                            if quickOnly { Button("退出账户") { Task { await session.logout() } } }
+                        } else if quickOnly { quickOrderPanel } else { orderPanel }
+                        if !quickOnly { Divider(); recordsPanel }
+
+                    if let message = session.actionMessage { Text(message).font(.caption).lineLimit(2) }
+                    if session.pendingOrder != nil {
+                        Button("已核对官方委托，解除锁定") { unlock = true }.disabled(session.busy).font(.caption)
+                    }
+                    if session.snapshot?.simulation_orders != true {
+                        Text("暂不可提交委托，请确认交易网关连接").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let message = session.error { Text(message).font(.caption).foregroundStyle(.red) }
+                    }
+                    .padding(.horizontal, 12)
+    }
+    private var quickHeader: some View {
+        HStack {
+            Button("关闭") { dismiss() }
+                .font(.subheadline.weight(.medium))
+                .frame(minWidth: 64, minHeight: 44, alignment: .leading)
+            Spacer()
+            Text("快捷开仓").font(.headline)
+            Spacer()
+            Color.clear.frame(width: 64, height: 44)
+        }
+        .padding(.horizontal, 16)
+        .background(MarketPalette.background)
     }
     private func openInitialIfReady() {
         guard !openedInitial, initialContract != nil, session.signedIn else { return }
@@ -732,7 +774,7 @@ struct TradingCenterView: View {
             priceInput
             HStack {
                 Text("手数").font(.caption)
-                Button { selectedQuantity = max(1, selectedQuantity - 1) } label: { Image(systemName: "minus.circle") }
+                Button { if selectedQuantity > 1 { selectedQuantity -= 1 } else { selectedQuantity = 1 } } label: { Image(systemName: "minus.circle") }
                 TextField("手数", value: $selectedQuantity, format: .number.grouping(.never)).keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit()
                 Button { if selectedQuantity < Int.max { selectedQuantity += 1 } } label: { Image(systemName: "plus.circle") }
             }.buttonStyle(.borderless)
@@ -740,6 +782,7 @@ struct TradingCenterView: View {
                 tradeButton("开多", color: MarketPalette.up)
                 tradeButton("开空", color: MarketPalette.down)
             }
+            if let quickConfirmationError { Text(quickConfirmationError).font(.caption).foregroundStyle(.red) }
             Text(quoteError ? "报价获取失败，请核对价格" : (quoteStamp == nil ? "等待报价" : "参考报价 · " + (quoteStamp?.formatted(date: .omitted, time: .standard) ?? "")))
                 .font(.caption2).foregroundStyle(.secondary)
         }.padding(.vertical, 4)
@@ -900,7 +943,9 @@ struct TradingCenterView: View {
             guard validOrder(action), let c = selected, let price = effectivePrice(buy: action == "开多") else { return }
             IndicatorKeyboard.dismiss()
             openingDraft = OpeningDraft(symbol: c.symbol, action: action, title: title ?? openingTitle(action), price: priceText(price), quantity: selectedQuantity)
+            quickConfirmationError = nil
             pendingAction = action
+            if quickOnly { showQuickConfirmation = true }
         } label: {
             VStack(spacing: 3) {
                 Text(priceText(effectivePrice(buy: action == "开多"))).font(.system(size: 22, weight: .semibold).monospacedDigit())
@@ -1287,7 +1332,7 @@ struct TradingCenterView: View {
         .overlay(alignment: .top) { Divider() }
     }
     private func submitConfirmed(_ action: String) {
-        guard let draft = openingDraft, validDraft(action) else { return }
+        guard pendingAction == action, let draft = openingDraft, validDraft(action) else { return }
         let direction = action == "开多" ? "BUY" : "SELL"
         pendingAction = nil; openingDraft = nil; tab = "委托"
         Task { await session.submit(symbol: draft.symbol, direction: direction, offset: "OPEN", price: draft.price, quantity: String(draft.quantity)) }
