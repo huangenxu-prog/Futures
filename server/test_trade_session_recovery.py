@@ -35,6 +35,19 @@ class RecoveryTests(unittest.TestCase):
         s.snapshot_monotonic = g.time.monotonic() - 6
         self.assertGreaterEqual(s.read()["snapshot_age_ms"], 6000)
 
+    def test_order_validation_rejects_coercion(self):
+        body = {"id": "c"*32, "symbol": "CZCE.SR701", "direction": "BUY",
+                "offset": "OPEN", "quantity": 2, "price": 5000.0}
+        self.assertEqual(g.validate_order(body)[4:], (2, 5000.0))
+        for value in (2.5, 2.0, True, "2", 0, -1, 11):
+            with self.subTest(quantity=value):
+                with self.assertRaises(ValueError):
+                    g.validate_order(dict(body, quantity=value))
+        for value in (True, "5000", float("nan"), float("inf"), 0, -1):
+            with self.subTest(price=value):
+                with self.assertRaises(ValueError):
+                    g.validate_order(dict(body, price=value))
+
     def test_password_verifier(self):
         with patch.object(g.threading.Thread, "start"):
             s = g.Session("test", "password")
