@@ -216,7 +216,7 @@ struct ChartDisplaySettings: Codable, Equatable {
         }
     }
 
-    func indicators() -> [any ChartIndicator] {
+    func indicators(darkAppearance: Bool = true) -> [any ChartIndicator] {
         var result: [any ChartIndicator] = []
         for kind in ChartIndicatorKind.available where enabled.contains(kind) {
             switch kind {
@@ -226,7 +226,11 @@ struct ChartDisplaySettings: Codable, Equatable {
             case .wma: result.append(Self.movingAverage(type: .wma, period: wma))
             case .boll: result.append(BollingerBands(period: bollPeriod, multiplier: bollMultiplier))
             case .volume: result.append(Volume(movingAveragePeriod: volumeMA))
-            case .macd: result.append(MACD(fast: macdFast, slow: macdSlow, signal: macdSignal))
+            case .macd:
+                let diff = IndicatorLineStyle(color: ChartColor(hex: darkAppearance ? "FFFFFF" : "242D3B")!)
+                let dea = IndicatorLineStyle(color: ChartColor(hex: darkAppearance ? "FFD34E" : "996000")!)
+                result.append(MACD(fast: macdFast, slow: macdSlow, signal: macdSignal,
+                                   macdStyle: diff, signalStyle: dea))
             case .rsi: result.append(RSI(period: rsi))
             case .kdj: result.append(QihuiKDJ(period: kdjPeriod, kPeriod: kdjK, dPeriod: kdjD))
             case .atr: result.append(QihuiATR(period: atrPeriod))

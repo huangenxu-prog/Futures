@@ -19,6 +19,7 @@ struct ProfessionalChartHost: View {
     var onReplayApplied: ((MarketBar, Double) -> Void)? = nil
     var onVerticalSwipe: ((Int) -> Void)? = nil
     var isInteractive = true
+    @Environment(\.colorScheme) private var colorScheme
     @State private var feedOwner = UUID()
     @AppStorage(CandleAppearance.hollowKey) private var hollowRising = true
     @AppStorage(CandleAppearance.upKey) private var candleUp = CandleAppearance.automatic
@@ -215,7 +216,7 @@ struct ProfessionalChartHost: View {
         .onAppear {
             model.onVerticalSwipe = isReplay ? nil : onVerticalSwipe
             model.style = .candles
-            model.indicators = displaySettings.indicators()
+            model.indicators = displaySettings.indicators(darkAppearance: colorScheme == .dark)
             configureChart()
             feed.attach(key: feedKey, owner: feedOwner, fallback: bars,
                         receiveTail: { incoming in
@@ -235,8 +236,11 @@ struct ProfessionalChartHost: View {
                 configureChart()
             }
         }
+        .onChange(of: colorScheme) { _, scheme in
+            model.indicators = displaySettings.indicators(darkAppearance: scheme == .dark)
+        }
         .onChange(of: displaySettings) { _, current in
-            model.indicators = current.indicators()
+            model.indicators = current.indicators(darkAppearance: colorScheme == .dark)
             current.save()
         }
         .sheet(isPresented: $showingIndicatorSettings) {

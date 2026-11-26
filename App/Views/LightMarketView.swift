@@ -19,14 +19,14 @@ enum MarketPalette {
         })
     }
 
-    static let background = adaptive(light: 0xFBFCFE, dark: 0x0F1115)
-    static let surface = adaptive(light: 0xFFFFFF, dark: 0x151922)
-    static let raised = adaptive(light: 0xF2F5F9, dark: 0x1B2130)
-    static let ink = adaptive(light: 0x222B38, dark: 0xF3F5F8)
-    static let muted = adaptive(light: 0x7A8594, dark: 0x9AA4B2)
-    static let weak = adaptive(light: 0x8794A3, dark: 0x6F7A89)
-    static let divider = adaptive(light: 0xE8EDF2, dark: 0x2A3142)
-    static let accent = adaptive(light: 0x2B6BB8, dark: 0x4C8DFF)
+    static let background = adaptive(light: 0xF1F3F6, dark: 0x111318)
+    static let surface = adaptive(light: 0xF1F3F6, dark: 0x111318)
+    static let raised = adaptive(light: 0xE7EBF0, dark: 0x191F29)
+    static let ink = adaptive(light: 0x242D3B, dark: 0xE6EAF0)
+    static let muted = adaptive(light: 0x758195, dark: 0x8994A6)
+    static let weak = adaptive(light: 0x758195, dark: 0x8994A6)
+    static let divider = adaptive(light: 0xD9DFE7, dark: 0x292F39)
+    static let accent = adaptive(light: 0x345C91, dark: 0x508FFF)
     static let countdown = adaptive(light: 0x996000, dark: 0xFFD34E)
     // Domestic futures convention: red = rising, cyan/green = falling.
     static let up = adaptive(light: 0xD43B4A, dark: 0xFF5B5B)
@@ -43,9 +43,7 @@ enum MarketPalette {
         return muted
     }
 }
-// Home quote-list colors only. Do not change MarketPalette or CandleAppearance:
-// chart defaults, saved candle colors, indicator colors and trading keep their
-// own existing configuration.
+// Home quote-list accents; candle and indicator colors remain independently configured.
 private enum HomeMarketPalette {
     private static func adaptive(light: UInt32, dark: UInt32) -> Color {
         Color(uiColor: UIColor { traits in

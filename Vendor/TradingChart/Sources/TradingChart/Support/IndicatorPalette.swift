@@ -18,6 +18,11 @@ enum IndicatorPalette {
         for band in output.bands where band.fill == nil {
             highest = Swift.max(highest, band.paletteSlot)
         }
+        // Explicit MACD colors must not shift the existing automatic colors of
+        // indicators that follow its original two palette slots.
+        if output.lines.contains(where: { $0.id.hasPrefix("macd(") && $0.id.hasSuffix(".macd") }) {
+            highest = Swift.max(highest, 1)
+        }
         return highest + 1
     }
 
