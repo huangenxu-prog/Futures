@@ -327,7 +327,11 @@ def quote_symbol(symbol):
 
 
 def supported_symbol(symbol):
-    return symbol in SYMBOLS or supported_product(contract_product(symbol))
+    # Accept catalog-validated product codes (continuous charts) as well
+    # as exact delivery months. Do not bypass catalog validation.
+    if re.fullmatch(r"(CFFEX|SHFE|DCE|CZCE|INE|GFEX)\.[A-Za-z]+", symbol or ""):
+        return supported_product(symbol)
+    return supported_product(contract_product(symbol))
 
 
 def selected_quotes(products):
