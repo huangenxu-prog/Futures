@@ -62,6 +62,13 @@ private struct DetailPager: UIViewControllerRepresentable {
             scroll.alwaysBounceVertical = pages.count > 1
         }
         let coordinator = context.coordinator
+        if pages.count > 1 {
+            let drag = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.trackPageDrag(_:)))
+            drag.maximumNumberOfTouches = 1
+            drag.cancelsTouchesInView = false
+            drag.delegate = coordinator
+            pager.view.addGestureRecognizer(drag)
+        }
         coordinator.pager = pager
         pager.dataSource = pages.count > 1 ? coordinator : nil
         pager.delegate = coordinator
@@ -81,10 +88,12 @@ private struct DetailPager: UIViewControllerRepresentable {
         context.coordinator.refresh()
     }
 
-    @MainActor final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
+    @MainActor final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate, UIGestureRecognizerDelegate {
         var parent: DetailPager
         weak var pager: UIPageViewController?
         private var transitioning = false
+        private var dragOrigin: String?
+        private var pendingDrag: (id: String, offset: Int)?
         var activeID: String
         private var hosts: [String: UIHostingController<AnyView>] = [:]
 
@@ -120,6 +129,45 @@ private struct DetailPager: UIViewControllerRepresentable {
             }
         }
 
+        // Track deliberate one-finger drags alongside the system pager. If UIKit
+        // settles back on the origin, complete the requested adjacent-page turn.
+        // A completed native turn invalidates the request by changing activeID.
+        func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+            guard let pan = gesture as? UIPanGestureRecognizer else { return false }
+            let v = pan.velocity(in: pan.view)
+            return abs(v.y) > abs(v.x) * 1.4
+        }
+
+        func gestureRecognizer(_ gesture: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            other.view is UIScrollView
+        }
+
+        @objc func trackPageDrag(_ pan: UIPanGestureRecognizer) {
+            switch pan.state {
+            case .began:
+                dragOrigin = activeID
+                pendingDrag = nil
+            case .ended:
+                defer { dragOrigin = nil }
+                let delta = pan.translation(in: pan.view)
+                guard let id = dragOrigin, let view = pan.view,
+                      abs(delta.y) > max(60, view.bounds.height * 0.22),
+                      abs(delta.y) > abs(delta.x) * 1.4 else { return }
+                pendingDrag = (id, delta.y < 0 ? 1 : -1)
+                DispatchQueue.main.async { [weak self] in self?.completePendingDrag() }
+            case .failed, .cancelled:
+                dragOrigin = nil
+            default: break
+            }
+        }
+
+        private func completePendingDrag() {
+            guard !transitioning, let drag = pendingDrag else { return }
+            pendingDrag = nil
+            turnPage(from: drag.id, offset: drag.offset)
+        }
+
         private func finishTransition() {
             transitioning = false
             guard let visible = pager?.viewControllers?.first,
@@ -127,6 +175,7 @@ private struct DetailPager: UIViewControllerRepresentable {
             activeID = id
             refresh()
             keepNeighbors()
+            completePendingDrag()
         }
 
         #if DEBUG

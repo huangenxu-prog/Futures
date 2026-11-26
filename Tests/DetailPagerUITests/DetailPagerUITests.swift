@@ -74,7 +74,7 @@ final class DetailPagerUITests: XCTestCase {
         verify(0)
         for step in 0..<32 {
             let index = [1, 2, 1, 0][step % 4]
-            if step % 4 < 2 { drag(0.50, 0.82, to: 0.50, 0.19) }
+            if step % 4 < 2 { drag(0.50, 0.79, to: 0.50, step % 2 == 0 ? 0.40 : 0.19) }
             else { drag(0.50, 0.30, to: 0.50, 0.92) }
             if !app.buttons["detail.contract." + ids[index]].exists {
                 print("PAGER TRACE", element("detail.viewport").value ?? "")
