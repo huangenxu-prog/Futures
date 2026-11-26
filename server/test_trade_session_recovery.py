@@ -73,6 +73,33 @@ class RecoveryTests(unittest.TestCase):
                 self.assertEqual(api.insert_order.call_count, 2)
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
+    def test_restart_reconciles_only_matching_confirmed_order(self):
+        import os
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "intents.sqlite3")
+            with patch.object(g.threading.Thread, "start"):
+                first = g.Session("test", "password")
+                second = g.Session("test", "password")
+            payload = ("e"*32, "CZCE.SR701", "BUY", "OPEN", 1, 5000.)
+            api = Mock()
+            with patch.object(g, "ORDER_LEDGER", g.OrderIntentLedger(path)):
+                self.assertEqual(first.submit_order(api, {}, payload), 200)
+            order = SimpleNamespace(exchange_id="CZCE", instrument_id="SR701",
+                direction="BUY", offset="OPEN", limit_price=5000., volume_orign=1,
+                volume_left=1, status="ALIVE", last_msg="", is_error=False,
+                exchange_order_id="", insert_date_time=0)
+            orders = {payload[0]: order}
+            with patch.object(g, "ORDER_LEDGER", g.OrderIntentLedger(path)):
+                self.assertEqual(second.submit_order(api, orders, payload), 503)
+                order.exchange_order_id = "confirmed"
+                self.assertEqual(second.submit_order(api, orders, payload), 200)
+                order.limit_price = 5001.
+                self.assertEqual(second.submit_order(api, orders, payload), 409)
+                api.insert_order.assert_called_once()
+
     def test_password_verifier(self):
         with patch.object(g.threading.Thread, "start"):
             s = g.Session("test", "password")
