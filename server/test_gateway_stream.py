@@ -20,6 +20,36 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_board_partial_request_never_opens_cold_sdk(self):
+        live = {"CZCE.OI": {"code": "CZCE.OI701", "last": 10007}}
+        with patch.object(gateway, "product_catalog", return_value=[
+                {"id": "CZCE.OI"}, {"id": "CZCE.JR"}]), patch.object(
+                gateway.LIVE_QUOTES, "current", return_value=live), patch.object(
+                gateway, "_selected_quotes_cold") as cold:
+            self.assertEqual(gateway.selected_quotes(["CZCE.OI", "CZCE.JR"]), live)
+            self.assertEqual(gateway.selected_quotes(["CZCE.JR"]), {})
+            cold.assert_not_called()
+
+    def test_board_disk_round_trip(self):
+        import tempfile
+        from pathlib import Path
+        catalog = [{"id": "CZCE.OI", "name": "菜油", "exchange": "CZCE"},
+                   {"id": "CZCE.JR", "name": "粳稻", "exchange": "CZCE"}]
+        rows = {"CZCE.OI": {"code": "CZCE.OI701", "month": "2701", "last": 10007,
+                            "time": "2026-11-26 14:59:59"}}
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+                gateway, "BOARD_CACHE_PATH", str(Path(directory) / "board.json")), patch.object(
+                gateway, "CATALOG_CACHE", []), patch.object(gateway, "CATALOG_UNTIL", 0):
+            hub = gateway.LiveQuoteHub()
+            hub.publish(rows)
+            hub.save_board(catalog)
+            restored = gateway.LiveQuoteHub()
+            restored.restore_board()
+            self.assertEqual(restored.current(), rows)
+            self.assertEqual(restored.status()["expected_products"], 2)
+            self.assertEqual(restored.status()["missing_products"], ["CZCE.JR"])
+            self.assertEqual(restored.status()["connection_state"], "cached")
+
     def test_nondefault_continuous_symbols_are_validated_by_catalog(self):
         products = ["CZCE.OI", "CZCE.PF", "CZCE.PR", "CZCE.PX", "CZCE.SH", "CZCE.SF"]
         catalog = [{"id": product} for product in products]
