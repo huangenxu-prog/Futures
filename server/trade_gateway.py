@@ -137,7 +137,7 @@ def validate_order(body):
         raise ValueError("invalid direction or offset")
     if offset == "CLOSETODAY" and symbol.split(".")[0] not in ("SHFE", "INE"):
         raise ValueError("invalid close today")
-    if not 1 <= quantity <= 10 or not math.isfinite(price) or not 0 < price <= 1e8:
+    if quantity <= 0 or not math.isfinite(price) or not 0 < price <= 1e8:
         raise ValueError("invalid price or volume")
     return oid, symbol, direction, offset, quantity, price
 
