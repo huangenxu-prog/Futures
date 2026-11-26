@@ -41,6 +41,7 @@ CATALOG_LOCK = threading.Lock()
 CATALOG_CACHE = []
 CATALOG_UNTIL = 0.0
 CATALOG_RETRY_AFTER = 0.0
+BOARD_CACHE_PATH = os.environ.get("QIHUI_BOARD_CACHE", "/root/tq_test/cache/quote-board.json")
 DYNAMIC_QUOTE_LOCK = threading.Lock()
 QUOTE_BATCH_CACHE = {}
 QUOTE_BATCH_UNTIL = {}
@@ -254,61 +255,67 @@ def _refresh_catalog():
             return list(CATALOG_CACHE)
         api = QUERY_WORKER.acquire_api()
         try:
-            symbols = api.query_quotes(ins_class="FUTURE",
-                                       exchange_id=sorted(EXCHANGES), expired=False)
-            samples = {}
-            for symbol in sorted(set(symbols)):
-                product = contract_product(symbol)
-                if product and product.split(".")[0] in EXCHANGES:
-                    samples.setdefault(product, symbol)
-            if not samples:
-                raise ValueError("TqSdk returned an empty listed futures catalog")
-            names = {}
-            sample_codes = list(samples.values())
-            # Contract metadata is preferred over a live quote subscription
-            # when the SDK exposes the symbol-information query.
-            if hasattr(api, "query_symbol_info"):
-                try:
-                    for offset in range(0, len(sample_codes), 48):
-                        frame = api.query_symbol_info(sample_codes[offset:offset + 48])
-                        for item in frame.itertuples(index=False):
-                            code = str(getattr(item, "instrument_id", ""))
-                            exchange = str(getattr(item, "exchange_id", ""))
-                            if "." not in code and exchange in EXCHANGES:
-                                code = exchange + "." + code
-                            product = contract_product(code)
-                            raw = getattr(item, "instrument_name", "")
-                            if product in samples and isinstance(raw, str) and raw.strip():
-                                name = re.sub(r"[0-9]{3,4}$", "", raw).strip()
-                                if name:
-                                    names[product] = name
-                except Exception:
-                    # Metadata is optional; ordinary quote names remain a
-                    # fallback rather than making the entire catalog fail.
-                    pass
-            for offset in range(0, len(sample_codes), 48):
-                chunk = sample_codes[offset:offset + 48]
-                if all(contract_product(code) in names for code in chunk):
-                    continue
-                quotes = api.get_quote_list(chunk)
-                for code, quote in zip(chunk, quotes):
-                    raw = getattr(quote, "instrument_name", "")
-                    if isinstance(raw, str) and raw.strip():
-                        # Quote names generally end with the delivery month.
-                        name = re.sub(r"[0-9]{3,4}$", "", raw).strip()
-                        if name and name != raw:
-                            names[contract_product(code)] = name
-            result = [
-                {"id": product, "name": names.get(product, product.split(".")[1]),
-                 "exchange": product.split(".")[0]}
-                for product in sorted(samples)
-            ]
+            result = discover_catalog(api)
             CATALOG_CACHE = result
             CATALOG_UNTIL = time.monotonic() + 6 * 3600
             CATALOG_RETRY_AFTER = 0.0
             return list(result)
         finally:
             QUERY_WORKER.release_api(api)
+
+
+def discover_catalog(api):
+    """Resolve listed products using the caller's own SDK connection."""
+    symbols = api.query_quotes(ins_class="FUTURE",
+                               exchange_id=sorted(EXCHANGES), expired=False)
+    samples = {}
+    for symbol in sorted(set(symbols)):
+        product = contract_product(symbol)
+        if product and product.split(".")[0] in EXCHANGES:
+            samples.setdefault(product, symbol)
+    if not samples:
+        raise ValueError("TqSdk returned an empty listed futures catalog")
+    names = {}
+    sample_codes = list(samples.values())
+    # Contract metadata is preferred over a live quote subscription
+    # when the SDK exposes the symbol-information query.
+    if hasattr(api, "query_symbol_info"):
+        try:
+            for offset in range(0, len(sample_codes), 48):
+                frame = api.query_symbol_info(sample_codes[offset:offset + 48])
+                for item in frame.itertuples(index=False):
+                    code = str(getattr(item, "instrument_id", ""))
+                    exchange = str(getattr(item, "exchange_id", ""))
+                    if "." not in code and exchange in EXCHANGES:
+                        code = exchange + "." + code
+                    product = contract_product(code)
+                    raw = getattr(item, "instrument_name", "")
+                    if product in samples and isinstance(raw, str) and raw.strip():
+                        name = re.sub(r"[0-9]{3,4}$", "", raw).strip()
+                        if name:
+                            names[product] = name
+        except Exception:
+            # Metadata is optional; ordinary quote names remain a
+            # fallback rather than making the entire catalog fail.
+            pass
+    for offset in range(0, len(sample_codes), 48):
+        chunk = sample_codes[offset:offset + 48]
+        if all(contract_product(code) in names for code in chunk):
+            continue
+        quotes = api.get_quote_list(chunk)
+        for code, quote in zip(chunk, quotes):
+            raw = getattr(quote, "instrument_name", "")
+            if isinstance(raw, str) and raw.strip():
+                # Quote names generally end with the delivery month.
+                name = re.sub(r"[0-9]{3,4}$", "", raw).strip()
+                if name and name != raw:
+                    names[contract_product(code)] = name
+    result = [
+        {"id": product, "name": names.get(product, product.split(".")[1]),
+         "exchange": product.split(".")[0]}
+        for product in sorted(samples)
+    ]
+    return list(result)
 
 
 def supported_product(product):
@@ -335,17 +342,12 @@ def supported_symbol(symbol):
 
 
 def selected_quotes(products):
-    """A bounded pull of main futures contracts, never subscribes the whole catalog."""
+    """Read the shared board; missing prices never create another SDK."""
     requested = sorted(set(products))
     if not requested or len(requested) > 48 or any(not supported_product(p) for p in requested):
         raise ValueError("invalid products")
-    # The long-lived quote feed already holds current prices for the common
-    # products. Reply directly instead of creating and closing a new TqApi
-    # for requests wholly covered by that feed.
     live = LIVE_QUOTES.current()
-    if requested and all(product in live for product in requested):
-        return {product: live[product] for product in requested}
-    return _selected_quotes_cold(tuple(requested))
+    return {p: live[p] for p in requested if p in live}
 
 
 @reusable_query
@@ -540,6 +542,9 @@ class LiveQuoteHub:
         self.last_sdk_event = 0.0
         self.connection_state = "starting"
         self.thread = None
+        self.expected_products = set()
+        self.sdk_creations = 0
+        self.last_disk_save = 0.0
 
     def start(self):
         with self.condition:
@@ -558,6 +563,10 @@ class LiveQuoteHub:
             def age(stamp):
                 return round(now - stamp, 1) if stamp else None
             return {"products": len(self.contracts),
+                    "expected_products": len(self.expected_products),
+                    "priced_products": sum("last" in q for q in self.contracts.values()),
+                    "missing_products": sorted(self.expected_products - {p for p, q in self.contracts.items() if "last" in q}),
+                    "sdk_creations": self.sdk_creations,
                     "connection_state": self.connection_state,
                     "last_change_age_seconds": age(self.last_received),
                     "last_poll_age_seconds": age(self.last_poll),
@@ -579,14 +588,71 @@ class LiveQuoteHub:
             self.last_received = time.monotonic()
             self.condition.notify_all()
 
+    def restore_board(self):
+        global CATALOG_CACHE, CATALOG_UNTIL
+        try:
+            path = Path(BOARD_CACHE_PATH)
+            if path.stat().st_size > 1024 * 1024:
+                return
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if time.time() - float(data["saved_at"]) > 7 * 86400:
+                return
+            catalog = data["catalog"]
+            ids = {item["id"] for item in catalog}
+            rows = {p: q for p, q in data["quotes"].items()
+                    if p in ids and contract_product(q["code"]) == p
+                    and isinstance(q.get("last"), (int, float)) and math.isfinite(q["last"])}
+            with CATALOG_LOCK:
+                if not CATALOG_CACHE:
+                    CATALOG_CACHE = catalog
+                    CATALOG_UNTIL = time.monotonic() + 60
+            with self.condition:
+                self.expected_products = ids
+                self.connection_state = "cached"
+            self.publish(rows)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            pass
+
+    def save_board(self, catalog):
+        now = time.monotonic()
+        if now - self.last_disk_save < 60:
+            return
+        self.last_disk_save = now
+        path = Path(BOARD_CACHE_PATH)
+        temp = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as f:
+                temp = f.name
+                json.dump({"saved_at": time.time(), "catalog": catalog, "quotes": self.current()},
+                          f, ensure_ascii=False, allow_nan=False)
+            os.replace(temp, path)
+        except (OSError, ValueError, TypeError):
+            if temp:
+                try:
+                    os.unlink(temp)
+                except OSError:
+                    pass
+
     def run(self):
-        products = sorted(SYMBOLS)
+        global CATALOG_CACHE, CATALOG_UNTIL, CATALOG_RETRY_AFTER
+        self.restore_board()
         while True:
             api = None
             try:
                 with open(AUTH_PATH, encoding="utf-8") as handle:
                     credentials = json.load(handle)
                 api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+                with self.condition:
+                    self.sdk_creations += 1
+                catalog = discover_catalog(api)
+                products = sorted({item["id"] for item in catalog})
+                with CATALOG_LOCK:
+                    CATALOG_CACHE = catalog
+                    CATALOG_UNTIL = time.monotonic() + 6 * 3600
+                    CATALOG_RETRY_AFTER = 0.0
+                with self.condition:
+                    self.expected_products = set(products)
                 continuous = api.get_quote_list(["KQ.m@" + product for product in products])
                 live_quotes = {}
                 last_sent = 0.0
@@ -602,15 +668,17 @@ class LiveQuoteHub:
                     if new_codes:
                         for code, quote in zip(new_codes, api.get_quote_list(new_codes)):
                             live_quotes[code] = quote
-                    current = {}
+                    current = {p: q for p, q in self.current().items() if p in products}
                     for product, code in pairs:
+                        if product in current and current[product].get("code") != code:
+                            current.pop(product)
                         quote = live_quotes.get(code)
                         if quote is None:
                             continue
                         year, month = quote.delivery_year, quote.delivery_month
                         if 2000 <= year <= 2099 and 1 <= month <= 12:
                             details = snapshot(quote)
-                            if details.get("time"):
+                            if details.get("time") and "last" in details:
                                 current[product] = dict(details, code=code,
                                                         month=f"{int(year) % 100:02d}{int(month):02d}")
                     now = time.monotonic()
@@ -618,6 +686,8 @@ class LiveQuoteHub:
                         self.publish(current)
                         last_published = current
                         last_sent = now
+                    if current:
+                        self.save_board(catalog)
             except Exception as exc:
                 with self.condition:
                     self.connection_state = "reconnecting"
@@ -1594,8 +1664,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/v1/main-contracts":
             try:
-                contracts = LIVE_QUOTES.current() or main_contracts()
-                self.reply(200, contracts)
+                contracts = LIVE_QUOTES.current()
+                self.reply(200 if contracts else 503, contracts if contracts else {"error": "market_data_unavailable"})
             except Exception:
                 self.reply(503, {"error": "market_data_unavailable"})
             return
