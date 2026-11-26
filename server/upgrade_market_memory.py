@@ -1,0 +1,118 @@
+"""Safely deploy a pinned Qihui gateway revision on the new Alibaba systemd VPS.
+
+Only modifies /root/tq_test/server/market_gateway.py and qihui-gateway.service.
+It never reads or prints the TqSdk account credential file.
+"""
+import base64
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import time
+from urllib.request import Request, urlopen
+
+ROOT = Path("/root/tq_test")
+TARGET = ROOT / "server/market_gateway.py"
+COMMIT = "f8560e9fab073b0d486802f6716c975bb8bd77c6"
+BLOB = "90617f1abbc84a9fe8c5e21848db82023b0a0181"
+SERVICE = "qihui-gateway.service"
+BASE = "http://127.0.0.1:8765"
+
+
+def verify(content):
+    sha = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+    if sha != BLOB:
+        raise ValueError("Git源码SHA不匹配，拒绝部署: " + sha)
+    compile(content, str(TARGET), "exec")
+
+
+def download():
+    url = ("https://api.github.com/repos/huangenxu-prog/Futures/"
+           "contents/server/market_gateway.py?ref=" + COMMIT)
+    for source in ("api", "jsdelivr"):
+        try:
+            if source == "api":
+                req = Request(url, headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "Qihui-Aliyun-Updater"})
+                with urlopen(req, timeout=25) as response:
+                    meta = json.load(response)
+                raw = base64.b64decode(meta["content"])
+            else:
+                cdn = ("https://cdn.jsdelivr.net/gh/huangenxu-prog/"
+                       "Futures@" + COMMIT + "/server/market_gateway.py")
+                with urlopen(cdn, timeout=25) as response:
+                    raw = response.read()
+            verify(raw)
+            print("下载成功，来源:", source, "SHA校验通过", flush=True)
+            return raw
+        except Exception as exc:
+            print("下载尝试失败:", source, type(exc).__name__, flush=True)
+    raise RuntimeError("没有可用的可信下载源；旧网关保持不变")
+
+
+def health():
+    with urlopen(BASE + "/health", timeout=5) as response:
+        doc = json.load(response)
+    return doc
+
+
+def run():
+    if os.geteuid() != 0 or not TARGET.is_file():
+        raise RuntimeError("必须在已部署期汇的阿里云 root 用户下执行")
+    subprocess.run(["systemctl", "is-active", "--quiet", SERVICE], check=True)
+    if TARGET.is_symlink() or not health().get("ok"):
+        raise RuntimeError("Existing gateway not healthy or unexpected target")
+    original = TARGET.read_bytes()
+    new = download()
+    if original == new:
+        if health().get("process_memory_kib", {}).get("VmRSS", 0) > 0:
+            print("MARKET_MEMORY_UPGRADE_OK: already running", flush=True)
+            return
+        raise RuntimeError("Target file matches but running version is not verified")
+    backup = TARGET.with_name("market_gateway.py.bak." + str(time.time_ns()))
+    shutil.copy2(TARGET, backup)
+    print("已备份旧网关，准备重启", flush=True)
+
+    with tempfile.NamedTemporaryFile(
+        dir=TARGET.parent, prefix=".qihui-new-", delete=False
+    ) as handle:
+        staged = Path(handle.name)
+        handle.write(new)
+    try:
+        os.chmod(staged, 0o644)
+        os.replace(staged, TARGET)
+        subprocess.run(["systemctl", "restart", SERVICE], check=True)
+        for _ in range(45):
+            try:
+                result = health()
+                cache = result.get("kline_cache", {})
+                if (result.get("ok")
+                        and cache.get("history_length") == 1200
+                        and cache.get("data_length") == 2
+                        and cache.get("disk_enabled")
+                        and result.get("process_memory_kib", {}).get("VmRSS", 0) > 0):
+                    print("期汇新网关启动成功：实时2根、历史预取1200根、"
+                          "磁盘可累计8964根；现有缓存保留", flush=True)
+                    print("如历史首次不足1200根，将在后台补齐。", flush=True)
+                    print("MARKET_MEMORY_UPGRADE_OK", json.dumps(result, ensure_ascii=False), flush=True)
+                    return
+            except Exception:
+                pass
+            time.sleep(1)
+        raise RuntimeError("新网关未通过健康检查")
+    except Exception:
+        print("升级未通过检查，恢复旧代码...", flush=True)
+        shutil.copy2(backup, TARGET)
+        subprocess.run(["systemctl", "restart", SERVICE], check=True)
+        print("已恢复原网关", flush=True)
+        raise
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    run()
