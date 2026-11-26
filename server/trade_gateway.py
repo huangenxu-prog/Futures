@@ -158,6 +158,11 @@ class OrderIntentLedger:
         with sqlite3.connect(path) as db:
             db.execute("CREATE TABLE IF NOT EXISTS intents (account TEXT NOT NULL, oid TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(account, oid))")
 
+    def lookup(self, account, oid):
+        with sqlite3.connect(self.path, timeout=5) as db:
+            row = db.execute("SELECT payload FROM intents WHERE account=? AND oid=?", (account, oid)).fetchone()
+            return tuple(json.loads(row[0])) if row else None
+
     def reserve(self, account, payload):
         oid = payload[0]
         encoded = json.dumps(payload, separators=(",", ":"), allow_nan=False)
@@ -262,6 +267,9 @@ class Session:
                 except Exception:
                     pass
 
+    def ledger_namespace(self):
+        return hashlib.sha256(("TqKq:" + self.username).encode("utf-8")).hexdigest()
+
     def submit_order(self, api, orders, payload):
         # Owner thread only. Record intent before SDK submission; never replay
         # an uncertain request, even if insert_order raised after transmission.
@@ -273,11 +281,24 @@ class Session:
                 return 200
             return 503
         if oid in orders:
-            return 409
+            # Only acknowledge an existing order if the durable intent matches
+            # and the SDK record contains matching identity and quantity.
+            prior = ORDER_LEDGER.lookup(self.ledger_namespace(), oid) if ORDER_LEDGER is not None else None
+            if prior != payload:
+                return 409
+            row = order_row(oid, orders[oid])
+            actual = (oid, row["symbol"], row["direction"], row["offset"], row["quantity"], row["price"])
+            if actual != payload:
+                audit("order_reconcile_conflict", id=oid)
+                return 409
+            if not row["exchange_order_id"] and row["display_state"] not in ("FILLED", "REJECTED"):
+                return 503
+            audit("order_reconciled", id=oid, state=row["display_state"])
+            return 200
         if len(self.seen) >= 1000:
             return 429
         if ORDER_LEDGER is not None:
-            namespace = hashlib.sha256(("TqKq:" + self.username).encode("utf-8")).hexdigest()
+            namespace = self.ledger_namespace()
             reservation = ORDER_LEDGER.reserve(namespace, payload)
             if reservation == "conflict":
                 return 409
