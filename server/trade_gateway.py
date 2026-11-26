@@ -104,8 +104,12 @@ def validate_order(body):
     oid = body["id"]
     symbol = body["symbol"]
     direction, offset = body["direction"], body["offset"]
-    quantity = int(body["quantity"])
-    price = float(body["price"])
+    quantity = body["quantity"]
+    raw_price = body["price"]
+    # Reject fractional quantities and JSON booleans instead of coercing them.
+    if type(quantity) is not int or type(raw_price) not in (int, float):
+        raise ValueError("invalid price or volume type")
+    price = float(raw_price)
     if not isinstance(oid, str) or not re.fullmatch(r"[a-f0-9]{32}", oid):
         raise ValueError("invalid id")
     if not isinstance(symbol, str) or not re.fullmatch(r"(SHFE|INE|DCE|CZCE|GFEX|CFFEX)\.[A-Za-z]+[0-9]{3,4}([CP][0-9]+(?:\.[0-9]+)?|-[CP]-[0-9]+(?:\.[0-9]+)?)?", symbol):
