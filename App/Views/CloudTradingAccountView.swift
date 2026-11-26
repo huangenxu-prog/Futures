@@ -386,7 +386,7 @@ struct TradingCenterView: View {
     @AppStorage("qihui.change.basis.v1") private var changeBasis = "settlement"
     @State private var selectionRequest = UUID()
     private enum PriceMode: String, CaseIterable {
-        case opponent = "对价", queued = "排队价", latest = "最新价", limit = "限价"
+        case opponent = "对手价", queued = "排队价", latest = "最新价", limit = "限价"
     }
     private struct OpeningDraft {
         let symbol: String
@@ -400,6 +400,7 @@ struct TradingCenterView: View {
     @State private var selectedPrice = ""
     @State private var selectedQuantity = 1
     @State private var pendingAction: String?
+    @State private var chooseCloseSide = false
     @State private var closeToday = false
     @State private var closingSide: Bool? = nil
     @State private var closePrice = ""
@@ -605,22 +606,26 @@ struct TradingCenterView: View {
                         .frame(width: 32, height: 28)
                 }.buttonStyle(.plain).accessibilityLabel("账户明细与设置")
             }
-            Text("账户权益").font(.caption2).foregroundStyle(MarketPalette.muted)
-            Text(money(session.snapshot?.account.balance, suffix: false))
-                .font(.system(size: 27, weight: .semibold, design: .rounded))
-                .monospacedDigit().foregroundStyle(MarketPalette.ink)
-                .lineLimit(1).minimumScaleFactor(0.65)
-            HStack(spacing: 7) {
-                metric("可用资金", money(session.snapshot?.account.available, suffix: false))
-                metric("持仓盈亏", money(session.snapshot?.account.float_profit, suffix: false),
-                       tint: MarketPalette.movement(session.snapshot?.account.float_profit))
-                metric("保证金", money(session.snapshot?.account.margin, suffix: false))
-                metric("保证金占比", usage)
+            HStack(alignment: .top, spacing: 12) {
+                accountMetric("账户权益", money(session.snapshot?.account.balance, suffix: false), large: true)
+                accountMetric("持仓盈亏", money(session.snapshot?.account.float_profit, suffix: false),
+                              tint: MarketPalette.movement(session.snapshot?.account.float_profit), large: true)
+            }
+            HStack(alignment: .top, spacing: 12) {
+                accountMetric("可用资金", money(session.snapshot?.account.available, suffix: false))
+                accountMetric("保证金占比", usage)
             }
         }
         .padding(10)
         .background(MarketPalette.surface, in: RoundedRectangle(cornerRadius: 10))
         .padding(.vertical, 6)
+    }
+    private func accountMetric(_ label: String, _ value: String, tint: Color = MarketPalette.ink, large: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.caption).foregroundStyle(MarketPalette.muted)
+            Text(value).font(.system(size: large ? 25 : 17, weight: .semibold))
+                .monospacedDigit().foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.55)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
     private var usage: String {
         guard let a = session.snapshot?.account, let b = a.balance, let m = a.margin,
@@ -661,13 +666,13 @@ struct TradingCenterView: View {
     }
     private func validOrder(_ action: String) -> Bool {
         guard action == "开多" || action == "开空", session.canTrade,
-              let c = selected, c.hasMetadata, (1...10).contains(selectedQuantity),
+              let c = selected, c.hasMetadata, selectedQuantity > 0,
               !quoteError, let stamp = quoteStamp, Date().timeIntervalSince(stamp) < 60 else { return false }
         return validPrice(effectivePrice(buy: action == "开多"))
     }
     private func validDraft(_ action: String) -> Bool {
         guard let draft = openingDraft, draft.action == action, draft.symbol == selected?.symbol,
-              session.canTrade, (1...10).contains(draft.quantity), selected?.hasMetadata == true else { return false }
+              session.canTrade, draft.quantity > 0, selected?.hasMetadata == true else { return false }
         return validPrice(Double(draft.price))
     }
     private var priceModePicker: some View {
@@ -720,7 +725,7 @@ struct TradingCenterView: View {
                 Text("手数").font(.caption)
                 Button { selectedQuantity = max(1, selectedQuantity - 1) } label: { Image(systemName: "minus.circle") }
                 TextField("手数", value: $selectedQuantity, format: .number.grouping(.never)).keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit()
-                Button { selectedQuantity = min(10, selectedQuantity + 1) } label: { Image(systemName: "plus.circle") }
+                Button { if selectedQuantity < Int.max { selectedQuantity += 1 } } label: { Image(systemName: "plus.circle") }
             }.buttonStyle(.borderless)
             HStack(spacing: 8) {
                 tradeButton("开多", color: MarketPalette.up)
@@ -762,7 +767,7 @@ struct TradingCenterView: View {
                         .contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityLabel("选择交易合约")
                 Spacer(minLength: 4)
-                VStack(alignment: .trailing, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(priceText(selected?.last))
                         .font(.system(size: 22, weight: .semibold, design: .rounded))
                         .foregroundStyle(quoteColor(selected?.last))
@@ -771,21 +776,11 @@ struct TradingCenterView: View {
                 }.monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
             }
             HStack(spacing: 12) {
-                quoteLine("卖一", selected?.ask, volume: optionQuote?.askVolume ?? detailedQuote?.askVolume)
                 quoteLine("买一", selected?.bid, volume: optionQuote?.bidVolume ?? detailedQuote?.bidVolume)
+                quoteLine("卖一", selected?.ask, volume: optionQuote?.askVolume ?? detailedQuote?.askVolume)
             }
-            HStack(spacing: 8) {
-                quoteLine("最高", optionQuote?.highest ?? detailedQuote?.highest)
-                quoteLine("最低", optionQuote?.lowest ?? detailedQuote?.lowest)
-            }
-            HStack(spacing: 8) {
-                quoteLine("涨停", optionQuote?.upperLimit ?? detailedQuote?.upperLimit)
-                quoteLine("跌停", optionQuote?.lowerLimit ?? detailedQuote?.lowerLimit)
-            }.font(.caption2)
             priceModePicker
             HStack(spacing: 6) {
-                Text("价格").font(.caption).foregroundStyle(MarketPalette.muted).frame(width: 27, alignment: .leading)
-                priceInput
                 Text("手数").font(.caption).foregroundStyle(MarketPalette.muted).frame(width: 27, alignment: .leading)
                 HStack(spacing: 0) {
                     Button { selectedQuantity = max(1, selectedQuantity - 1) } label: {
@@ -793,11 +788,13 @@ struct TradingCenterView: View {
                     }.buttonStyle(.plain)
                     TextField("手数", value: $selectedQuantity, format: .number.grouping(.never))
                         .keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit()
-                    Button { selectedQuantity = min(10, selectedQuantity + 1) } label: {
+                    Button { if selectedQuantity < Int.max { selectedQuantity += 1 } } label: {
                         Image(systemName: "plus").frame(width: 30, height: 34)
                     }.buttonStyle(.plain)
                 }.frame(maxWidth: .infinity)
-                    .background(MarketPalette.raised, in: RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(MarketPalette.divider))
+                Text("价格").font(.caption).foregroundStyle(MarketPalette.muted)
+                priceInput.frame(maxWidth: .infinity)
             }
             HStack {
                 Text(quoteError ? "报价失败" : (quoteStamp == nil ? (selected?.last == nil ? "等待报价" : "参考行情 · 确认中") : "参考报价"))
@@ -805,14 +802,47 @@ struct TradingCenterView: View {
                 Text("最大可开 -- · 保证金 --")
             }.font(.caption2).foregroundStyle(MarketPalette.muted)
             HStack(spacing: 8) {
-                tradeButton("开多", color: MarketPalette.up)
-                tradeButton("开空", color: MarketPalette.down)
-            }
-            HStack(spacing: 8) {
-                closeActionButton(long: true)
-                closeActionButton(long: false)
+                tradeButton("开多", color: MarketPalette.up, title: selected?.isOption == true ? "买开" : "买多")
+                tradeButton("开空", color: MarketPalette.down, title: selected?.isOption == true ? "卖开" : "卖空")
+                unifiedCloseButton
             }
         }.padding(.vertical, 6)
+    }
+
+    private var closeCandidates: [Bool] {
+        [true, false].filter { (availableToClose($0) ?? 0) > 0 }
+    }
+
+    private var preferredCloseSide: Bool? {
+        if let symbol = selected?.symbol {
+            if expandedHolding == symbol + "/long", closeCandidates.contains(true) { return true }
+            if expandedHolding == symbol + "/short", closeCandidates.contains(false) { return false }
+        }
+        return closeCandidates.count == 1 ? closeCandidates.first : nil
+    }
+
+    private var unifiedCloseButton: some View {
+        let side = preferredCloseSide
+        let enabled = session.canTrade && selected?.hasMetadata == true && !closeCandidates.isEmpty
+        return Button {
+            guard enabled, let p = session.snapshot?.positions.first(where: { $0.symbol == selected?.symbol }) else { return }
+            if let side { beginClose(p, long: side) }
+            else { chooseCloseSide = true }
+        } label: {
+            VStack(spacing: 5) {
+                Text(priceText(side.flatMap { effectivePrice(buy: !$0) })).font(.system(size: 22, weight: .semibold).monospacedDigit())
+                Text("平仓").font(.system(size: 16, weight: .medium))
+            }.foregroundStyle(.white)
+                .frame(maxWidth: .infinity).frame(height: 64)
+                .background(MarketPalette.accent.opacity(enabled ? 0.85 : 0.25), in: RoundedRectangle(cornerRadius: 8))
+        }.buttonStyle(.plain).disabled(!enabled)
+            .confirmationDialog("选择平仓方向", isPresented: $chooseCloseSide) {
+                if let p = session.snapshot?.positions.first(where: { $0.symbol == selected?.symbol }) {
+                    Button("平多") { beginClose(p, long: true) }.disabled((availableToClose(true) ?? 0) <= 0)
+                    Button("平空") { beginClose(p, long: false) }.disabled((availableToClose(false) ?? 0) <= 0)
+                }
+                Button("取消", role: .cancel) {}
+            }
     }
     private func closeActionButton(long: Bool) -> some View {
         let tint = long ? MarketPalette.down : MarketPalette.up
@@ -864,10 +894,10 @@ struct TradingCenterView: View {
             pendingAction = action
         } label: {
             VStack(spacing: 3) {
-                Text(priceText(effectivePrice(buy: action == "开多"))).font(.caption.monospacedDigit())
+                Text(priceText(effectivePrice(buy: action == "开多"))).font(.system(size: 22, weight: .semibold).monospacedDigit())
                 Text(title ?? (selected?.option != nil ? (action == "开多" ? "买开" : "卖开") : action))
             }.font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white).frame(maxWidth: .infinity).padding(.vertical, 8)
+                .foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 64)
                 .background(color.opacity(validOrder(action) ? 0.85 : 0.25), in: RoundedRectangle(cornerRadius: 8))
         }.buttonStyle(.borderless).disabled(!validOrder(action))
     }
@@ -1089,7 +1119,7 @@ struct TradingCenterView: View {
         IndicatorKeyboard.dismiss()
         if selected?.symbol != p.symbol { selectHolding(p.symbol) }
         closePrice = effectivePrice(buy: !long).map { priceText($0) } ?? ""
-        closeQuantity = min(max(1, selectedQuantity), min(10, availableToClose(long) ?? 1))
+        closeQuantity = min(max(1, selectedQuantity), availableToClose(long) ?? 0)
         closeToday = false
         closeConfirm = false
         closingSide = long
@@ -1102,7 +1132,7 @@ struct TradingCenterView: View {
     }
     private func validClose(_ long: Bool) -> Bool {
         guard !quickOnly, closingSide == long, session.canTrade,
-              let available = availableToClose(long), (1...10).contains(closeQuantity),
+              let available = availableToClose(long), closeQuantity > 0,
               closeQuantity <= available, let tick = selected?.tick, tick.isFinite, tick > 0,
               let price = Double(closePrice), price.isFinite, price > 0 else { return false }
         let steps = price / tick
@@ -1131,7 +1161,7 @@ struct TradingCenterView: View {
                 HStack {
                     Text("平仓手数")
                     TextField("手数", value: $closeQuantity, format: .number.grouping(.never)).keyboardType(.numberPad).multilineTextAlignment(.trailing)
-                    Button("最多") { closeQuantity = min(10, available ?? 0) }.buttonStyle(.borderless).disabled((available ?? 0) <= 0)
+                    Button("最多") { closeQuantity = available ?? 0 }.buttonStyle(.borderless).disabled((available ?? 0) <= 0)
                 }
                 if requiresSplit {
                     Picker("平仓类型", selection: $closeToday) {
@@ -1281,7 +1311,7 @@ struct TradingCenterView: View {
             if expanded { expandedHolding = nil } else {
                 selectHolding(p.symbol)
                 expandedHolding = rowID
-                selectedQuantity = min(10, max(1, qty - (frozen ?? 0)))
+                selectedQuantity = frozen.map { max(0, qty - $0) } ?? 1
             }
         } label: {
             HStack(spacing: 4) {
@@ -1298,7 +1328,7 @@ struct TradingCenterView: View {
             HStack(spacing: 10) {
                 Spacer()
                 if let q = detailedQuote, q.code == p.symbol, let product = product(p.symbol) {
-                    Button("图表") { chartProduct = product; chartQuote = q; showHoldingChart = true }
+                    Button("查看K线") { chartProduct = product; chartQuote = q; showHoldingChart = true }
                         .buttonStyle(.bordered)
                 }
                 Button("平仓") { beginClose(p, long: long) }
