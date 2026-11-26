@@ -1,5 +1,5 @@
 
-"""Single-owner TqKq simulation only. No real accounts."""
+"""Single-owner trading gateway; simulation default, isolated live read-only preview."""
 import hmac
 import hashlib
 import json
@@ -20,7 +20,21 @@ IDLE = 1200
 LOCK = threading.Lock()
 SESSION = None
 LAST_LOGIN = 0.0
-ACCESS = os.environ.get("QIHUI_TRADE_ACCESS_KEY", "")
+TRADE_MODE = os.environ.get("QIHUI_TRADE_MODE", "simulation")
+ACCESS = os.environ.get("QIHUI_LIVE_READONLY_ACCESS_KEY" if TRADE_MODE == "live_readonly" else "QIHUI_TRADE_ACCESS_KEY", "")
+
+
+def make_account(mode):
+    from tqsdk import TqKq
+    if mode == "simulation":
+        return TqKq()
+    if mode != "live_readonly":
+        raise ValueError("unsupported trade mode")
+    from tqsdk import TqAccount
+    values = [os.environ.get(k, "") for k in ("QIHUI_LIVE_BROKER", "QIHUI_LIVE_ACCOUNT", "QIHUI_LIVE_PASSWORD")]
+    if not all(values):
+        raise RuntimeError("live account configuration missing")
+    return TqAccount(*values)
 
 AUDIT = logging.getLogger("qihui.trade.audit")
 AUDIT.propagate = False
@@ -201,6 +215,7 @@ class Session:
     def __init__(self, username, password):
         self.token = secrets.token_urlsafe(32)
         self.username = username
+        self.mode = TRADE_MODE
         self.salt = secrets.token_bytes(16)
         self.verifier = self.password_digest(password)
         self.inflight = 0
@@ -226,8 +241,8 @@ class Session:
     def run(self, username, password):
         api = None
         try:
-            from tqsdk import TqApi, TqAuth, TqKq
-            api = TqApi(TqKq(), auth=TqAuth(username, password))
+            from tqsdk import TqApi, TqAuth
+            api = TqApi(make_account(self.mode), auth=TqAuth(username, password))
             password = None
             account = api.get_account()
             positions = api.get_position()
@@ -242,7 +257,9 @@ class Session:
                     pass
                 else:
                     try:
-                        if action == "order":
+                        if self.mode != "simulation":
+                            result["status"] = 403
+                        elif action == "order":
                             oid, symbol, direction, offset, qty, price = payload
                             audit("order_attempt", id=oid, symbol=symbol, direction=direction,
                                   offset=offset, quantity=qty, price=price)
@@ -273,6 +290,10 @@ class Session:
                     with self.data_lock:
                         self.sdk_update_monotonic = time.monotonic()
                 data = snapshot(account, positions, orders, fills)
+                if data is not None:
+                    data["simulation_orders"] = self.mode == "simulation"
+                    data["trade_mode"] = self.mode
+                    data["order_submission_enabled"] = self.mode == "simulation"
                 if data is not None and ORDER_LEDGER is not None:
                     now = time.monotonic()
                     if now >= next_reconcile:
@@ -300,11 +321,17 @@ class Session:
                     pass
 
     def ledger_namespace(self):
-        return hashlib.sha256(("TqKq:" + self.username).encode("utf-8")).hexdigest()
+        if self.mode == "simulation":
+            identity = "TqKq:" + self.username
+        else:
+            identity = "TqAccount:" + os.environ.get("QIHUI_LIVE_BROKER", "") + ":" + os.environ.get("QIHUI_LIVE_ACCOUNT", "")
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
     def submit_order(self, api, orders, payload):
         # Owner thread only. Record intent before SDK submission; never replay
         # an uncertain request, even if insert_order raised after transmission.
+        if self.mode != "simulation":
+            return 403
         oid, symbol, direction, offset, qty, price = payload
         if oid in self.seen:
             if self.seen[oid] != payload:
@@ -394,6 +421,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not 0 < length <= 8192:
                     return self.reply(400)
                 body = json.loads(self.rfile.read(length))
+                if body.get("mode", "simulation") != TRADE_MODE:
+                    return self.reply(403)
                 username, password = body["username"], body["password"]
                 if not all(isinstance(x, str) and 0 < len(x) <= 512 for x in (username, password)):
                     return self.reply(400)
@@ -449,6 +478,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"snapshot": data}) if data is not None else self.reply(503)
         if method != "POST" or self.path not in (PREFIX + "order", PREFIX + "cancel"):
             return self.reply(405)
+        if s.mode != "simulation":
+            return self.reply(403)
         if data is None:
             return self.reply(503)
         age = data.get("snapshot_age_ms")
@@ -486,9 +517,21 @@ def main():
     global ORDER_LEDGER
     if len(ACCESS) < 32:
         raise SystemExit("Set a private QIHUI_TRADE_ACCESS_KEY of at least 32 characters")
-    configure_audit("trade-audit.jsonl")
-    ORDER_LEDGER = OrderIntentLedger("trade-intents.sqlite3")
-    ThreadingHTTPServer(("127.0.0.1", 8766), Handler).serve_forever()
+    if TRADE_MODE not in ("simulation", "live_readonly"):
+        raise SystemExit("Unsupported QIHUI_TRADE_MODE")
+    if TRADE_MODE == "live_readonly":
+        if not all(os.environ.get(k) for k in ("QIHUI_LIVE_BROKER", "QIHUI_LIVE_ACCOUNT", "QIHUI_LIVE_PASSWORD")):
+            raise SystemExit("Live read-only account configuration missing")
+        if ACCESS == os.environ.get("QIHUI_TRADE_ACCESS_KEY", ""):
+            raise SystemExit("Live read-only access key must differ from simulation")
+        configure_audit("live-readonly-audit.jsonl")
+        ORDER_LEDGER = OrderIntentLedger("live-readonly-intents.sqlite3")
+        port = 8767
+    else:
+        configure_audit("trade-audit.jsonl")
+        ORDER_LEDGER = OrderIntentLedger("trade-intents.sqlite3")
+        port = 8766
+    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 
 if __name__ == "__main__":
     main()
