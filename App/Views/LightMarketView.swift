@@ -179,7 +179,7 @@ struct LightMarketView: View {
         let signature = Array(Set(codes)).sorted().joined(separator: "|")
         let now = Date()
         guard signature != lastWarmedCodes ||
-              now.timeIntervalSince(lastWarmRequest) >= 3600 else { return }
+              now.timeIntervalSince(lastWarmRequest) >= 900 else { return }
         // Best effort; retry failed requests without marking them successful.
         do {
             try await MarketDataService.warmFavoriteHistory(codes)
@@ -304,7 +304,7 @@ struct LightMarketView: View {
                 guard !favoriteWarmKey.isEmpty else { return }
                 while !Task.isCancelled {
                     await warmFavoritesIfNeeded()
-                    do { try await Task.sleep(for: .seconds(3600)) } catch { return }
+                    do { try await Task.sleep(for: .seconds(900)) } catch { return }
                 }
             }
         }
