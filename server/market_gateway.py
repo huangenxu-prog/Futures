@@ -468,6 +468,54 @@ def option_chain(underlying):
         QUERY_WORKER.release_api(api)
 
 
+def exact_quote_row(symbol, quote):
+    if getattr(quote, "expired", False):
+        return {}
+    year, month = getattr(quote, "delivery_year", 0), getattr(quote, "delivery_month", 0)
+    if not (2000 <= year <= 2099 and 1 <= month <= 12):
+        return {}
+    row = dict(snapshot(quote), code=symbol, month=f"{int(year) % 100:02d}{int(month):02d}")
+    for field, key in (("price_tick", "priceTick"), ("volume_multiple", "volumeMultiple"),
+                       ("upper_limit", "upperLimit"), ("lower_limit", "lowerLimit")):
+        value = getattr(quote, field, None)
+        if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
+            row[key] = float(value)
+    return row
+
+
+def exact_contract_quote(symbol):
+    product = contract_product(symbol)
+    if not product or not supported_product(product):
+        raise ValueError("invalid contract")
+    # Only rows verified on the current SDK connection can authorize a
+    # trade ticket. Restored disk snapshots are display-only.
+    with LIVE_QUOTES.condition:
+        row = LIVE_QUOTES.exact_quotes.get(symbol)
+        if (LIVE_QUOTES.connection_state == "polling"
+                and LIVE_QUOTES.last_poll
+                and time.monotonic() - LIVE_QUOTES.last_poll < 3
+                and row and row.get("code") == symbol):
+            return dict(row)
+    return _exact_contract_cold(symbol)
+
+
+@reusable_query
+@cached_short_query
+def _exact_contract_cold(symbol):
+    api = QUERY_WORKER.acquire_api()
+    try:
+        quote = api.get_quote_list([symbol])[0]
+        deadline = time.time() + 2
+        while not getattr(quote, "datetime", "") and time.time() < deadline:
+            api.wait_update(deadline=min(deadline, time.time() + 0.3))
+        row = exact_quote_row(symbol, quote)
+        if not row.get("time") or not row.get("priceTick") or not row.get("volumeMultiple"):
+            raise RuntimeError("contract_quote_unavailable")
+        return row
+    finally:
+        QUERY_WORKER.release_api(api)
+
+
 @reusable_query
 @cached_short_query
 def listed_contracts(product):
@@ -543,6 +591,7 @@ class LiveQuoteHub:
         self.connection_state = "starting"
         self.thread = None
         self.expected_products = set()
+        self.exact_quotes = {}
         self.sdk_creations = 0
         self.last_disk_save = float('-inf')
 
@@ -669,6 +718,7 @@ class LiveQuoteHub:
                         for code, quote in zip(new_codes, api.get_quote_list(new_codes)):
                             live_quotes[code] = quote
                     current = {p: q for p, q in self.current().items() if p in products}
+                    exact = {}
                     for product, code in pairs:
                         if product in current and current[product].get("code") != code:
                             current.pop(product)
@@ -681,6 +731,11 @@ class LiveQuoteHub:
                             if details.get("time") and "last" in details:
                                 current[product] = dict(details, code=code,
                                                         month=f"{int(year) % 100:02d}{int(month):02d}")
+                                row = exact_quote_row(code, quote)
+                                if row.get("priceTick") and row.get("volumeMultiple"):
+                                    exact[code] = row
+                    with self.condition:
+                        self.exact_quotes = exact
                     now = time.monotonic()
                     if current != last_published and now - last_sent >= 0.15:
                         self.publish(current)
@@ -691,6 +746,7 @@ class LiveQuoteHub:
             except Exception as exc:
                 with self.condition:
                     self.connection_state = "reconnecting"
+                    self.exact_quotes = {}
                 print("行情推送连接断开，准备重连:", type(exc).__name__, flush=True)
             finally:
                 if api is not None:
@@ -1668,6 +1724,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200 if contracts else 503, contracts if contracts else {"error": "market_data_unavailable"})
             except Exception:
                 self.reply(503, {"error": "market_data_unavailable"})
+            return
+        if url.path == "/v1/quote":
+            symbol = parse_qs(url.query).get("symbol", [""])[0]
+            try:
+                self.reply(200, exact_contract_quote(symbol))
+            except ValueError:
+                self.reply(400, {"error": "invalid_contract"})
+            except Exception:
+                self.reply(503, {"error": "contract_quote_unavailable"})
             return
         if url.path == "/v1/contracts":
             product = parse_qs(url.query).get("product", [""])[0]
