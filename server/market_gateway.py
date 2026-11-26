@@ -1,5 +1,6 @@
 """Read-only TqSdk K-line HTTP gateway. Bind to loopback; expose only behind authenticated HTTPS reverse proxy."""
 import fcntl
+import gc
 import hmac
 import json
 import math
@@ -54,6 +55,38 @@ SHORT_QUERY_GATE = threading.RLock()
 SHORT_QUERY_CACHE = OrderedDict()
 SHORT_QUERY_TTL = 6.0
 SHORT_QUERY_MAX_KEYS = 64
+
+
+def process_memory():
+    result = {}
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            field, _, value = line.partition(":")
+            if field in ("VmRSS", "VmHWM", "RssAnon", "VmSwap"):
+                result[field] = int(value.split()[0])
+    except (OSError, ValueError, IndexError):
+        pass
+    return result
+
+
+# Collect only after an SDK lifecycle ends, never on each market tick.
+# Serialize and rate-limit full collections across owner threads.
+MEMORY_RECLAIM_LOCK = threading.Lock()
+MEMORY_RECLAIM_LAST = 0.0
+
+
+def reclaim_sdk_memory(worker):
+    global MEMORY_RECLAIM_LAST
+    with MEMORY_RECLAIM_LOCK:
+        now = time.monotonic()
+        if now - MEMORY_RECLAIM_LAST < 30:
+            return
+        MEMORY_RECLAIM_LAST = now
+        before = process_memory()
+        collected = gc.collect()
+        after = process_memory()
+        print("QIHUI_MEMORY", json.dumps({"worker": worker, "before": before,
+              "after": after, "collected": collected}, separators=(",", ":")), flush=True)
 
 
 class QueryWorker:
@@ -1089,6 +1122,7 @@ class SharedKlineHub:
         # Keep one TqApi for a small batch to avoid login per contract, but
         # close it periodically so finished serials release SDK resources.
         api = None
+        serial = None
         batches = 0
         while True:
             with self.condition:
@@ -1120,7 +1154,9 @@ class SharedKlineHub:
                     except Exception:
                         pass
                     api = None
+                    serial = None
                     batches = 0
+                    reclaim_sdk_memory("history-idle")
                 continue
             try:
                 if api is None:
@@ -1159,8 +1195,11 @@ class SharedKlineHub:
                     except Exception:
                         pass
                 api = None
+                serial = None
                 batches = 0
+                reclaim_sdk_memory("history-error")
             finally:
+                serial = None
                 with self.condition:
                     self.history_running.discard(key)
                     self.condition.notify_all()
@@ -1171,10 +1210,13 @@ class SharedKlineHub:
                     pass
                 api = None
                 batches = 0
+                reclaim_sdk_memory("history-batch")
 
     def run(self):
         while True:
             api = None
+            installed = {}
+            serial = None
             try:
                 with open(AUTH_PATH, encoding="utf-8") as handle:
                     credentials = json.load(handle)
@@ -1231,6 +1273,10 @@ class SharedKlineHub:
                         api.close()
                     except Exception:
                         pass
+                    api = None
+                    installed.clear()
+                    serial = None
+                    reclaim_sdk_memory("kline-live")
 
 
 KLINE_HUB = SharedKlineHub(store=KlineFileCache())
@@ -1479,7 +1525,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, {"ok": True, "quote_stream": True, "bar_stream": True,
                              "kline_cache": KLINE_HUB.status(),
                              "quote_feed": LIVE_QUOTES.status(),
-                             "query_reuse_enabled": QUERY_REUSE})
+                             "query_reuse_enabled": QUERY_REUSE, "process_memory_kib": process_memory()})
             return
         if url.path == "/v1/stream/quotes":
             self.stream_quotes()
