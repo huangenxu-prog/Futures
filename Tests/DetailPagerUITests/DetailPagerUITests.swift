@@ -30,10 +30,11 @@ final class DetailPagerUITests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 5), "Wrong contract", file: file, line: line)
         XCTAssertTrue(title.isHittable, file: file, line: line)
         let viewport = element("detail.viewport").frame
-        let page = element("detail.page." + ids[index]).frame
+        let footer = app.buttons["指标参数设置"]
+        XCTAssertTrue(footer.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(footer.isHittable, file: file, line: line)
         XCTAssertGreaterThan(viewport.height, app.frame.height * 0.80, file: file, line: line)
-        XCTAssertEqual(page.minY, viewport.minY, accuracy: 1, file: file, line: line)
-        XCTAssertEqual(page.maxY, viewport.maxY, accuracy: 1, file: file, line: line)
+        XCTAssertEqual(footer.frame.maxY, viewport.maxY, accuracy: 1, file: file, line: line)
         XCTAssertEqual(title.frame.minY, viewport.minY, accuracy: 2, file: file, line: line)
     }
 
@@ -83,7 +84,7 @@ final class DetailPagerUITests: XCTestCase {
         drag(0.22, 0.49, to: 0.77, 0.49)
         XCTAssertTrue(app.buttons["回到最新K线"].waitForExistence(timeout: 5))
         verify(0)
-        element("detail.page." + ids[0]).pinch(withScale: 1.7, velocity: 1)
+        element("detail.viewport").pinch(withScale: 1.7, velocity: 1)
         verify(0)
         XCUIDevice.shared.press(.home)
         app.activate()
