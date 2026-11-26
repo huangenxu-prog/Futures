@@ -645,7 +645,7 @@ struct TradingCenterView: View {
     private func openInitialIfReady() {
         guard !openedInitial, initialContract != nil, session.signedIn else { return }
         openedInitial = true
-        if let initialContract { choose(initialContract) }
+        if let initialContract { choose(initialContract); seedHoldingQuote(initialContract) }
     }
 
     private var accountHeader: some View {
@@ -1040,22 +1040,17 @@ struct TradingCenterView: View {
     }
 
     @MainActor private func warmHoldingQuotes(_ symbols: [String]) async {
-        // Fetch once per product or option underlying, not once per position.
+        // Futures use exact symbols; options retain grouped underlying queries.
         let contracts = symbols.filter { $0 != selected?.symbol }.map { holdingContract($0) }
-        let futures = Dictionary(grouping: contracts.filter { $0.option == nil }) { product($0.symbol)?.id ?? "" }
+        let futures = contracts.filter { $0.option == nil }
         let options = Dictionary(grouping: contracts.filter { $0.option != nil }) { $0.option?.underlying ?? "" }
-        for (id, items) in futures.sorted(by: { $0.key < $1.key }) {
+        for item in futures {
             guard !Task.isCancelled, session.signedIn else { return }
-            guard !id.isEmpty else { continue }
             do {
-                let quotes = try await MarketDataService.listedContracts(for: id)
+                let q = try await MarketDataService.contractQuote(symbol: item.symbol)
                 guard !Task.isCancelled, session.signedIn else { return }
-                let received = Date()
-                for item in items {
-                    guard let q = quotes.first(where: { $0.code == item.symbol }) else { continue }
-                    let contract = PaperContract(symbol: q.code, name: item.name, tick: q.priceTick, multiplier: q.volumeMultiple, last: q.last, bid: q.bid, ask: q.ask)
-                    recentTradeQuotes[item.symbol] = CachedTradeQuote(contract: contract, details: q, optionDetails: nil, received: received)
-                }
+                let contract = PaperContract(symbol: q.code, name: item.name, tick: q.priceTick, multiplier: q.volumeMultiple, last: q.last, bid: q.bid, ask: q.ask)
+                recentTradeQuotes[item.symbol] = CachedTradeQuote(contract: contract, details: q, optionDetails: nil, received: Date())
             } catch { /* Selected-contract refresh remains independent. */ }
         }
         for (underlying, items) in options.sorted(by: { $0.key < $1.key }) {
@@ -1083,7 +1078,8 @@ struct TradingCenterView: View {
                 optionDetails = q
                 next = q.paperContract(underlying: option.underlying, name: c.name)
             } else {
-                guard let p = product(c.symbol), let q = try await MarketDataService.listedContracts(for: p.id).first(where: { $0.code == c.symbol }) else { throw MarketDataError.noData }
+                guard let p = product(c.symbol) else { throw MarketDataError.noData }
+                let q = try await MarketDataService.contractQuote(symbol: c.symbol)
                 details = q
                 next = PaperContract(symbol: q.code, name: p.name, tick: q.priceTick, multiplier: q.volumeMultiple, last: q.last, bid: q.bid, ask: q.ask)
             }
