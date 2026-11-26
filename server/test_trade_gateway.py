@@ -39,8 +39,9 @@ class SnapshotTests(unittest.TestCase):
         self.assertIsNone(number(None))
 
     def test_validate_order(self):
-        order = dict(id="a"*32, symbol="CZCE.SR701", direction="BUY", offset="OPEN", quantity="1", price="5120")
+        order = dict(id="a"*32, symbol="CZCE.SR701", direction="BUY", offset="OPEN", quantity=1, price=5120)
         self.assertEqual(validate_order(order)[1], "CZCE.SR701")
+        self.assertEqual(validate_order(dict(order, quantity=200))[4], 200)
         for patch in (dict(quantity="11"), dict(price="nan"), dict(symbol="KQ.m@CZCE.SR"), dict(offset="CLOSETODAY")):
             with self.assertRaises(ValueError):
                 validate_order(dict(order, **patch))
