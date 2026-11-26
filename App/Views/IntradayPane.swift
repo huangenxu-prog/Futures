@@ -2,7 +2,7 @@ import SwiftUI
 import Foundation
 
 struct IntradayPane: View {
-    private var backgroundStyle = MarketBackgroundStyle()
+    var backgroundStyle = MarketBackgroundStyle()
     let symbol: String
     let previousSettlement: Double?
     var isActive = true
@@ -117,7 +117,7 @@ struct IntradayPane: View {
 }
 
 private struct IntradayCanvas: View {
-    private var backgroundStyle = MarketBackgroundStyle()
+    var backgroundStyle = MarketBackgroundStyle()
     let bars:[MarketBar]
     let averages:[Double?]
     let reference:Double?

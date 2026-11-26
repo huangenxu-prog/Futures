@@ -5,7 +5,7 @@ import TradingChart
 /// Qihui retains its own toolbar, quote strip, colors and TqSdk data source.
 @available(iOS 17.0, *)
 struct ProfessionalChartHost: View {
-    private var backgroundStyle = MarketBackgroundStyle()
+    var backgroundStyle = MarketBackgroundStyle()
     let symbol: String
     let period: Int
     let bars: [MarketBar]

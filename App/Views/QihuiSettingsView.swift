@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct QihuiSettingsView: View {
-    private var backgroundStyle = MarketBackgroundStyle()
+    var backgroundStyle = MarketBackgroundStyle()
     @Environment(\.dismiss) private var dismiss
     @AppStorage("qihui.appearance.mode.v1") private var appearance = AppAppearanceMode.dark.rawValue
     @AppStorage("qihui.change.basis.v1") private var changeBasis = "settlement"

@@ -76,7 +76,7 @@ private enum HomeMarketPalette {
     }
 }
 struct LightMarketView: View {
-    private var backgroundStyle = MarketBackgroundStyle()
+    var backgroundStyle = MarketBackgroundStyle()
     private enum Scope: String, CaseIterable {
         case favorites = "自选"
         case catalog = "全部品种"
@@ -92,7 +92,7 @@ struct LightMarketView: View {
     @State private var editing = false
     @AppStorage("qihui.appearance.mode.v1") private var appearanceMode = AppAppearanceMode.dark.rawValue
     @Environment(\.colorScheme) private var colorScheme
-    private var quoteAppearance = QuoteAppearanceStyle()
+    var quoteAppearance = QuoteAppearanceStyle()
     private struct DetailSelection: Hashable {
         let instrument: FuturesInstrument
         let sequence: [FuturesInstrument]
