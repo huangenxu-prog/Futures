@@ -67,6 +67,9 @@ private struct DetailPager: UIViewControllerRepresentable {
         pager.delegate = coordinator
         pager.setViewControllers([coordinator.host(for: initial)], direction: .forward, animated: false)
         coordinator.keepNeighbors()
+        #if DEBUG
+        pager.view.accessibilityValue = "pages=" + String(pages.count)
+        #endif
         return pager
     }
 

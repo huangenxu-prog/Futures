@@ -65,10 +65,11 @@ final class DetailPagerUITests: XCTestCase {
         }
     }
 
-    func testPagingAndChartInput() {
+    func testChartInputAndPaging() {
         launch(light: false)
         enter(0)
         verify(0)
+        XCTAssertEqual(element("detail.viewport").value as? String, "pages=3")
         drag(0.50, 0.41, to: 0.50, 0.79)
         verify(0)
         for step in 0..<32 {
