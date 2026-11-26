@@ -199,14 +199,14 @@ def short_query(function):
 def cached_short_query(function):
     @wraps(function)
     @short_query
-    def wrapped(symbol):
-        key = (function.__name__, symbol)
+    def wrapped(*args):
+        key = (function.__name__, *args)
         now = time.monotonic()
         cached = SHORT_QUERY_CACHE.get(key)
         if cached is not None and now < cached[0]:
             SHORT_QUERY_CACHE.move_to_end(key)
             return cached[1]
-        result = function(symbol)
+        result = function(*args)
         if result:
             SHORT_QUERY_CACHE[key] = (time.monotonic() + SHORT_QUERY_TTL, result)
             SHORT_QUERY_CACHE.move_to_end(key)
