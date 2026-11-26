@@ -23,6 +23,7 @@ LOCK = threading.Lock()
 MAINTENANCE = threading.Event()
 SESSION = None
 LAST_LOGIN = 0.0
+AUTO_RECOVERY_PAUSED = threading.Event()
 TRADE_MODE = os.environ.get("QIHUI_TRADE_MODE", "simulation")
 ACCESS = os.environ.get("QIHUI_LIVE_READONLY_ACCESS_KEY" if TRADE_MODE == "live_readonly" else "QIHUI_TRADE_ACCESS_KEY", "")
 
@@ -314,7 +315,17 @@ class Session:
             audit("session_exception", error_type=type(exc).__name__)
         finally:
             audit("session_end")
-            self.stop.set()
+            with LOCK:
+                self.stop.set()
+                # No command can be admitted after stop is set under LOCK.
+                while True:
+                    try:
+                        action, payload, done, result = self.commands.get_nowait()
+                    except queue.Empty:
+                        break
+                    result["status"] = 503
+                    self.inflight -= 1
+                    done.set()
             with self.data_lock:
                 self.data = None
             self.ready.set()
@@ -471,6 +482,7 @@ class Handler(BaseHTTPRequestHandler):
                 s.token = secrets.token_urlsafe(32)
                 s.last_access = time.monotonic()
                 token = s.token
+                AUTO_RECOVERY_PAUSED.clear()
             return self.reply(200, {"token": token, "snapshot": data})
         if self.path not in (PREFIX + "snapshot", PREFIX + "logout", PREFIX + "order", PREFIX + "cancel"):
             return self.reply(404)
@@ -481,6 +493,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == PREFIX + "logout" and method == "POST":
                 if s.inflight:
                     return self.reply(409)
+                AUTO_RECOVERY_PAUSED.set()
                 s.stop.set()
                 return self.reply(200)
             s.last_access = time.monotonic()
@@ -566,11 +579,35 @@ def start_configured_session():
     if credentials is None:
         return False
     with LOCK:
-        if MAINTENANCE.is_set() or (SESSION is not None and SESSION.worker.is_alive()):
+        if MAINTENANCE.is_set() or AUTO_RECOVERY_PAUSED.is_set() or (SESSION is not None and SESSION.worker.is_alive()):
             return False
         SESSION = Session(*credentials, keepalive=True)
     audit("configured_session_started")
     return True
+
+
+class RecoverySupervisor:
+    """Retry terminated configured sessions, never replay queued commands."""
+    def __init__(self, minimum=30, maximum=300):
+        self.minimum = minimum
+        self.maximum = maximum
+        self.delay = minimum
+        self.next_attempt = 0.0
+
+    def tick(self, now):
+        if MAINTENANCE.is_set() or AUTO_RECOVERY_PAUSED.is_set():
+            return False
+        with LOCK:
+            s = SESSION
+            if s is not None and s.worker.is_alive():
+                if s.ready.is_set() and not s.stop.is_set():
+                    self.delay = self.minimum
+                return False
+        if now < self.next_attempt:
+            return False
+        self.next_attempt = now + self.delay
+        self.delay = min(self.maximum, self.delay * 2)
+        return start_configured_session()
 
 
 def scheduled_restart_slot(now):
@@ -618,11 +655,16 @@ def main():
     signal.signal(signal.SIGINT, request_maintenance)
     with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
         server.timeout = 0.5
-        start_configured_session()
+        auto_login_enabled = startup_credentials() is not None
+        recovery = RecoverySupervisor()
+        if auto_login_enabled:
+            recovery.tick(time.monotonic())
         restart_enabled = os.environ.get("QIHUI_TRADE_SCHEDULED_RESTART", "0") == "1"
         restart_path = "live-readonly-restarts.sqlite3" if TRADE_MODE == "live_readonly" else "trade-restarts.sqlite3"
         while not MAINTENANCE.is_set():
             server.handle_request()
+            if auto_login_enabled and not MAINTENANCE.is_set():
+                recovery.tick(time.monotonic())
             if restart_enabled:
                 slot = scheduled_restart_slot(datetime.now(timezone.utc))
                 if slot is not None and claim_restart_slot(restart_path, slot):
