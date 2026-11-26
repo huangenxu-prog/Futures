@@ -179,11 +179,13 @@ struct LightMarketView: View {
         let signature = Array(Set(codes)).sorted().joined(separator: "|")
         let now = Date()
         guard signature != lastWarmedCodes ||
-              now.timeIntervalSince(lastWarmRequest) > 600 else { return }
-        lastWarmedCodes = signature
-        lastWarmRequest = now
-        // Best effort; prefetch failure must not block the quote list.
-        try? await MarketDataService.warmFavoriteHistory(codes)
+              now.timeIntervalSince(lastWarmRequest) >= 3600 else { return }
+        // Best effort; retry failed requests without marking them successful.
+        do {
+            try await MarketDataService.warmFavoriteHistory(codes)
+            lastWarmedCodes = signature
+            lastWarmRequest = now
+        } catch { }
     }
 
     private func changePercentage(_ item: FuturesInstrument) -> Double? {
@@ -300,7 +302,10 @@ struct LightMarketView: View {
                 // shared quote feed reveals the main contract identity.
                 // It must not wait for sequential on-demand quote batches.
                 guard !favoriteWarmKey.isEmpty else { return }
-                await warmFavoritesIfNeeded()
+                while !Task.isCancelled {
+                    await warmFavoritesIfNeeded()
+                    do { try await Task.sleep(for: .seconds(3600)) } catch { return }
+                }
             }
         }
         .tint(MarketPalette.accent)

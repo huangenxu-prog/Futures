@@ -625,11 +625,11 @@ def bars_from_serial(serial):
 # Recent-history snapshots are persisted as ordinary JSON files. Real-time
 # subscriptions are *separate* and request only the last two genuine TqSdk
 # bars. Never synthesize missing bars, even over exchange session breaks.
-KLINE_MAX_SERIES = 24
+KLINE_MAX_SERIES = 8
 KLINE_DATA_LENGTH = 2
 KLINE_HISTORY_LENGTH = 1200  # prefetch recent history once per symbol/period
 KLINE_DISK_HISTORY_LENGTH = 8964  # preserve older pages on VPS across visits
-KLINE_MAX_MEMORY_SERIES = 96   # bounded RAM; old pages stay on disk
+KLINE_MAX_MEMORY_SERIES = 24   # soft LRU bound; active readers take precedence
 KLINE_HISTORY_REFRESH_SECONDS = 600
 # The favorites' stored history need not be re-downloaded every 10 minutes.
 # Opening a chart always requests an up-to-date reconciliation separately.
@@ -637,6 +637,19 @@ KLINE_WARM_HISTORY_FRESH_SECONDS = 3600
 KLINE_SAVE_INTERVAL = 30
 KLINE_CACHE_DIR = os.environ.get("QIHUI_KLINE_CACHE_DIR", "/root/tq_test/cache/klines")
 KLINE_PERIOD_ORDER = (900, 300, 1800, 3600, 60, 86400)
+# Watchlist hints only; leave the disabled legacy offline planner compatible.
+FAVORITE_WARM_PERIODS = (900, 1800, 3600, 86400)
+FAVORITE_WARM_MIN_AVAILABLE_KIB = 600 * 1024
+
+
+def favorite_warm_memory_ok():
+    try:
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            if line.startswith('MemAvailable:'):
+                return int(line.split()[1]) >= FAVORITE_WARM_MIN_AVAILABLE_KIB
+    except (OSError, ValueError, IndexError):
+        pass
+    return False
 
 
 def merge_kline_bars(older, newer, limit=KLINE_HISTORY_LENGTH):
@@ -809,6 +822,20 @@ class SharedKlineHub:
         self.connected = False
         self.error = None
 
+    def _trim_cache_locked(self, protect=None):
+        while len(self.cache) > KLINE_MAX_MEMORY_SERIES:
+            evictable = [(self.cached_used.get(old, 0), old)
+                         for old in self.cache if old != protect
+                         and old not in self.entries
+                         and old not in self.history_running]
+            if not evictable:
+                break
+            oldest = min(evictable)[1]
+            del self.cache[oldest]
+            self.cached_used.pop(oldest, None)
+            self.live_tail.pop(oldest, None)
+            self.live_timing.pop(oldest, None)
+
     def _restore_locked(self, key):
         if key in self.cache or self.store is None:
             return
@@ -819,6 +846,7 @@ class SharedKlineHub:
             # A disk file is instantly displayable but must be reconciled
             # before being treated as a current exchange snapshot.
             self.last_history[key] = max(0, saved_at)
+            self._trim_cache_locked(protect=key)
 
     def _schedule_locked(self, key, urgent=False):
         if time.monotonic() < self.history_retry_after.get(key, 0):
@@ -938,17 +966,7 @@ class SharedKlineHub:
                   or combined != previous and now - self.last_saved.get(key, 0) > KLINE_SAVE_INTERVAL):
                 self.last_saved[key] = now
                 to_save = combined
-            if len(self.cache) > KLINE_MAX_MEMORY_SERIES:
-                evictable = [(self.cached_used.get(old, 0), old)
-                             for old in self.cache if old not in self.entries
-                             and old not in self.pending_history
-                             and old not in self.history_running]
-                if evictable:
-                    oldest = min(evictable)[1]
-                    del self.cache[oldest]
-                    self.cached_used.pop(oldest, None)
-                    self.live_tail.pop(oldest, None)
-                    self.live_timing.pop(oldest, None)
+            self._trim_cache_locked(protect=key)
         if to_save is not None:
             if history:
                 self._persist_latest(key, to_save)
@@ -1028,23 +1046,28 @@ class SharedKlineHub:
         return bars[-count:]
 
     def warm_symbols(self, symbols):
+        if not favorite_warm_memory_ok():
+            return 0
         accepted = 0
         with self.condition:
             now = time.monotonic()
+            self.warm_until = {symbol: until for symbol, until in self.warm_until.items() if until > now}
             for symbol in list(dict.fromkeys(symbols)):
                 if now < self.warm_until.get(symbol, 0):
                     continue
-                self.warm_until[symbol] = now + 300
+                self.warm_until[symbol] = now + 3600
                 accepted += 1
-                for period in KLINE_PERIOD_ORDER:
+                for period in FAVORITE_WARM_PERIODS:
                     key = (quote_symbol(symbol), period)
-                    self._restore_locked(key)
-                    # Skip recent, complete snapshots. Old snapshots remain
-                    # immediately readable while fresh bars are fetched.
-                    bars = self.cache.get(key, ([], 0))[0]
-                    if (len(bars) >= KLINE_HISTORY_LENGTH - 2
-                            and time.time() - self.last_history.get(key, 0)
-                            < KLINE_WARM_HISTORY_FRESH_SECONDS):
+                    # Inspect disk freshness without populating the RAM LRU.
+                    if key in self.cache:
+                        bars = self.cache[key][0]
+                        saved = self.last_history.get(key, 0)
+                    elif self.store is not None:
+                        bars, saved = self.store.read(key)
+                    else:
+                        bars, saved = [], 0
+                    if bars and time.time() - saved < KLINE_WARM_HISTORY_FRESH_SECONDS:
                         continue
                     self._schedule_locked(key)
         if accepted:
@@ -1056,6 +1079,9 @@ class SharedKlineHub:
             return {"connected": self.connected, "tracked": len(self.entries),
                     "ready": len(self.cache), "data_length": KLINE_DATA_LENGTH,
                     "history_length": KLINE_HISTORY_LENGTH,
+                    "max_live_series": self.max_series,
+                    "max_memory_series": KLINE_MAX_MEMORY_SERIES,
+                    "favorite_warm_periods": FAVORITE_WARM_PERIODS,
                     "pending_history": len(self.pending_history),
                     "disk_enabled": self.store is not None}
 
@@ -1072,6 +1098,14 @@ class SharedKlineHub:
                         break
                 key = None
                 while self.urgent_history or self.background_history:
+                    if not self.urgent_history and not favorite_warm_memory_ok():
+                        # Optional work is discarded under pressure; foreground
+                        # requests can still enqueue the same series urgently.
+                        for deferred in self.background_history:
+                            self.pending_history.discard(deferred)
+                            self.warm_until.pop(deferred[0], None)
+                        self.background_history.clear()
+                        break
                     candidate = (self.urgent_history.popleft()
                                  if self.urgent_history else self.background_history.popleft())
                     if candidate in self.pending_history:
@@ -1130,7 +1164,7 @@ class SharedKlineHub:
                 with self.condition:
                     self.history_running.discard(key)
                     self.condition.notify_all()
-            if batches >= 8:
+            if batches >= 3:
                 try:
                     api.close()
                 except Exception:

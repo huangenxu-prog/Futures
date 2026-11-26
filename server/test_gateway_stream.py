@@ -336,12 +336,33 @@ class GatewayStreamingTests(unittest.TestCase):
 
     def test_warmup_never_consumes_live_subscription_slots(self):
         hub = gateway.SharedKlineHub(max_series=2)
-        with patch.object(hub, "start"):
+        with patch.object(hub, "start"), patch.object(gateway, "favorite_warm_memory_ok", return_value=True):
             accepted = hub.warm_symbols(["CZCE.MA701"])
+            self.assertEqual(hub.warm_symbols(["CZCE.MA701"]), 0)
         self.assertEqual(accepted, 1)
         self.assertEqual(len(hub.entries), 0)
-        self.assertEqual(hub.status()["pending_history"], 6)
-        self.assertEqual(hub.warm_symbols(["CZCE.MA701"]), 0)
+        self.assertEqual(hub.status()["pending_history"], 4)
+        self.assertEqual(set(hub.pending_history), {("CZCE.MA701", p) for p in (900, 1800, 3600, 86400)})
+
+    def test_warmup_skips_low_memory_without_touching_cache(self):
+        hub = gateway.SharedKlineHub()
+        with patch.object(hub, "start") as start, patch.object(gateway, "favorite_warm_memory_ok", return_value=False):
+            self.assertEqual(hub.warm_symbols(["CZCE.MA701"]), 0)
+            start.assert_not_called()
+        self.assertFalse(hub.pending_history)
+        self.assertFalse(hub.cache)
+
+    def test_recent_disk_warmup_does_not_fill_ram(self):
+        from unittest.mock import Mock
+        import time
+        store = Mock()
+        store.read.return_value = ([{"time": 100}], time.time())
+        hub = gateway.SharedKlineHub(store=store)
+        with patch.object(hub, "start"), patch.object(gateway, "favorite_warm_memory_ok", return_value=True):
+            self.assertEqual(hub.warm_symbols(["CZCE.MA701"]), 1)
+        self.assertFalse(hub.cache)
+        self.assertFalse(hub.pending_history)
+        self.assertEqual(store.read.call_count, 4)
 
     def test_stream_sends_full_frame_for_corrected_previous_candle(self):
         previous = [
