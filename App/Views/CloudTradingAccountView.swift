@@ -366,6 +366,7 @@ struct TradingCenterView: View {
     @State private var local = false
     @State private var unlock = false
     @State private var cancelID: String?
+    @State private var orderDetail: CloudSnapshot.Order?
     @Environment(\.futuresCatalog) private var catalog
     @Environment(\.mainContracts) private var liveMainQuotes
     @State private var selected: PaperContract?
@@ -522,6 +523,9 @@ struct TradingCenterView: View {
                     InstrumentDetailView(instrument: chartProduct, selectedContract: chartQuote)
                 }
             }
+            .sheet(item: $orderDetail) { initial in
+                orderDetailSheet(initial)
+            }
             .sheet(isPresented: $showAccount) {
                 NavigationStack {
                     Form {
@@ -586,7 +590,7 @@ struct TradingCenterView: View {
                 if signedIn {
                     openInitialIfReady()
                 } else {
-                    pendingAction = nil; openingDraft = nil; showQuickConfirmation = false; cancelID = nil; closingSide = nil; closeConfirm = false
+                    pendingAction = nil; openingDraft = nil; showQuickConfirmation = false; orderDetail = nil; cancelID = nil; closingSide = nil; closeConfirm = false
                     recentTradeQuotes.removeAll(); expandedHolding = nil
                     key = TradeKeychain.load(address)
                 }
@@ -1174,20 +1178,28 @@ struct TradingCenterView: View {
                 Divider()
                 ForEach(orders) { o in
                     HStack(spacing: 3) {
-                        recordCell(contractName(o.symbol))
-                        recordCell(o.stateText, width: 40)
-                        recordCell(recordAction(o.direction, o.offset), width: 30)
-                            .foregroundStyle(o.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
-                        recordCell(o.price?.formatted() ?? "--", width: 48)
-                        recordCell(String(o.quantity - o.remaining) + "/" + String(o.quantity), width: 30)
-                        if tab == "挂单" && o.status == "ALIVE" && !session.isLive {
+                        let canCancel = tab == "挂单" && o.status == "ALIVE" && !session.isLive
+                        Button { orderDetail = o } label: {
+                            HStack(spacing: 3) {
+                                recordCell(contractName(o.symbol))
+                                recordCell(o.stateText, width: 40)
+                                recordCell(recordAction(o.direction, o.offset), width: 30)
+                                    .foregroundStyle(o.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
+                                recordCell(o.price?.formatted() ?? "--", width: 48)
+                                recordCell(String(o.quantity - o.remaining) + "/" + String(o.quantity), width: 30)
+                                if !canCancel {
+                                    recordCell(recordTime(o.time_ns), width: tab == "挂单" ? 38 : 58)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("查看委托详情及原始回报")
+                        if canCancel {
                             Button("撤单", role: .destructive) { cancelID = o.id }
                                 .font(.caption2).buttonStyle(.borderless).frame(width: 38).disabled(session.busy)
-                        } else {
-                            recordCell(recordTime(o.time_ns), width: tab == "挂单" ? 38 : 58)
                         }
                     }.padding(.vertical, 10)
-                    .accessibilityHint(o.message)
                     Divider()
                 }
                 if orders.isEmpty { Text(tab == "挂单" ? "暂无挂单" : "暂无委托或未取得数据").font(.caption).foregroundStyle(.secondary) }
@@ -1195,6 +1207,54 @@ struct TradingCenterView: View {
             }
             }
         }.padding(.top, 5).frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private func orderDetailSheet(_ initial: CloudSnapshot.Order) -> some View {
+        let order = session.snapshot?.orders?.first(where: { $0.id == initial.id }) ?? initial
+        let rejected = order.display_state == "REJECTED"
+        let message = order.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return NavigationStack {
+            Form {
+                Section("委托信息") {
+                    LabeledContent("合约", value: contractName(order.symbol))
+                    LabeledContent("合约代码", value: order.symbol)
+                    LabeledContent("方向", value: recordAction(order.direction, order.offset))
+                    LabeledContent("状态", value: order.stateText)
+                    LabeledContent("委托价", value: order.price?.formatted() ?? "--")
+                    LabeledContent("委托手数", value: String(order.quantity))
+                    LabeledContent("成交手数", value: String(order.quantity - order.remaining))
+                    LabeledContent("未成交手数", value: String(order.remaining))
+                    LabeledContent("委托时间（北京时间）", value: orderDetailTime(order.time_ns))
+                }
+                Section(rejected ? "拒单原因 / 原始回报" : "原始回报") {
+                    Text(message.isEmpty ? "交易网关未提供具体原因，请在快期委托记录中核对。" : message)
+                        .foregroundStyle(rejected ? MarketPalette.up : MarketPalette.ink)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Section("委托编号") {
+                    Text(order.id).font(.caption).textSelection(.enabled)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(MarketPalette.background)
+            .navigationTitle("委托详情")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("关闭") { orderDetail = nil }
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .tint(MarketPalette.accent)
+    }
+    private func orderDetailTime(_ ns: Int64?) -> String {
+        guard let ns, ns > 0 else { return "--" }
+        let formatter = DateFormatter()
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.string(from: Date(timeIntervalSince1970: Double(ns) / 1e9))
     }
 
     private func recordCell(_ value: String, width: CGFloat? = nil) -> some View {
