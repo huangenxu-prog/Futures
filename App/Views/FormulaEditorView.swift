@@ -21,6 +21,14 @@ struct FormulaEditorView: View {
                     Toggle("显示指标",isOn:$draft.enabled)
                 }
                 Section("公式源码") {
+                    Picker("公式来源", selection: Binding(get: { draft.effectivePlatform }, set: { draft.platform = $0 })) {
+                        ForEach(FormulaPlatform.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    if draft.effectivePlatform != .native {
+                        TextField("原平台独立参数，如 SHORT=12 LONG=26 M=9", text: Binding(
+                            get: { draft.parameters ?? "" }, set: { draft.parameters = $0 }))
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    }
                     TextEditor(text:$draft.source)
     .focused($focusedField,equals:"source")
                         .font(.system(size:13,design:.monospaced))
@@ -34,6 +42,9 @@ struct FormulaEditorView: View {
                     }
                 }
                 Section("语法说明") {
+                    if draft.effectivePlatform != .native {
+                        Text("直接粘贴指标正文。若原公式使用独立参数表，在上方填入对应数值。仅支持技术指标子集，未知函数或样式会在检查时报错。")
+                    } else {
                     Text(":= 定义中间变量，: 绘制输出，每行以 ; 分隔。变量名支持中文、英文字母、数字和下划线，不能以数字开头。")
                     Text("行情：OPEN HIGH LOW CLOSE VOL（O H L C V），HL2 HLC3 OHLC4；支持自定义价格表达式。")
                     Text("持仓：OPI（期末持仓），OPEN_OI（期初持仓），OI_CHANGE（本根K线持仓变化）。旧历史可能缺少持仓数据。")
@@ -53,6 +64,7 @@ struct FormulaEditorView: View {
                     Text("DRAWLINE 暂仅支持不延长：最近起点配对第一个后续终点，终点成立才补画历史线段；不代表起点当时已确认。")
                     Text("DRAWNULL 表示缺失值，适用于条件输出。当前未收盘K线的信号可能变化。")
                     Text("仅支持公式子集；EMA/SMA 从首个有效值递推，MA 等窗口函数需足够历史。缺失值不补零，不支持未来引用或任意代码。")
+                    }
                 }
                 .font(.caption)
             }
@@ -73,7 +85,7 @@ struct FormulaEditorView: View {
                         draft.name = draft.name.trimmingCharacters(in:.whitespacesAndNewlines)
                         // Raw edits must never leave stale visual composition metadata.
                         if let composition = draft.composition,
-                           (try? composition.source()) != draft.source {
+                           draft.effectivePlatform != .native || (try? composition.source()) != draft.source {
                             draft.composition = nil
                         }
                         onSave(draft); dismiss()
@@ -81,6 +93,8 @@ struct FormulaEditorView: View {
                 }
             }
             .onChange(of:draft.source) { _,_ in result = nil }
+            .onChange(of:draft.platform) { _,_ in result = nil }
+            .onChange(of:draft.parameters) { _,_ in result = nil }
             .onChange(of:draft.name) { _,_ in result = nil }
         }
     }
@@ -94,7 +108,7 @@ struct FormulaEditorView: View {
         do {
             let name = draft.name.trimmingCharacters(in:.whitespacesAndNewlines)
             guard !name.isEmpty, name.count <= 24 else { throw FormulaFailure("指标名称长度需为1～24字") }
-            _ = try FormulaProgram(draft.source)
+            _ = try draft.program()
             passed = true; result = "公式检查通过。"
             return true
         } catch {

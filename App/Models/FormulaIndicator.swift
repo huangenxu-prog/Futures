@@ -3,7 +3,7 @@ import TradingChart
 struct QihuiFormulaIndicator: ChartIndicator {
     let definition: FormulaDefinition
     let program: FormulaProgram
-    var id: String { "formula:\(definition.id):\(definition.overlay):\(definition.source)" }
+    var id: String { "formula:\(definition.id):\(definition.effectivePlatform.rawValue):\(definition.parameters ?? ""):\(definition.overlay):\(definition.source)" }
     var displayName: String { definition.name }
     var placement: IndicatorPlacement { definition.overlay ? .overlay : .pane }
 
@@ -42,13 +42,22 @@ struct QihuiFormulaIndicator: ChartIndicator {
                     }
                 }
             } else if output.histogram {
-                var sticks: [HistogramBar] = []
+                var histogramBars: [HistogramBar] = []
+                let positive = ChartColor(red:1, green:0, blue:0)
+                let negative = ChartColor(red:0, green:1, blue:0)
                 for (bar,value) in zip(input.candles,output.values) {
                     guard let value, value.isFinite else { continue }
-                    sticks.append(HistogramBar(time:bar.time,value:value,
+                    if definition.overlay && definition.effectivePlatform != .native {
+                        sticks.append(IndicatorStick(time:bar.time,start:0,end:value,width:3,hollow:false,
+                                                     color:color ?? (value < 0 ? negative : positive)))
+                        continue
+                    }
+                    histogramBars.append(HistogramBar(time:bar.time,value:value,
                         tone:value > 0 ? .positive : value < 0 ? .negative : .neutral,color:color))
                 }
-                histograms.append(IndicatorHistogram(id:"output.\(index)",name:output.name,bars:sticks))
+                if !histogramBars.isEmpty {
+                    histograms.append(IndicatorHistogram(id:"output.\(index)",name:output.name,bars:histogramBars))
+                }
             } else {
                 var values: [IndicatorValue] = []
                 for (bar,value) in zip(input.candles,output.values) {

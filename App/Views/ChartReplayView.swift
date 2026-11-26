@@ -18,6 +18,27 @@ struct ChartReplayView: View {
         return MarketBar(time: 1795499400 - Int64(499-i)*300, open: p, high: p+20,
                          low: p-20, close: p+5, preSettlement: nil, volume: 500)
     }
+    init() {
+        // Only the dedicated formula screenshot run uses these simulator preferences.
+        if ProcessInfo.processInfo.arguments.contains("-qihui-formula-replay") {
+            var settings = ChartDisplaySettings()
+            settings.enabled = []
+            var main = FormulaDefinition()
+            main.enabled = true
+            main.platform = .wenhua
+            main.name = "文华主图"
+            main.source = "MA5:MA(C,5),COLORMAGENTA,LINETHICK3;DRAWTEXT(H=HHV(H,9),H,'高'),COLORYELLOW;"
+            var pane = FormulaDefinition()
+            pane.enabled = true
+            pane.overlay = false
+            pane.platform = .tongdaxin
+            pane.name = "通达信副图"
+            pane.source = "振幅:C-MA(C,9),COLORSTICK,COLORCYAN;STICKLINE(C>MA(C,9),0,C-MA(C,9),1,0),COLORGREEN;"
+            settings.formulas = [main,pane]
+            settings.save()
+        }
+    }
+
     var body: some View {
         ProfessionalChartHost(symbol: "REPLAY", period: 300, bars: bars, feed: feed,
                               feedKey: key, priceTick: 5, showingIndicatorSettings: $settings,

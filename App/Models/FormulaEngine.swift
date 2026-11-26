@@ -21,6 +21,15 @@ struct FormulaBar: Sendable {
 }
 enum FormulaPlatform: String, Codable, CaseIterable, Sendable {
     case native, tongdaxin, hexin, wenhua
+
+    var title: String {
+        switch self {
+        case .native: return "期汇原生"
+        case .tongdaxin: return "通达信"
+        case .hexin: return "同花顺期货通"
+        case .wenhua: return "文华财经"
+        }
+    }
 }
 
 struct FormulaDefinition: Codable, Equatable, Identifiable, Sendable {
@@ -30,7 +39,11 @@ struct FormulaDefinition: Codable, Equatable, Identifiable, Sendable {
     var overlay = true
     var enabled = false
     var composition: FormulaComposition? = nil
+    var parameters: String? = nil
     var platform: FormulaPlatform? = nil
+    func program() throws -> FormulaProgram {
+        try FormulaProgram(source, platform: effectivePlatform, parameters: parameters ?? "")
+    }
     var effectivePlatform: FormulaPlatform { platform ?? .native }
 }
 
@@ -97,8 +110,19 @@ struct FormulaOutput: Sendable {
 struct FormulaProgram: Sendable {
     private let statements: [FormulaStatement]
 
-    init(_ source: String, platform: FormulaPlatform = .native) throws {
-        var parser = try FormulaParser(source, platform: platform)
+    init(_ source: String, platform: FormulaPlatform = .native, parameters: String = "") throws {
+        var definitions = ""
+        if platform != .native {
+            guard parameters.utf8.count <= 1024 else { throw FormulaFailure("参数表过长") }
+            for entry in parameters.split(whereSeparator: { $0.isWhitespace || $0 == "," || $0 == "，" }) {
+                let pair = entry.split(separator: "=", omittingEmptySubsequences: false)
+                guard pair.count == 2, FormulaIdentifier.valid(String(pair[0])),
+                      !pair[1].isEmpty, pair[1].allSatisfy({ $0.isASCII && ($0.isNumber || ".-+".contains($0)) }),
+                      Double(pair[1])?.isFinite == true else { throw FormulaFailure("参数请按 名称=数值 填写，例如 N=9 M1=3") }
+                definitions += "\(pair[0]):=\(pair[1]);"
+            }
+        }
+        var parser = try FormulaParser(definitions + source, platform: platform)
         statements = try parser.parse()
         // Validate even an empty chart: functions and variables cannot be
         // deferred until live data happens to arrive.
@@ -327,6 +351,9 @@ struct FormulaProgram: Sendable {
             let arity: [String:Int] = [
                 "MA":2,"EMA":2,"SMA":3,"WMA":2,"HMA":2,"DEMA":2,"TEMA":2,"DMA":2,"WILDER":2,
                 "HHV":2,"LLV":2,"SUM":2,"STD":2,
+                "#WHEMA":2,"#WHSMA":3,"#WHSUM":2,"#WHCOUNT":2,"#WHMA":2,"#WHEVERY":2,
+                "#WHHHV":2,"#WHLLV":2,"#TDXSUM":2,"BETWEEN":3,"BARSSINCE":1,
+                "STDP":2,"VAR":2,"VARP":2,"#SAMPLESTD":2,"BARSLASTCOUNT":1,
                 "REF":2,"COUNT":2,"IF":3,"CROSS":2,"BARSLAST":1,"ABS":1,"MAX":2,"MIN":2,
                 "SQRT":1,"POW":2,"EXP":1,"LN":1,"LOG":1,"SIGN":1,
                 "FLOOR":1,"CEILING":1,"INTPART":1,"SIN":1,"COS":1,"TAN":1,
@@ -335,10 +362,11 @@ struct FormulaProgram: Sendable {
             guard let expected = arity[fn] else { throw FormulaFailure("暂不支持函数：\(fn)") }
             guard args.count == expected else { throw FormulaFailure("\(fn) 需要 \(expected) 个参数") }
             let x = try eval(args[0],env,n)
-            if fn == "RANGE" {
+            if fn == "RANGE" || fn == "BETWEEN" {
                 let low = try eval(args[1],env,n), high = try eval(args[2],env,n)
                 return x.indices.map { i in
                     guard let v = x[i], let a = low[i], let b = high[i] else { return nil }
+                    if fn == "BETWEEN" { return min(a,b) <= v && v <= max(a,b) ? 1 : 0 }
                     return v > a && v < b ? 1 : 0
                 }
             }
@@ -370,6 +398,70 @@ struct FormulaProgram: Sendable {
             }
             if fn == "ABS" { return x.map { $0.map(abs) } }
             if fn == "NOT" { return x.map { $0.map { $0 == 0 ? 1.0 : 0.0 } } }
+            if fn == "#WHEMA" || fn == "#WHSMA" {
+                let p = try period(args[1])
+                let m = fn == "#WHSMA" ? try period(args[2]) : 1
+                guard m <= p else { throw FormulaFailure("SMA 权重超过周期") }
+                var previous: Double?, count = 0
+                return x.map { value in
+                    guard let value else { previous = nil; count = 0; return nil }
+                    count = min(p,count+1)
+                    let alpha = fn == "#WHEMA" ? 2.0/Double(count+1) : Double(m)/Double(count)
+                    previous = finite(previous.map { $0 + alpha*(value-$0) } ?? value)
+                    return previous
+                }
+            }
+            if fn == "#WHHHV" || fn == "#WHLLV" {
+                let lengths = try eval(args[1],env,n)
+                if case .constant = args[1] { _ = try period(args[1],zero:true) }
+                let available = lengths.enumerated().map { i, length -> Double? in
+                    guard let length, length >= 0, length.rounded() == length else { return nil }
+                    return length == 0 ? Double(i+1) : min(length,Double(i+1))
+                }
+                return dynamicExtreme(x,periods:available,highest:fn == "#WHHHV")
+            }
+            if ["#WHSUM","#WHCOUNT","#WHMA","#WHEVERY","#TDXSUM"].contains(fn) {
+                let lengths = try eval(args[1],env,n)
+                if fn == "#TDXSUM" { _ = try period(args[1],zero:true) }
+                else if case .constant = args[1] { _ = try period(args[1],zero:true) }
+                var totals = [0.0], valid = [0]
+                let countTrue = fn == "#WHCOUNT" || fn == "#WHEVERY"
+                for value in x {
+                    let term = value.map { countTrue ? ($0 == 0 ? 0.0 : 1.0) : $0 } ?? 0
+                    totals.append(totals[totals.count-1] + term)
+                    valid.append(valid[valid.count-1] + (value == nil ? 0 : 1))
+                }
+                return x.indices.map { i in
+                    guard let length = lengths[i], length >= 0, length.rounded() == length else { return nil }
+                    if fn == "#WHMA" || fn == "#WHEVERY" {
+                        if length == 0 || length > Double(i+1) { return fn == "#WHEVERY" ? 0 : nil }
+                    }
+                    let end = i+1
+                    let start = length == 0 ? 0 : end-Int(min(Double(end),length))
+                    let observations = valid[end]-valid[start]
+                    guard observations > 0, x[i] != nil else { return nil }
+                    let total = totals[end]-totals[start]
+                    if fn == "#WHMA" { return observations == end-start ? finite(total/length) : nil }
+                    if fn == "#WHEVERY" { return total == length ? 1 : 0 }
+                    return finite(total)
+                }
+            }
+            if fn == "BARSSINCE" {
+                var first: Int?
+                return x.enumerated().map { i, value in
+                    guard let value else { return nil }
+                    if first == nil && value != 0 { first = i }
+                    return first.map { Double(i-$0) }
+                }
+            }
+            if fn == "BARSLASTCOUNT" {
+                var run = 0
+                return x.map { value in
+                    guard let value else { run = 0; return nil }
+                    run = value == 0 ? 0 : run + 1
+                    return Double(run)
+                }
+            }
             if fn == "BARSCOUNT" {
                 var count = 0
                 return x.map { v in
@@ -460,6 +552,34 @@ struct FormulaProgram: Sendable {
                 return Self.dynamicExtreme(x,periods:periods,highest:fn == "HHV")
             }
             let p = try period(args[1],zero: fn == "REF")
+            if ["#SAMPLESTD","STDP","VAR","VARP"].contains(fn) {
+                let sample = fn == "#SAMPLESTD" || fn == "VAR"
+                let divisor = Double(sample ? p-1 : p)
+                // Center on a nearby observation and periodically rebuild to bound drift.
+                var anchor = 0.0, sum = 0.0, squares = 0.0, valid = 0
+                return x.indices.map { i in
+                    if i % p == 0 {
+                        anchor = x[i] ?? 0
+                        sum = 0; squares = 0; valid = 0
+                        for j in max(0,i-p+1)..<i {
+                            if let value = x[j] {
+                                let delta = value-anchor
+                                sum += delta; squares += delta*delta; valid += 1
+                            }
+                        }
+                    } else if i >= p, let old = x[i-p] {
+                        let delta = old-anchor
+                        sum -= delta; squares -= delta*delta; valid -= 1
+                    }
+                    if let value = x[i] {
+                        let delta = value-anchor
+                        sum += delta; squares += delta*delta; valid += 1
+                    }
+                    guard valid == p, divisor > 0 else { return nil }
+                    let variance = max(0,squares-sum*sum/Double(p))/divisor
+                    return finite(fn == "VAR" || fn == "VARP" ? variance : sqrt(variance))
+                }
+            }
             if fn == "HMA" {
                 let half = max(1,p/2)
                 let root = max(1,Int(sqrt(Double(p))))
@@ -645,31 +765,66 @@ private struct FormulaParser {
         var statements: [FormulaStatement] = []
         while token != .end {
             guard case .name(let name) = take() else { throw FormulaFailure("每条公式必须以变量名开头") }
-            let drawing = ["STICKLINE","DRAWICON","DRAWTEXT","DRAWLINE"].contains(name) && token == .symbol("(")
+            let drawingNames = ["STICKLINE","DRAWICON","DRAWTEXT","DRAWLINE"]
+            let drawing = (drawingNames.contains(name) || (platform == .wenhua && name == "STICK")) && token == .symbol("(")
+            var outputName = name
+            var color: String?
             var visible: Bool
             let expr: FormulaExpr
             if drawing {
                 // Rewind the function name so the ordinary expression parser
                 // handles nested arguments, including quoted label text.
                 index -= 1
-                expr = try expression()
-                guard case .call = expr else { throw FormulaFailure("绘图函数必须独立成句") }
+                let call = try expression()
+                guard case .call(let fn, var args) = call else { throw FormulaFailure("绘图函数必须独立成句") }
+                if platform != .native && (fn == "DRAWICON" || fn == "DRAWLINE") {
+                    throw FormulaFailure("当前平台尚未适配 " + fn)
+                }
+                if platform == .wenhua && (fn == "STICK" || fn == "STICKLINE") {
+                    let colorIndex = fn == "STICK" ? 4 : 3
+                    guard args.count == colorIndex + 2,
+                          case .variable(let paint) = args[colorIndex],
+                          let rgb = Self.platformColors[paint] else { throw FormulaFailure(fn + " 需要文华颜色常量和空心参数") }
+                    color = rgb
+                    args.remove(at:colorIndex)
+                    if fn == "STICKLINE" { args.insert(.constant(10),at:3) }
+                    else {
+                        guard case .constant(let width) = args[3], (0...3).contains(width) else {
+                            throw FormulaFailure("文华 STICK 支持宽度 0～3")
+                        }
+                        args[3] = .constant(width * (10.0/3))
+                    }
+                    if case .constant(let flag) = args[4] { args[4] = .constant(flag == 0 ? 0 : 1) }
+                    expr = .call("STICKLINE",args)
+                } else if platform == .tongdaxin && fn == "STICKLINE" {
+                    guard args.count == 5, case .constant(let width) = args[3],
+                          (0...4).contains(width) else { throw FormulaFailure("通达信 STICKLINE 支持固定宽度 0～4") }
+                    args[3] = .constant(width * 2.5)
+                    expr = .call(fn,args)
+                } else { expr = call }
                 visible = true
             } else {
                 if accept(":") { visible = true }
                 else if accept(":=") { visible = false }
-                else { throw FormulaFailure("\(name) 后需要 : 或 :=") }
+                else if platform != .native {
+                    index -= 1
+                    outputName = "#\(statements.count + 1)"
+                    visible = true
+                } else { throw FormulaFailure("\(name) 后需要 : 或 :=") }
                 expr = try expression()
             }
-            var color: String?, width = 1.5, histogram = false
+            var width = 1.5, histogram = false
             var fontSize: Double? = nil
             while accept(",") {
                 guard case .name(let style) = take() else { throw FormulaFailure("绘图属性格式不正确") }
                 let colors = ["COLORRED":"FF5B5B","COLORGREEN":"23C6C8","COLORBLUE":"4C8DFF",
                               "COLORYELLOW":"F5A623","COLORWHITE":"FFFFFF","COLORMAGENTA":"D77DFF",
                               "COLORCYAN":"23C6C8","COLORBLACK":"000000"]
-                if let value = colors[style] { color = value }
-                else if style.hasPrefix("COLOR"), style.count == 11, UInt32(style.dropFirst(5),radix:16) != nil { color = String(style.dropFirst(5)) }
+                if let value = (platform == .native ? colors : Self.platformColors)[style] { color = value }
+                else if style.hasPrefix("COLOR"), style.count == 11, UInt32(style.dropFirst(5),radix:16) != nil {
+                    let hex = String(style.dropFirst(5))
+                    color = platform == .tongdaxin ? String(hex.suffix(2)) + String(hex.dropFirst(2).prefix(2)) + String(hex.prefix(2)) : hex
+                }
                 else if style == "NODRAW" { visible = false }
                 else if style.hasPrefix("FONTSIZE"), let size = Double(style.dropFirst(8)), (6...40).contains(size) { fontSize = size }
                 else if style.hasPrefix("LINETHICK"), let value = Double(style.dropFirst(9)),
@@ -679,7 +834,13 @@ private struct FormulaParser {
             }
             if token != .end { try expect(";") }
             if drawing && histogram { throw FormulaFailure("绘图函数不能再加柱状图属性") }
-            statements.append(.init(name:name,expr:expr,visible:visible,color:color,width:width,histogram:histogram,drawing:drawing,fontSize:fontSize))
+            if platform != .native {
+                if drawing && !visible { throw FormulaFailure("绘图调用不支持 NODRAW") }
+                if fontSize != nil && name != "DRAWTEXT" { throw FormulaFailure("FONTSIZE 仅适用于文字") }
+                if width != 1.5 && (drawing || histogram) { throw FormulaFailure("此绘图类型不支持 LINETHICK") }
+                if !visible && histogram { throw FormulaFailure("柱状图需要用 : 定义输出") }
+            }
+            statements.append(.init(name:outputName,expr:expr,visible:visible,color:color,width:width,histogram:histogram,drawing:drawing,fontSize:fontSize))
             guard statements.count <= 96, statements.filter(\.visible).count <= 48 else {
                 throw FormulaFailure("最多96条语句、48条绘图输出")
             }
@@ -687,6 +848,22 @@ private struct FormulaParser {
         guard statements.contains(where: \.visible) else { throw FormulaFailure("至少需要一条绘图输出") }
         return statements
     }
+
+    private static let commonFunctions: Set<String> = [
+        "MA","EMA","SMA","HHV","LLV","SUM","REF","COUNT","IF","CROSS","BARSLAST",
+        "ABS","MAX","MIN","FILTER","NOT","EXIST","EVERY","VALUEWHEN","DRAWTEXT","STICKLINE"
+    ]
+    private static let platformFunctions: [FormulaPlatform:Set<String>] = [
+        .tongdaxin:["WMA","DMA","EXPMA","STD","STDP","VAR","VARP","BARSLASTCOUNT","BARSSINCE",
+                    "BARSCOUNT","HHVBARS","LLVBARS","IFN","IFF","BETWEEN","SQRT","POW","EXP",
+                    "LN","LOG","SIGN","FLOOR","CEILING","INTPART","SIN","COS","TAN"],
+        .wenhua:["EMA2","WMA","DMA","STD","STDP","VAR","VARP","BARSLASTCOUNT","BARSSINCE",
+                 "IFELSE","CROSSUP","CROSSDOWN","BETWEEN","STICK","SQRT","POW","ABS"],
+        .hexin:["CROSSUP","CROSSDOWN","SQRT","POW","RANGE"]
+    ]
+
+    private static let platformColors = ["COLORRED":"FF0000","COLORGREEN":"00FF00","COLORBLUE":"0000FF",
+        "COLORYELLOW":"FFFF00","COLORWHITE":"FFFFFF","COLORMAGENTA":"FF00FF","COLORCYAN":"00FFFF","COLORBLACK":"000000"]
 
     private func precedence(_ op: String) -> Int {
         switch op {
@@ -701,7 +878,10 @@ private struct FormulaParser {
     private mutating func expression(_ minimum: Int = 1, depth: Int = 0) throws -> FormulaExpr {
         guard depth < 64 else { throw FormulaFailure("表达式嵌套过深") }
         var lhs = try atom(depth:depth+1)
+        var chainLength = 0
         while case .symbol(let op) = token, precedence(op) >= minimum {
+            chainLength += 1
+            guard chainLength <= 96 || platform == .native else { throw FormulaFailure("单个表达式过长，请拆成中间变量") }
             _ = take()
             let rhs = try expression(precedence(op)+1,depth:depth+1)
             lhs = .binary(op,lhs,rhs)
@@ -721,11 +901,34 @@ private struct FormulaParser {
         case .number(let value): return .constant(value)
         case .text(let value): return .text(value)
         case .name(let name):
-            guard accept("(") else { return .variable(name) }
+            guard accept("(") else {
+                if platform == .wenhua && ["ISUP","ISDOWN","ISEQUAL"].contains(name) {
+                    let op = name == "ISUP" ? ">" : name == "ISDOWN" ? "<" : "="
+                    return .binary(op,.variable("C"),.variable("O"))
+                }
+                return .variable(name)
+            }
             var args: [FormulaExpr] = []
             if !accept(")") {
                 repeat { args.append(try expression(depth:depth+1)) } while accept(",")
                 try expect(")")
+            }
+            if platform != .native {
+                guard Self.commonFunctions.contains(name) || Self.platformFunctions[platform]?.contains(name) == true else {
+                    throw FormulaFailure(platform.title + " 暂不支持函数：" + name)
+                }
+                if platform == .wenhua {
+                    if ["EMA","SMA","SUM","COUNT","HHV","LLV","MA","EVERY"].contains(name) {
+                        return .call("#WH"+name,args)
+                    }
+                    if ["HHVBARS","LLVBARS"].contains(name) { throw FormulaFailure("文华极值位置的起算规则尚未适配：" + name) }
+                }
+                if platform == .tongdaxin && name == "SUM" { return .call("#TDXSUM",args) }
+                if name == "STD" { return .call("#SAMPLESTD",args) }
+                if name == "EXPMA" && platform == .tongdaxin { return .call("EMA",args) }
+                if platform == .wenhua && name == "IFELSE" || platform == .tongdaxin && name == "IFF" {
+                    return .call("IF",args)
+                }
             }
             if platform == .tongdaxin && name == "IFN" && args.count == 3 {
                 return .call("IF", [args[0], args[2], args[1]])
