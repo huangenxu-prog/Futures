@@ -43,6 +43,39 @@ enum MarketPalette {
         return muted
     }
 }
+// Home quote-list colors only. Do not change MarketPalette or CandleAppearance:
+// chart defaults, saved candle colors, indicator colors and trading keep their
+// own existing configuration.
+private enum HomeMarketPalette {
+    private static func adaptive(light: UInt32, dark: UInt32) -> Color {
+        Color(uiColor: UIColor { traits in
+            let rgb = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(
+                red: CGFloat((rgb >> 16) & 0xFF) / 255,
+                green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                blue: CGFloat(rgb & 0xFF) / 255,
+                alpha: 1
+            )
+        })
+    }
+
+    static let background = adaptive(light: 0xF1F3F6, dark: 0x111318)
+    static let surface = background
+    static let header = adaptive(light: 0xE7EBF0, dark: 0x191F29)
+    static let ink = adaptive(light: 0x242D3B, dark: 0xE6EAF0)
+    static let muted = adaptive(light: 0x758195, dark: 0x8994A6)
+    static let divider = adaptive(light: 0xD9DFE7, dark: 0x292F39)
+    static let accent = adaptive(light: 0x345C91, dark: 0x508FFF)
+    static let up = adaptive(light: 0xC83A46, dark: 0xFF5159)
+    static let down = adaptive(light: 0x008A68, dark: 0x20B5B8)
+
+    static func movement(_ change: Double?) -> Color {
+        guard let change, change.isFinite else { return muted }
+        if change > 0 { return up }
+        if change < 0 { return down }
+        return muted
+    }
+}
 struct LightMarketView: View {
     private enum Scope: String, CaseIterable {
         case favorites = "自选"
@@ -209,8 +242,8 @@ struct LightMarketView: View {
                 List {
                     ForEach(instruments) { item in
                         marketRow(item)
-                            .listRowBackground(MarketPalette.surface)
-                            .listRowSeparatorTint(MarketPalette.divider)
+                            .listRowBackground(HomeMarketPalette.surface)
+                            .listRowSeparatorTint(HomeMarketPalette.divider)
                             .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 if favorites.ids.contains(item.id) {
@@ -218,7 +251,7 @@ struct LightMarketView: View {
                                         favorites.toggle(item.id)
                                     }
                                 } else {
-                                    Button("加入自选") { favorites.toggle(item.id) }.tint(MarketPalette.accent)
+                                    Button("加入自选") { favorites.toggle(item.id) }.tint(HomeMarketPalette.accent)
                                 }
                             }
 
@@ -226,7 +259,7 @@ struct LightMarketView: View {
                     .onMove(perform: move)
                     if instruments.isEmpty {
                         Text(search.isEmpty ? "还没有自选品种，可在全部品种中添加。" : "没有找到匹配的品种")
-                            .foregroundStyle(MarketPalette.muted)
+                            .foregroundStyle(HomeMarketPalette.muted)
                             .font(.subheadline)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 50)
@@ -235,9 +268,11 @@ struct LightMarketView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
+                .background(HomeMarketPalette.background)
                 .environment(\.editMode, .constant(editing ? .active : .inactive))
             }
-            .background(MarketPalette.background.ignoresSafeArea())
+            .background(HomeMarketPalette.header.ignoresSafeArea())
+            .tint(HomeMarketPalette.accent)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(item: $selectedInstrument) { item in
                 InstrumentDetailView(instrument: item, sequence: detailSequence)
@@ -276,24 +311,24 @@ struct LightMarketView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 15))
-                    .foregroundStyle(MarketPalette.muted)
+                    .foregroundStyle(HomeMarketPalette.muted)
                 TextField("搜索品种、代码", text: $search)
                     .font(.system(size: 14))
-                    .foregroundStyle(MarketPalette.ink)
+                    .foregroundStyle(HomeMarketPalette.ink)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .accessibilityLabel("搜索期货品种")
                 if !search.isEmpty {
                     Button { search = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(MarketPalette.muted)
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(HomeMarketPalette.muted)
                     }
                     .accessibilityLabel("清除搜索")
                 }
             }
             .padding(.horizontal, 11)
             .frame(height: 36)
-            .background(MarketPalette.surface, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(MarketPalette.divider, lineWidth: 1))
+            .background(HomeMarketPalette.surface, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(HomeMarketPalette.divider.opacity(0.7), lineWidth: 0.6))
             Button {
                 showingStrategyCenter = true
             } label: {
@@ -302,7 +337,7 @@ struct LightMarketView: View {
                         .font(.system(size:15,weight:.medium))
                     Text("设置").font(.system(size:13,weight:.medium))
                 }
-                .foregroundStyle(MarketPalette.accent)
+                .foregroundStyle(HomeMarketPalette.accent)
                 .frame(height:36)
                 .padding(.horizontal,3)
                 .contentShape(Rectangle())
@@ -314,7 +349,7 @@ struct LightMarketView: View {
                 showingTradingCenter = true
             } label: {
                 Text("交易").font(.system(size:13,weight:.medium))
-                    .foregroundStyle(MarketPalette.accent)
+                    .foregroundStyle(HomeMarketPalette.accent)
                     .frame(height:36).padding(.horizontal,3)
             }
             .buttonStyle(.plain)
@@ -337,11 +372,11 @@ struct LightMarketView: View {
                     VStack(spacing: 9) {
                         Text(option.rawValue)
                             .font(.system(size: 15, weight: scope == option ? .semibold : .regular))
-                            .foregroundStyle(scope == option ? MarketPalette.ink : MarketPalette.muted)
+                            .foregroundStyle(scope == option ? HomeMarketPalette.ink : HomeMarketPalette.muted)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                         Rectangle()
-                            .fill(scope == option ? MarketPalette.accent : .clear)
+                            .fill(scope == option ? HomeMarketPalette.accent : .clear)
                             .frame(height: 2)
                     }
                 }
@@ -351,7 +386,7 @@ struct LightMarketView: View {
             if scope == .favorites && search.isEmpty && sortBy == "默认" && !favorites.ids.isEmpty {
                 Button(editing ? "完成" : "编辑") { editing.toggle() }
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(MarketPalette.accent)
+                    .foregroundStyle(HomeMarketPalette.accent)
                     .padding(.bottom, 7)
             }
             Menu {
@@ -364,7 +399,7 @@ struct LightMarketView: View {
             } label: {
                 Image(systemName: "arrow.up.arrow.down")
                     .font(.system(size: 13))
-                    .foregroundStyle(MarketPalette.muted)
+                    .foregroundStyle(HomeMarketPalette.muted)
                     .frame(width: 25, height: 30)
             }
             .padding(.bottom, 6)
@@ -383,12 +418,12 @@ struct LightMarketView: View {
                     } label: {
                         Text(group)
                             .font(.system(size: 12, weight: selectedCategory == group ? .semibold : .regular))
-                            .foregroundStyle(selectedCategory == group ? MarketPalette.accent : MarketPalette.muted)
+                            .foregroundStyle(selectedCategory == group ? HomeMarketPalette.accent : HomeMarketPalette.muted)
                             .padding(.horizontal, 12)
                             .frame(height: 28)
-                            .background(selectedCategory == group ? MarketPalette.accent.opacity(0.08) : MarketPalette.surface,
+                            .background(selectedCategory == group ? HomeMarketPalette.accent.opacity(0.08) : HomeMarketPalette.surface,
                                         in: Capsule())
-                            .overlay(Capsule().stroke(MarketPalette.divider, lineWidth: 0.8))
+                            .overlay(Capsule().stroke(HomeMarketPalette.divider, lineWidth: 0.8))
                     }
                     .buttonStyle(.plain)
                 }
@@ -412,10 +447,10 @@ struct LightMarketView: View {
             if showsFavoriteControl || editing { Color.clear.frame(width: 23) }
         }
         .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(MarketPalette.muted)
+        .foregroundStyle(HomeMarketPalette.muted)
         .padding(.horizontal, 12).frame(height: 33)
-        .background(MarketPalette.background)
-        .overlay(alignment: .bottom) { Rectangle().fill(MarketPalette.divider).frame(height: 1) }
+        .background(HomeMarketPalette.header)
+        .overlay(alignment: .bottom) { Rectangle().fill(HomeMarketPalette.divider).frame(height: 1) }
     }
     private func marketRow(_ item: FuturesInstrument) -> some View {
         let q = quote(for: item.id)
@@ -424,16 +459,16 @@ struct LightMarketView: View {
             HStack(spacing: 5) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.name + (q.map { " " + $0.month } ?? ""))
-                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(MarketPalette.ink)
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(HomeMarketPalette.ink)
                         .lineLimit(1).minimumScaleFactor(0.68)
                     Text(q?.code ?? item.id)
-                        .font(.system(size: 9, design: .monospaced)).foregroundStyle(MarketPalette.muted)
+                        .font(.system(size: 9, design: .monospaced)).foregroundStyle(HomeMarketPalette.muted)
                         .lineLimit(1).minimumScaleFactor(0.7)
                 }.frame(width: nameWidth, alignment: .leading)
                 ForEach(0..<3) { index in
                     Text(dataValue(index, q))
                         .font(.system(size: index == 0 ? 14 : 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(MarketPalette.movement(index == 2 ? q?.interestChange : q?.change(basis: changeBasis)))
+                        .foregroundStyle(index == 2 ? HomeMarketPalette.ink : HomeMarketPalette.movement(q?.change(basis: changeBasis)))
                         .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
@@ -454,7 +489,7 @@ struct LightMarketView: View {
             if showsFavoriteControl {
                 Button { favorites.toggle(item.id) } label: {
                     Image(systemName: isFavorite ? "star.fill" : "star").font(.system(size: 12))
-                        .foregroundStyle(isFavorite ? MarketPalette.accent : MarketPalette.muted)
+                        .foregroundStyle(isFavorite ? HomeMarketPalette.accent : HomeMarketPalette.muted)
                         .frame(width: 23, height: 40)
                 }.buttonStyle(.borderless)
             }
