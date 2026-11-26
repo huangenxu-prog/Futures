@@ -151,6 +151,25 @@ class RecoveryTests(unittest.TestCase):
             self.assertFalse(session.stop.is_set())
             worker.join.assert_not_called()
 
+    def test_auto_login_is_opt_in(self):
+        with patch.dict(g.os.environ, {}, clear=True):
+            self.assertIsNone(g.startup_credentials())
+            self.assertFalse(g.start_configured_session())
+        with patch.dict(g.os.environ, {"QIHUI_TRADE_AUTO_LOGIN": "1"}, clear=True):
+            with self.assertRaises(RuntimeError):
+                g.startup_credentials()
+
+    def test_configured_startup_session(self):
+        from unittest.mock import Mock
+        with patch.dict(g.os.environ, {"QIHUI_TRADE_AUTO_LOGIN": "1",
+                                        "QIHUI_TQ_USERNAME": "test",
+                                        "QIHUI_TQ_PASSWORD": "test-password"}, clear=True):
+            with patch.object(g, "SESSION", None), patch.object(g, "MAINTENANCE", g.threading.Event()), patch.object(g, "Session") as factory:
+                factory.return_value.worker.is_alive.return_value = True
+                self.assertTrue(g.start_configured_session())
+                self.assertFalse(g.start_configured_session())
+                factory.assert_called_once_with("test", "test-password", keepalive=True)
+
     def test_password_verifier(self):
         with patch.object(g.threading.Thread, "start"):
             s = g.Session("test", "password")
