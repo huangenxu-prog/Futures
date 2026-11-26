@@ -20,6 +20,31 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_nondefault_continuous_symbols_are_validated_by_catalog(self):
+        products = ["CZCE.OI", "CZCE.PF", "CZCE.PR", "CZCE.PX", "CZCE.SH", "CZCE.SF"]
+        catalog = [{"id": product} for product in products]
+        with patch.object(gateway, "product_catalog", return_value=catalog):
+            for product in products:
+                with self.subTest(product=product):
+                    self.assertTrue(gateway.supported_symbol(product))
+                    self.assertTrue(gateway.supported_symbol(product + "701"))
+                    self.assertEqual(gateway.quote_symbol(product), "KQ.m@" + product)
+                    output = []
+                    handler = SimpleNamespace(
+                        path="/v1/klines?symbol=" + product + "&period=1800&count=200",
+                        headers={}, reply=lambda status, payload: output.append((status, payload)))
+                    bars = [{"time": 100, "open": 1, "high": 2, "low": 1, "close": 2, "volume": 5}]
+                    with patch.object(gateway, "MARKET_ACCESS", ""), patch.object(
+                            gateway.KLINE_HUB, "snapshot", return_value=bars) as snapshot:
+                        gateway.Handler.do_GET(handler)
+                        snapshot.assert_called_once_with(product, 1800, 200)
+                    self.assertEqual(output[0][0], 200)
+                    self.assertEqual(output[0][1]["symbol"], product)
+            self.assertFalse(gateway.supported_symbol("CZCE.UNKNOWN"))
+            self.assertFalse(gateway.supported_symbol("CZCE.UNKNOWN701"))
+            self.assertFalse(gateway.supported_symbol("INVALID.OI"))
+            self.assertTrue(gateway.supported_symbol("CZCE.SR"))
+
     def test_quote_poll_age_is_distinct_from_quote_change_age(self):
         hub = gateway.LiveQuoteHub()
         hub.record_poll(False)
