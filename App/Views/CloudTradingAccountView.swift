@@ -100,6 +100,9 @@ private struct CloudSnapshot: Decodable {
     let orders: [Order]?
     let fills: [Fill]?
     let simulation_orders: Bool?
+    let trade_mode: String?
+    let order_submission_enabled: Bool?
+    let maintenance: Bool?
 }
 private struct CloudReply: Decodable {
     let token: String?
@@ -126,6 +129,12 @@ private final class CloudTradeSession: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var error: String?
     private var token: String?
+    private var expectedMode = "simulation"
+    var isLive: Bool { expectedMode == "live_readonly" }
+    private func accepts(_ data: CloudSnapshot, mode: String) -> Bool {
+        if mode == "live_readonly" { return data.trade_mode == mode && data.simulation_orders == false && data.order_submission_enabled == false }
+        return data.simulation_orders == true && (data.trade_mode == nil || data.trade_mode == mode)
+    }
     private var accessKey = ""
     private var endpoint: URL?
     private var generation = UUID()
@@ -154,8 +163,8 @@ private final class CloudTradeSession: ObservableObject {
         self.token = token; endpoint = url; accessKey = key; activeAddress = address
         generation = UUID()
         savedPendingAddress = address
-        let unresolved = TradeKeychain.load(address, kind: "pending")
-        if !unresolved.isEmpty { pendingOrder = unresolved }
+        let unresolved = isLive ? "" : TradeKeychain.load(address, kind: "pending")
+        pendingOrder = unresolved.isEmpty ? nil : unresolved
         reconcile(data)
         snapshot = data; signedIn = true
         error = nil
@@ -174,7 +183,7 @@ private final class CloudTradeSession: ObservableObject {
     @Published private(set) var pendingOrder: String?
     @Published private(set) var actionMessage: String?
     private var mutating = false
-    var canTrade: Bool { signedIn && snapshot?.simulation_orders == true && !busy && !mutating && pendingOrder == nil }
+    var canTrade: Bool { signedIn && !isLive && snapshot?.simulation_orders == true && snapshot?.order_submission_enabled != false && snapshot?.maintenance != true && !busy && !mutating && pendingOrder == nil }
     func submit(symbol: String, direction: String, offset: String, price: String, quantity: String) async {
         guard canTrade, let url = endpoint, let token else { return }
         mutating = true; busy = true
@@ -197,7 +206,7 @@ private final class CloudTradeSession: ObservableObject {
         await refresh()
     }
     func cancel(_ id: String) async {
-        guard signedIn, snapshot?.simulation_orders == true, !busy, !mutating, let url = endpoint, let token else { return }
+        guard signedIn, !isLive, snapshot?.simulation_orders == true, snapshot?.maintenance != true, !busy, !mutating, let url = endpoint, let token else { return }
         mutating = true; busy = true
         defer { mutating = false; busy = false }
         do {
@@ -221,7 +230,7 @@ private final class CloudTradeSession: ObservableObject {
         config.timeoutIntervalForResource = 85
         return URLSession(configuration: config, delegate: TradeRedirectGuard(), delegateQueue: nil)
     }()
-    func login(address: String, key: String, username: String, password: String) async {
+    func login(address: String, key: String, username: String, password: String, mode: String = "simulation") async {
         guard !busy, !signedIn else { return }
         guard let parts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
               parts.scheme == "https", parts.host != nil, parts.user == nil, parts.password == nil,
@@ -231,13 +240,14 @@ private final class CloudTradeSession: ObservableObject {
         busy = true; error = nil
         defer { busy = false }
         do {
-            let previous = TradeKeychain.load(address, kind: "session")
+            expectedMode = mode
+            let previous = isLive ? "" : TradeKeychain.load(address, kind: "session")
             if !previous.isEmpty,
                TradeKeychain.load(address, kind: "username") == username,
                TradeKeychain.load(address, kind: "password") == password {
                 do {
                     let reply = try await request(base: url, action: "snapshot", key: key, token: previous, body: nil)
-                    guard let data = reply.snapshot else { throw CloudTradeError.unavailable }
+                    guard let data = reply.snapshot, accepts(data, mode: mode) else { throw CloudTradeError.rejected }
                     install(data, token: previous, url: url, address: address, key: key)
                     return
                 } catch let failure as CloudTradeError {
@@ -246,9 +256,10 @@ private final class CloudTradeSession: ObservableObject {
                 }
             }
             let reply = try await request(base: url, action: "login", key: key, token: nil,
-                                          body: ["username": username, "password": password])
-            guard let session = reply.token, !session.isEmpty, let data = reply.snapshot else { throw CloudTradeError.unavailable }
+                                          body: ["username": username, "password": password, "mode": mode])
+            guard let session = reply.token, !session.isEmpty, let data = reply.snapshot, accepts(data, mode: mode) else { throw CloudTradeError.rejected }
             install(data, token: session, url: url, address: address, key: key)
+            if isLive { return } // Keep live preview credentials in memory only.
             let saved = [
                 TradeKeychain.save(key, address: address),
                 TradeKeychain.save(username, address: address, kind: "username"),
@@ -271,7 +282,7 @@ private final class CloudTradeSession: ObservableObject {
         do {
             let reply = try await request(base: url, action: "snapshot", key: accessKey, token: token, body: nil)
             guard current == generation, !Task.isCancelled else { return }
-            guard let data = reply.snapshot else { throw CloudTradeError.unavailable }
+            guard let data = reply.snapshot, accepts(data, mode: expectedMode) else { throw CloudTradeError.rejected }
             snapshot = data; error = nil
             reconcile(data)
         } catch {
@@ -294,7 +305,7 @@ private final class CloudTradeSession: ObservableObject {
         busy = true
         let url = endpoint, session = token, key = accessKey
         manualLogout = true
-        if !activeAddress.isEmpty {
+        if !isLive && !activeAddress.isEmpty {
             _ = TradeKeychain.remove(activeAddress, kind: "password")
             _ = TradeKeychain.remove(activeAddress, kind: "session")
         }
@@ -312,7 +323,12 @@ private final class CloudTradeSession: ObservableObject {
         if let token { req.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONEncoder().encode(body)
+            if action == "order" {
+                guard let quantity = body["quantity"].flatMap(Int.init), let price = body["price"].flatMap(Double.init), price.isFinite else { throw CloudTradeError.rejected }
+                var payload: [String: Any] = body.mapValues { $0 as Any }
+                payload["quantity"] = quantity; payload["price"] = price
+                req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            } else { req.httpBody = try JSONEncoder().encode(body) }
         }
         let (data, response) = try await http.data(for: req)
         guard let status = (response as? HTTPURLResponse)?.statusCode else { throw CloudTradeError.unavailable }
@@ -343,6 +359,10 @@ struct TradingCenterView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var real = false
+    @State private var liveAddress = ""
+    @State private var liveKey = ""
+    @State private var liveUsername = ""
+    @State private var livePassword = ""
     @State private var local = false
     @State private var unlock = false
     @State private var cancelID: String?
@@ -401,8 +421,11 @@ struct TradingCenterView: View {
                 if session.signedIn {
                     VStack(spacing: 0) {
                         if !quickOnly { accountHeader; Divider() }
-                        else { Text("快期云端模拟").font(.caption).foregroundStyle(.secondary) }
-                        if quickOnly { quickOrderPanel } else { orderPanel }
+                        else { Text(session.isLive ? "实盘只读" : "快期云端模拟").font(.caption).foregroundStyle(.secondary) }
+                        if session.isLive {
+                            Text("实盘只读 · 禁止下单及撤单").font(.caption).foregroundStyle(.secondary)
+                            if quickOnly { Button("退出账户") { Task { await session.logout() } } }
+                        } else if quickOnly { quickOrderPanel } else { orderPanel }
                         if !quickOnly { Divider(); recordsPanel }
                         else { Spacer(minLength: 0) }
                     if let message = session.actionMessage { Text(message).font(.caption).lineLimit(2) }
@@ -421,13 +444,21 @@ struct TradingCenterView: View {
                         Picker("账户类型", selection: $real) {
                             Text("模拟交易").tag(false)
                             Text("实盘交易").tag(true)
-                        }.pickerStyle(.segmented)
+                        }.pickerStyle(.segmented).disabled(session.busy)
                     }
                     if real {
                         Section("期货账户") {
                             LabeledContent("期货公司", value: "银河期货")
-                            Text("实盘登录暂未开放。先完成快期云端模拟及交易安全验收。")
+                            Text("仅查询资金、持仓、委托和成交。期货账户由服务器配置，禁止下单及撤单。")
                                 .font(.caption).foregroundStyle(.secondary)
+                            TextField("独立 HTTPS 实盘网关", text: $liveAddress).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            SecureField("实盘网关访问密钥", text: $liveKey)
+                            TextField("快期用户名", text: $liveUsername).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            SecureField("快期密码", text: $livePassword)
+                            Button("登录实盘只读账户") {
+                                session.allowManualLogin()
+                                Task { await session.login(address: liveAddress, key: liveKey, username: liveUsername, password: livePassword, mode: "live_readonly"); livePassword = ""; liveKey = "" }
+                            }.disabled(session.busy || liveAddress.isEmpty || liveKey.isEmpty || liveUsername.isEmpty || livePassword.isEmpty || liveAddress == address)
                         }
                     } else {
                         Section("快期账户") {
@@ -510,7 +541,7 @@ struct TradingCenterView: View {
                             Task { await session.logout(); showAccount = false }
                         }.disabled(session.busy)
                     }
-                    .navigationTitle("模拟账户")
+                    .navigationTitle(session.isLive ? "实盘只读账户" : "模拟账户")
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showAccount = false } } }
                 }
             }
@@ -564,7 +595,7 @@ struct TradingCenterView: View {
     private var accountHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text("快期云端模拟").font(.caption.weight(.semibold))
+                Text(session.isLive ? "实盘只读" : "快期云端模拟").font(.caption.weight(.semibold))
                 Spacer()
                 Circle().fill(session.snapshot == nil ? Color.orange : Color.green).frame(width: 6, height: 6)
                 Text(session.snapshot == nil ? "连接待确认" : "账户已连接")
@@ -1022,7 +1053,7 @@ struct TradingCenterView: View {
                             .foregroundStyle(o.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
                         recordCell(o.price?.formatted() ?? "--", width: 48)
                         recordCell(String(o.quantity - o.remaining) + "/" + String(o.quantity), width: 30)
-                        if tab == "挂单" && o.status == "ALIVE" {
+                        if tab == "挂单" && o.status == "ALIVE" && !session.isLive {
                             Button("撤单", role: .destructive) { cancelID = o.id }
                                 .font(.caption2).buttonStyle(.borderless).frame(width: 38).disabled(session.busy)
                         } else {
