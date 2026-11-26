@@ -34,6 +34,8 @@ struct ChartDisplaySettings: Codable, Equatable {
     var emaFast = 20
     var emaSlow = 50
     var wma = 20
+    var averageColors: [String: String] = [:]
+    var averageWidths: [String: Double] = [:]
     var additionalAverages: [AdditionalMovingAverage] = []
     var formulas: [FormulaDefinition] = []
     var bollPeriod = 20
@@ -65,6 +67,8 @@ struct ChartDisplaySettings: Codable, Equatable {
         emaFast = try c.decodeIfPresent(Int.self, forKey: .emaFast) ?? emaFast
         emaSlow = try c.decodeIfPresent(Int.self, forKey: .emaSlow) ?? emaSlow
         wma = try c.decodeIfPresent(Int.self, forKey: .wma) ?? wma
+        averageColors = try c.decodeIfPresent([String: String].self, forKey: .averageColors) ?? [:]
+        averageWidths = try c.decodeIfPresent([String: Double].self, forKey: .averageWidths) ?? [:]
         additionalAverages = try c.decodeIfPresent([AdditionalMovingAverage].self, forKey: .additionalAverages) ?? []
         formulas = try c.decodeIfPresent([FormulaDefinition].self, forKey: .formulas) ?? []
         bollPeriod = try c.decodeIfPresent(Int.self, forKey: .bollPeriod) ?? bollPeriod
@@ -166,7 +170,7 @@ struct ChartDisplaySettings: Codable, Equatable {
 
     // A line's colour depends only on its type and period; toggling another
     // indicator does not silently change the line's colour.
-    private static func averageColor(type: MovingAverageType, period: Int) -> ChartColor {
+    static func averageColor(type: MovingAverageType, period: Int) -> ChartColor {
         if type == .ema && period == 20 {
             return ChartColor(hex: "366EB8")!
         }
@@ -191,8 +195,12 @@ struct ChartDisplaySettings: Codable, Equatable {
         return ChartColor(hex: colors[(period * 7 + offset) % colors.count])!
     }
 
-    private static func movingAverage(type: MovingAverageType, period: Int) -> any ChartIndicator {
-        let style = IndicatorLineStyle(color: averageColor(type: type, period: period), width: 1.7)
+    func averageStyle(key: String, type: MovingAverageType, period: Int) -> IndicatorLineStyle {
+        let color = averageColors[key].flatMap { ChartColor(hex: $0) } ?? Self.averageColor(type: type, period: period)
+        let width = averageWidths[key].flatMap { $0.isFinite && (0.5...4).contains($0) ? $0 : nil } ?? 1.7
+        return IndicatorLineStyle(color: color, width: width)
+    }
+    private static func movingAverage(type: MovingAverageType, period: Int, style: IndicatorLineStyle) -> any ChartIndicator {
         switch type {
         case .sma: return SMA(period: period, style: style)
         case .ema: return EMA(period: period, style: style)
@@ -204,14 +212,14 @@ struct ChartDisplaySettings: Codable, Equatable {
         }
     }
 
-    private static func movingAverage(_ average: AdditionalMovingAverage) -> (any ChartIndicator)? {
+    private func movingAverage(_ average: AdditionalMovingAverage) -> (any ChartIndicator)? {
         switch average.type {
         case .sma,.ema,.wma:
-            return movingAverage(type:average.type,period:average.period)
+            return Self.movingAverage(type:average.type,period:average.period,style:averageStyle(key:average.id.uuidString,type:average.type,period:average.period))
         default:
             guard let expression = try? average.expression(),
                   let program = try? FormulaProgram("A:"+expression+";") else { return nil }
-            let style = IndicatorLineStyle(color:averageColor(type:average.type,period:average.type == .dma ? 20 : average.period),width:1.7)
+            let style = averageStyle(key:average.id.uuidString,type:average.type,period:average.type == .dma ? 20 : average.period)
             return QihuiExtendedMovingAverage(average:average,program:program,style:style)
         }
     }
@@ -220,10 +228,10 @@ struct ChartDisplaySettings: Codable, Equatable {
         var result: [any ChartIndicator] = []
         for kind in ChartIndicatorKind.available where enabled.contains(kind) {
             switch kind {
-            case .sma: result.append(Self.movingAverage(type: .sma, period: sma))
-            case .emaFast: result.append(Self.movingAverage(type: .ema, period: emaFast))
-            case .emaSlow: result.append(Self.movingAverage(type: .ema, period: emaSlow))
-            case .wma: result.append(Self.movingAverage(type: .wma, period: wma))
+            case .sma: result.append(Self.movingAverage(type: .sma, period: sma, style: averageStyle(key: ChartIndicatorKind.sma.rawValue, type: .sma, period: sma)))
+            case .emaFast: result.append(Self.movingAverage(type: .ema, period: emaFast, style: averageStyle(key: ChartIndicatorKind.emaFast.rawValue, type: .ema, period: emaFast)))
+            case .emaSlow: result.append(Self.movingAverage(type: .ema, period: emaSlow, style: averageStyle(key: ChartIndicatorKind.emaSlow.rawValue, type: .ema, period: emaSlow)))
+            case .wma: result.append(Self.movingAverage(type: .wma, period: wma, style: averageStyle(key: ChartIndicatorKind.wma.rawValue, type: .wma, period: wma)))
             case .boll: result.append(BollingerBands(period: bollPeriod, multiplier: bollMultiplier))
             case .volume: result.append(Volume(movingAveragePeriod: volumeMA))
             case .macd:
@@ -242,7 +250,7 @@ struct ChartDisplaySettings: Codable, Equatable {
             }
         }
         for average in additionalAverages where average.enabled {
-            if let indicator = Self.movingAverage(average) { result.append(indicator) }
+            if let indicator = movingAverage(average) { result.append(indicator) }
         }
         for formula in formulas where formula.enabled {
             if let program = try? FormulaProgram(formula.source) {

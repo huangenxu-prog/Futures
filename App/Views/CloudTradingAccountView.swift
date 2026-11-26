@@ -1483,6 +1483,16 @@ struct TradingCenterView: View {
 
 struct TradeConnectionSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            Form { TradeConnectionFields() }
+                .navigationTitle("交易设置").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+        }.tint(MarketPalette.accent)
+    }
+}
+
+struct TradeConnectionFields: View {
     @ObservedObject private var session = CloudTradeSession.shared
     @AppStorage("qihui.trade.endpoint.v1") private var address = "https://8.153.96.190"
     @AppStorage("qihui.trade.default-mode.v1") private var defaultMode = "simulation"
@@ -1498,8 +1508,7 @@ struct TradeConnectionSettingsView: View {
     @State private var liveKey = ""
     @State private var message: String?
     var body: some View {
-        NavigationStack {
-            Form {
+        Group {
                 Section("账户状态") {
                     LabeledContent("交易模式", value: session.isLive && session.signedIn ? "实盘只读" : "快期云端模拟")
                     LabeledContent("登录状态", value: session.signedIn ? "已登录" : "未登录")
@@ -1515,13 +1524,7 @@ struct TradeConnectionSettingsView: View {
                         Text("实盘只读").tag("live_readonly")
                     }.pickerStyle(.segmented)
                 }.disabled(session.signedIn || session.busy)
-                Section("编辑账户配置") {
-                    Picker("账户类型", selection: $real) {
-                        Text("模拟交易").tag(false)
-                        Text("实盘只读").tag(true)
-                    }.pickerStyle(.segmented)
-                }.disabled(session.signedIn || session.busy)
-                if real {
+                Group {
                     Section("银河期货 · 实盘只读") {
                         TextField("独立 HTTPS 实盘网关", text: $liveAddress).keyboardType(.URL)
                         TextField("快期用户名", text: $liveUsername)
@@ -1541,7 +1544,8 @@ struct TradeConnectionSettingsView: View {
                             }
                         }.disabled(liveAddress.isEmpty || liveAddress == address || liveUsername.isEmpty || livePassword.isEmpty || liveKey.isEmpty)
                     }.disabled(session.signedIn || session.busy)
-                } else {
+                }
+                Group {
                     Section("快期账户") {
                         TextField("手机号 / 用户名", text: $username)
                         SecureField("快期账户密码", text: $password)
@@ -1576,13 +1580,8 @@ struct TradeConnectionSettingsView: View {
             }
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
-            .navigationTitle("交易设置")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() }.disabled(session.busy) } }
             .onAppear { loadSaved() }
             .onDisappear { password = ""; key = ""; livePassword = ""; liveKey = "" }
-        }.tint(MarketPalette.accent)
-        .interactiveDismissDisabled(session.busy)
     }
     private func loadSaved() {
         draftAddress = address

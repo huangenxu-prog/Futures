@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// A minimal, light trading terminal shell around the existing TqSdk feed.
 /// The chart, rather than decorative cards or account widgets, remains the focus.
@@ -264,6 +265,18 @@ struct LightMarketView: View {
                 List {
                     ForEach(instruments) { item in
                         marketRow(item)
+                            .onDrag { NSItemProvider(object: item.id as NSString) }
+                            .onDrop(of: [.text], isTargeted: nil) { providers in
+                                guard scope == .favorites, search.isEmpty, sortBy == "默认", let provider = providers.first, favorites.ids.contains(item.id) else { return false }
+                                _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+                                    guard let id = object as? String else { return }
+                                    DispatchQueue.main.async {
+                                        guard favorites.ids.contains(id), let currentTarget = favorites.ids.firstIndex(of: item.id) else { return }
+                                        favorites.move(id, to: currentTarget)
+                                    }
+                                }
+                                return true
+                            }
                             .listRowBackground(HomeMarketPalette.surface)
                             .listRowSeparatorTint(HomeMarketPalette.divider)
                             .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
@@ -408,12 +421,7 @@ struct LightMarketView: View {
                 .buttonStyle(.plain)
             }
             Spacer(minLength: 4)
-            if scope == .favorites && search.isEmpty && sortBy == "默认" && !favorites.ids.isEmpty {
-                Button(editing ? "完成" : "编辑") { editing.toggle() }
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(HomeMarketPalette.accent)
-                    .padding(.bottom, 7)
-            }
+
             Menu {
                 Picker("排序", selection: $sortBy) {
                     Text("默认").tag("默认")

@@ -11,9 +11,7 @@ struct QihuiSettingsView: View {
     @State private var marketKey = ""
     @State private var marketKeyError = false
     @State private var strategy = false
-    @State private var account = false
     @State private var indicators = false
-    @State private var candle = false
     @State private var period = false
     @AppStorage("qihui.chart.period-order.v1") private var storedPeriodOrder = ""
     @AppStorage("qihui.chart.period-hidden.v1") private var hiddenPeriods = "3分,10分,120分"
@@ -21,12 +19,17 @@ struct QihuiSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("行情") {
+                Section("常规") {
                     Picker("涨跌幅基准", selection: $changeBasis) {
                         Text("昨结").tag("settlement")
                         Text("今开").tag("open")
                     }.pickerStyle(.segmented)
-                    Text("今开为交易日开盘价；行情未提供基准时显示 --。").font(.caption).foregroundStyle(.secondary)
+                    Text("界面主题").font(.caption).foregroundStyle(.secondary)
+                    Picker("主题", selection: $appearance) {
+                        Text("浅色").tag(AppAppearanceMode.light.rawValue)
+                        Text("深色").tag(AppAppearanceMode.dark.rawValue)
+                        Text("跟随系统").tag(AppAppearanceMode.system.rawValue)
+                    }.pickerStyle(.segmented)
 
                 }
                 Section("服务器配置") {
@@ -47,30 +50,20 @@ struct QihuiSettingsView: View {
                             else { marketKeyError = true }
                         }
                     }
-                    Button { account = true } label: {
-                        HStack { Text("交易网关与账户配置"); Spacer(); Image(systemName: "chevron.right") }
-                    }
+
                 }
                 Section("图表与指标") {
-                    Button("K线样式") { candle = true }
                     Button("周期排序") { period = true }
                     Button("指标管理") { indicators = true }
                 }
-                Section("外观") {
-                    Picker("主题", selection: $appearance) {
-                        ForEach(AppAppearanceMode.allCases) { mode in Text(mode.title).tag(mode.rawValue) }
-                    }
-                }
+                CandleAppearanceFields()
+                TradeConnectionFields()
                 Section("策略与回测") {
                     Button { strategy = true } label: {
                         HStack { Text("策略回测"); Spacer(); Image(systemName: "chevron.right") }
                     }
                 }
-                Section("账户与交易") {
-                    Button { account = true } label: {
-                        HStack { Text("交易设置"); Spacer(); Image(systemName: "chevron.right") }
-                    }
-                }
+
             }
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
@@ -78,9 +71,7 @@ struct QihuiSettingsView: View {
             .onAppear { marketConfigured = !MarketAccessKey.load().isEmpty }
             .onDisappear { marketKey = "" }
             .sheet(isPresented: $strategy) { StrategyCenterView(instruments: instruments, favoriteIDs: favoriteIDs, mainCodes: mainCodes) }
-            .sheet(isPresented: $account) { TradeConnectionSettingsView() }
             .sheet(isPresented: $indicators) { IndicatorSettingsView(settings: ChartDisplaySettings.load()) { $0.save() } }
-            .sheet(isPresented: $candle) { CandleAppearanceView() }
             .sheet(isPresented: $period) {
                 PeriodOrderView(order: periods, label: { QihuiPeriods.labels[$0] ?? $0 }) { updated in
                     storedPeriodOrder = updated.joined(separator: ",")

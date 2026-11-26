@@ -116,7 +116,20 @@ struct CandleAppearanceView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            Form { CandleAppearanceFields() }
+                .navigationTitle("K线样式").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
+        }.tint(MarketPalette.accent)
+    }
+}
+
+struct CandleAppearanceFields: View {
+    @AppStorage(CandleAppearance.hollowKey) private var hollow = true
+    @AppStorage(CandleAppearance.upKey) private var up = CandleAppearance.automatic
+    @AppStorage(CandleAppearance.downKey) private var down = CandleAppearance.automatic
+    @AppStorage(CandleAppearance.dojiKey) private var doji = CandleAppearance.automatic
+    var body: some View {
+        Group {
                 Section("K线样式") {
                     Picker("上涨实体", selection: $hollow) {
                         Text("空心").tag(true)
@@ -143,14 +156,8 @@ struct CandleAppearanceView: View {
                 } footer: {
                     Text("只改变K线外观，自动保存。可随时切回原版实心样式。")
                 }
-            }
-            .navigationTitle("K线样式")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
-            }
+
         }
-        .tint(MarketPalette.accent)
     }
 
     private func colorBinding(_ value: Binding<Int>, fallback: Color) -> Binding<Color> {

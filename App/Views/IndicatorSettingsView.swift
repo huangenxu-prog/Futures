@@ -1,4 +1,5 @@
 import SwiftUI
+import TradingChart
 
 /// Edit visibility and period independently for every moving average.
 struct IndicatorSettingsView: View {
@@ -25,13 +26,7 @@ struct IndicatorSettingsView: View {
                     averageRow("EMA 1", kind: .emaFast, value: $draft.emaFast)
                     averageRow("EMA 2", kind: .emaSlow, value: $draft.emaSlow)
                     averageRow("WMA", kind: .wma, value: $draft.wma)
-                } header: {
-                    Text("基础均线")
-                } footer: {
-                    Text("原 SMA 简单均线现标为 MA，计算及设置不变。EMA 1/2 是两个普通 EMA 槽位，与函数 EMA2 不同。")
-                }
 
-                Section {
                     ForEach($draft.additionalAverages) { $average in
                         VStack(alignment:.leading,spacing:8) {
                             HStack(spacing:8) {
@@ -66,12 +61,15 @@ struct IndicatorSettingsView: View {
                                     dismissInput()
                                     let id = average.id
                                     draft.additionalAverages.removeAll { $0.id == id }
+                                    draft.averageColors.removeValue(forKey: id.uuidString)
+                                    draft.averageWidths.removeValue(forKey: id.uuidString)
                                 } label: {
                                     Image(systemName:"minus.circle").foregroundStyle(.red)
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("删除均线")
                             }
+                            styleRow(key: average.id.uuidString, type: average.type, period: average.type == .dma ? 20 : average.period)
                             if average.type == .smoothSMA {
                                 HStack {
                                     Text("平滑权重 M").font(.caption).foregroundStyle(.secondary)
@@ -82,9 +80,6 @@ struct IndicatorSettingsView: View {
                                         .multilineTextAlignment(.trailing)
                                         .frame(width:58)
                                 }
-                            } else if average.type == .dma {
-                                Text("固定权重 0～1；动态权重表达式请用组合指标。")
-                                    .font(.caption2).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -94,13 +89,9 @@ struct IndicatorSettingsView: View {
                     } label: {
                         Label("新增均线", systemImage: "plus.circle")
                     }
-                } header: {
-                    Text("自定义均线")
-                } footer: {
-                    Text("可添加全部10种均线。MA 是简单均线，SMA 另需平滑权重 M；DMA 使用固定权重，EMA2 与 WMA 等价。相同算法与参数不能重复启用。")
-                }
+                } header: { Text("主图 · 均线") }
 
-                Section("布林带 BOLL") {
+                Section("主图 · BOLL") {
                     Toggle("显示 BOLL", isOn: enabledBinding(.boll))
                     parameter("计算周期", value: $draft.bollPeriod, id:"bollPeriod")
                     HStack {
@@ -113,35 +104,30 @@ struct IndicatorSettingsView: View {
                             .frame(width: 90)
                     }
                 }
-                Section("MACD") {
+                Section("副图 · MACD") {
                     Toggle("显示 MACD", isOn: enabledBinding(.macd))
                     parameter("快线周期", value: $draft.macdFast, id:"macdFast")
                     parameter("慢线周期", value: $draft.macdSlow, id:"macdSlow")
                     parameter("信号周期", value: $draft.macdSignal, id:"macdSignal")
                 }
-                Section("KDJ") {
+                Section("副图 · KDJ") {
                     Toggle("显示 KDJ", isOn: enabledBinding(.kdj))
                     parameter("RSV 周期", value: $draft.kdjPeriod, id:"kdjPeriod")
                     parameter("K 平滑周期", value: $draft.kdjK, id:"kdjK")
                     parameter("D 平滑周期", value: $draft.kdjD, id:"kdjD")
                 }
-                Section("ATR") {
+                Section("副图 · ATR") {
                     Toggle("显示 ATR", isOn: enabledBinding(.atr))
                     parameter("计算周期", value: $draft.atrPeriod, id:"atrPeriod")
                 }
-                Section("SAR") {
+                Section("主图 · SAR") {
                     Toggle("显示 SAR", isOn: enabledBinding(.sar))
                     decimalParameter("加速因子", value: $draft.sarStep)
                     decimalParameter("最大加速因子", value: $draft.sarMaximum)
-                    Text("SAR 采用主图连线显示，计算使用逐根K线的高低价。")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("其他指标") {
+                Section("副图与分时") {
                     Toggle("显示分时",isOn:enabledBinding(.intraday))
-                    Text("独立显示最近交易日分钟走势，不随主图缩放。关闭停止额外行情请求。").font(.caption).foregroundStyle(.secondary)
                     Toggle("显示 OPI 持仓量", isOn: enabledBinding(.opi))
-                    Text("使用每根K线的实际期末持仓量。旧缓存未包含持仓量时不绘制缺失数据。")
-                        .font(.caption).foregroundStyle(.secondary)
                     Toggle("显示 VOL", isOn: enabledBinding(.volume))
                     parameter("成交量均线", value: $draft.volumeMA, id:"volumeMA")
                     Toggle("显示 RSI", isOn: enabledBinding(.rsi))
@@ -265,14 +251,34 @@ struct IndicatorSettingsView: View {
     }
 
     private func averageRow(_ label: String, kind: ChartIndicatorKind, value: Binding<Int>) -> some View {
-        HStack {
-            Toggle(label, isOn: enabledBinding(kind))
+        let type: MovingAverageType = kind == .sma ? .sma : kind == .wma ? .wma : .ema
+        return HStack(spacing: 8) {
+            Text(label).frame(minWidth: 48, alignment: .leading)
             TextField("周期", value: value, format: .number)
                 .focused($focusedField,equals:"average-\(kind.rawValue)")
-                .keyboardType(.numberPad)
-                .multilineTextAlignment(.trailing)
-                .frame(width: 70)
+                .keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 40)
                 .accessibilityLabel("\(label) 周期")
+            Spacer(minLength: 0)
+            styleRow(key: kind.rawValue, type: type, period: value.wrappedValue)
+            Toggle("启用", isOn: enabledBinding(kind)).labelsHidden().accessibilityLabel("显示 \(label)")
+        }
+    }
+    private func styleRow(key: String, type: MovingAverageType, period: Int) -> some View {
+        HStack(spacing: 5) {
+            ColorPicker("颜色", selection: Binding(get: {
+                let fallback = ChartDisplaySettings.averageColor(type: type, period: max(2, min(500, period)))
+                let rgb = draft.averageColors[key].flatMap { ChartColor(hex: $0) } ?? fallback
+                return Color(red: rgb.red, green: rgb.green, blue: rgb.blue)
+            }, set: { color in
+                if let rgb = CandleAppearance.rgb(color) { draft.averageColors[key] = String(format: "%06X", rgb) }
+            }), supportsOpacity: false).labelsHidden()
+            Menu {
+                ForEach([0.5, 1.0, 1.5, 1.7, 2.0, 2.5, 3.0, 3.5, 4.0], id: \.self) { width in
+                    Button(width.formatted()) { draft.averageWidths[key] = width }
+                }
+            } label: {
+                Text((draft.averageWidths[key] ?? 1.7).formatted()).font(.caption).monospacedDigit()
+            }.accessibilityLabel("线宽")
         }
     }
 
