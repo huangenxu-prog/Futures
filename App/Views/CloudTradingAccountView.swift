@@ -432,70 +432,7 @@ struct TradingCenterView: View {
                         signedInPanel
                     }
                 } else {
-                    List {
-                    Section {
-                        Picker("账户类型", selection: $real) {
-                            Text("模拟交易").tag(false)
-                            Text("实盘交易").tag(true)
-                        }.pickerStyle(.segmented).disabled(session.busy)
-                    }
-                    if real {
-                        Section("期货账户") {
-                            LabeledContent("期货公司", value: "银河期货")
-                            Text("仅查询资金、持仓、委托和成交。期货账户由服务器配置，禁止下单及撤单。")
-                                .font(.caption).foregroundStyle(.secondary)
-                            TextField("独立 HTTPS 实盘网关", text: $liveAddress).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            SecureField("实盘网关访问密钥", text: $liveKey)
-                            TextField("快期用户名", text: $liveUsername).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            SecureField("快期密码", text: $livePassword)
-                            Button("登录实盘只读账户") {
-                                session.allowManualLogin()
-                                Task { await session.login(address: liveAddress, key: liveKey, username: liveUsername, password: livePassword, mode: "live_readonly"); livePassword = ""; liveKey = "" }
-                            }.disabled(session.busy || liveAddress.isEmpty || liveKey.isEmpty || liveUsername.isEmpty || livePassword.isEmpty || liveAddress == address)
-                        }
-                    } else {
-                        Section("快期账户") {
-                            TextField("手机号 / 用户名", text: $username)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                            SecureField("快期账户密码", text: $password)
-                        }
-                        Section("交易网关") {
-                            TextField("HTTPS 网关地址", text: $address)
-                                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            SecureField("网关访问密钥", text: $key)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                            Button("清除已保存密钥", role: .destructive) {
-                                if TradeKeychain.remove(address) { key = ""; keychainMessage = nil; _ = TradeKeychain.remove(address, kind: "password"); _ = TradeKeychain.remove(address, kind: "session") }
-                                else { keychainMessage = "无法清除设备钥匙串密钥" }
-                            }.disabled(session.busy)
-                            if let keychainMessage { Text(keychainMessage).font(.caption).foregroundStyle(.red) }
-                            Text("首次登录成功后，本机钥匙串安全记住模拟账户及密钥，之后自动恢复。退出账户将停止自动登录。")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Section {
-                            Button {
-                                let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
-                                let secret = password
-                                let access = key
-                                session.allowManualLogin()
-                                Task { await session.login(address: address, key: access, username: user, password: secret); if session.signedIn { password = "" } }
-                            } label: {
-                                HStack {
-                                    Spacer()
-                                    if session.busy { ProgressView() }
-                                    Text("登录模拟账户").fontWeight(.semibold)
-                                    Spacer()
-                                }
-                            }.disabled(session.busy || username.isEmpty || password.isEmpty || key.isEmpty)
-                        }
-                    }
-                    Section("独立本地模拟") {
-                        Button("进入本地演练账户") { local = true }.disabled(session.busy)
-                        Text("本地演练不与快期同步，保留原有模拟账本。").font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let message = session.error { Section { Text(message).font(.caption).foregroundStyle(.red) } }
-                    }
-                    .listStyle(.insetGrouped)
+                    loginPanel
                 }
             }
             .scrollContentBackground(.hidden)
@@ -608,6 +545,139 @@ struct TradingCenterView: View {
             }
         }.tint(MarketPalette.accent)
     }
+    private var loginPanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Picker("账户类型", selection: $real) {
+                    Text("模拟交易").tag(false)
+                    Text("实盘只读").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .disabled(session.busy)
+
+                if real {
+                    loginGroup("期货账户") {
+                        LabeledContent("期货公司", value: "银河期货")
+                            .font(.subheadline).padding(12)
+                        Divider()
+                        loginField("person", placeholder: "快期用户名", value: $liveUsername)
+                        Divider()
+                        loginField("lock", placeholder: "快期密码", value: $livePassword, secure: true)
+                    }
+                    loginGroup("实盘网关") {
+                        loginField("link", placeholder: "独立 HTTPS 实盘网关", value: $liveAddress, url: true)
+                        Divider()
+                        loginField("key", placeholder: "网关访问密钥", value: $liveKey, secure: true)
+                    }
+                    Text("仅查询资金、持仓、委托和成交，不支持下单及撤单。")
+                        .font(.caption).foregroundStyle(MarketPalette.muted)
+                    loginButton("登录实盘只读账户", enabled: !session.busy && !liveAddress.isEmpty && !liveKey.isEmpty && !liveUsername.isEmpty && !livePassword.isEmpty && liveAddress != address) {
+                        session.allowManualLogin()
+                        Task {
+                            await session.login(address: liveAddress, key: liveKey, username: liveUsername, password: livePassword, mode: "live_readonly")
+                            livePassword = ""; liveKey = ""
+                        }
+                    }
+                } else {
+                    loginGroup("快期账户") {
+                        loginField("person", placeholder: "手机号 / 用户名", value: $username)
+                        Divider()
+                        loginField("lock", placeholder: "快期账户密码", value: $password, secure: true)
+                    }
+                    loginGroup("交易网关") {
+                        loginField("link", placeholder: "HTTPS 网关地址", value: $address, url: true)
+                        Divider()
+                        loginField("key", placeholder: "网关访问密钥", value: $key, secure: true)
+                    }
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("登录成功后自动恢复账户")
+                            .font(.caption).foregroundStyle(MarketPalette.muted)
+                        Spacer(minLength: 4)
+                        Button("清除密钥", role: .destructive) {
+                            if TradeKeychain.remove(address) {
+                                key = ""; keychainMessage = nil
+                                _ = TradeKeychain.remove(address, kind: "password")
+                                _ = TradeKeychain.remove(address, kind: "session")
+                            } else { keychainMessage = "无法清除设备钥匙串密钥" }
+                        }.font(.caption).disabled(session.busy)
+                    }
+                    if let keychainMessage {
+                        Text(keychainMessage).font(.caption).foregroundStyle(.red)
+                    }
+                    loginButton("登录模拟账户", enabled: !session.busy && !username.isEmpty && !password.isEmpty && !key.isEmpty) {
+                        let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let secret = password
+                        let access = key
+                        session.allowManualLogin()
+                        Task {
+                            await session.login(address: address, key: access, username: user, password: secret)
+                            if session.signedIn { password = "" }
+                        }
+                    }
+                }
+                if let message = session.error {
+                    Text(message).font(.caption).foregroundStyle(.red)
+                }
+                Divider().padding(.top, 4)
+                Button { local = true } label: {
+                    HStack {
+                        Image(systemName: "externaldrive")
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("本地模拟").font(.subheadline.weight(.medium))
+                            Text("独立账本，不与快期同步").font(.caption).foregroundStyle(MarketPalette.muted)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(MarketPalette.muted)
+                    }.padding(12)
+                }
+                .buttonStyle(.plain)
+                .disabled(session.busy)
+                .background(MarketPalette.surface, in: RoundedRectangle(cornerRadius: 10))
+            }
+            .padding(16)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .background(MarketPalette.background)
+    }
+
+    private func loginGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.caption.weight(.medium)).foregroundStyle(MarketPalette.muted)
+            VStack(spacing: 0) { content() }
+                .background(MarketPalette.surface, in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    private func loginField(_ icon: String, placeholder: String, value: Binding<String>, secure: Bool = false, url: Bool = false) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).font(.subheadline).foregroundStyle(MarketPalette.muted).frame(width: 20)
+            Group {
+                if secure { SecureField(placeholder, text: value) }
+                else { TextField(placeholder, text: value).keyboardType(url ? .URL : .default) }
+            }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .font(.subheadline)
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 48)
+    }
+
+    private func loginButton(_ title: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if session.busy { ProgressView().tint(.white) }
+                Text(title).font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 48)
+            .background(MarketPalette.accent.opacity(enabled ? 1 : 0.28), in: RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
     private var signedInPanel: some View {
         VStack(spacing: 0) {
                         if !quickOnly { accountHeader; Divider() }
