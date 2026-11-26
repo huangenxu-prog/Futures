@@ -549,6 +549,14 @@ struct TradingCenterView: View {
             .confirmationDialog("确认已在快期核对委托结果？", isPresented: $unlock) {
                 Button("解除锁定") { session.acknowledgeUncertainOrder() }
             } message: { Text("未知结果可能已经下单，切勿重复提交。") }
+            .task(id: heldSymbols) {
+                let symbols = heldSymbols
+                guard !symbols.isEmpty else { return }
+                while !Task.isCancelled && session.signedIn {
+                    if scenePhase == .active { await warmHoldingQuotes(symbols) }
+                    do { try await Task.sleep(for: .seconds(8)) } catch { return }
+                }
+            }
             .task(id: selectionRequest) {
                 guard let c = selected else { return }
                 let request = selectionRequest
@@ -571,6 +579,7 @@ struct TradingCenterView: View {
                     openInitialIfReady()
                 } else {
                     pendingAction = nil; cancelID = nil; closingSide = nil; closeConfirm = false
+                    recentTradeQuotes.removeAll(); expandedHolding = nil
                     key = TradeKeychain.load(address)
                 }
             }
@@ -672,7 +681,7 @@ struct TradingCenterView: View {
     }
     private func validDraft(_ action: String) -> Bool {
         guard let draft = openingDraft, draft.action == action, draft.symbol == selected?.symbol,
-              session.canTrade, draft.quantity > 0, selected?.hasMetadata == true else { return false }
+              session.canTrade, !quoteError, let stamp = quoteStamp, Date().timeIntervalSince(stamp) < 60, draft.quantity > 0, selected?.hasMetadata == true else { return false }
         return validPrice(Double(draft.price))
     }
     private var priceModePicker: some View {
@@ -955,8 +964,7 @@ struct TradingCenterView: View {
         }
         return p.name + suffix
     }
-    private func selectHolding(_ symbol: String) {
-        if selected?.symbol == symbol, selected?.isConcreteFuture == true || selected?.option != nil { return }
+    private func holdingContract(_ symbol: String) -> PaperContract {
         // Exchange option symbols use C/P with an optional hyphen before/after it.
         let pattern = #"^([A-Za-z]+\.[A-Za-z]+[0-9]{3,4})-?([CPcp])-?([0-9]+(?:\.[0-9]+)?)$"#
         var option: PaperOptionDetails?
@@ -968,9 +976,53 @@ struct TradingCenterView: View {
            let strike = Double(symbol[strikeRange]), strike > 0 {
             option = PaperOptionDetails(underlying: String(symbol[u]), side: symbol[side].uppercased() == "C" ? "CALL" : "PUT", strike: strike)
         }
-        let contract = PaperContract(symbol: symbol, name: product(symbol)?.name ?? contractName(symbol), tick: nil, multiplier: nil, last: nil, bid: nil, ask: nil, option: option)
+        return PaperContract(symbol: symbol, name: product(symbol)?.name ?? contractName(symbol), tick: nil, multiplier: nil, last: nil, bid: nil, ask: nil, option: option)
+    }
+
+    private func selectHolding(_ symbol: String) {
+        if selected?.symbol == symbol { return }
+        let contract = holdingContract(symbol)
         choose(contract)
         seedHoldingQuote(contract)
+    }
+
+    private var heldSymbols: [String] {
+        Array(Set((session.snapshot?.positions ?? []).filter { $0.long > 0 || $0.short > 0 }.map { $0.symbol })).sorted()
+    }
+
+    @MainActor private func warmHoldingQuotes(_ symbols: [String]) async {
+        // Fetch once per product or option underlying, not once per position.
+        let contracts = symbols.filter { $0 != selected?.symbol }.map { holdingContract($0) }
+        let futures = Dictionary(grouping: contracts.filter { $0.option == nil }) { product($0.symbol)?.id ?? "" }
+        let options = Dictionary(grouping: contracts.filter { $0.option != nil }) { $0.option?.underlying ?? "" }
+        for (id, items) in futures.sorted(by: { $0.key < $1.key }) {
+            guard !Task.isCancelled, session.signedIn else { return }
+            guard !id.isEmpty else { continue }
+            do {
+                let quotes = try await MarketDataService.listedContracts(for: id)
+                guard !Task.isCancelled, session.signedIn else { return }
+                let received = Date()
+                for item in items {
+                    guard let q = quotes.first(where: { $0.code == item.symbol }) else { continue }
+                    let contract = PaperContract(symbol: q.code, name: item.name, tick: q.priceTick, multiplier: q.volumeMultiple, last: q.last, bid: q.bid, ask: q.ask)
+                    recentTradeQuotes[item.symbol] = CachedTradeQuote(contract: contract, details: q, optionDetails: nil, received: received)
+                }
+            } catch { /* Selected-contract refresh remains independent. */ }
+        }
+        for (underlying, items) in options.sorted(by: { $0.key < $1.key }) {
+            guard !Task.isCancelled, session.signedIn else { return }
+            guard !underlying.isEmpty else { continue }
+            do {
+                let quotes = try await MarketDataService.options(for: underlying)
+                guard !Task.isCancelled, session.signedIn else { return }
+                let received = Date()
+                for item in items {
+                    guard let q = quotes.first(where: { $0.code == item.symbol }) else { continue }
+                    recentTradeQuotes[item.symbol] = CachedTradeQuote(contract: q.paperContract(underlying: underlying, name: item.name), details: nil, optionDetails: q, received: received)
+                }
+            } catch { /* Keep any existing display cache until expiry. */ }
+        }
+        recentTradeQuotes = recentTradeQuotes.filter { Date().timeIntervalSince($0.value.received) <= 30 }
     }
     @MainActor private func refreshQuote(_ c: PaperContract, request: UUID) async {
         do {
@@ -1132,6 +1184,7 @@ struct TradingCenterView: View {
     }
     private func validClose(_ long: Bool) -> Bool {
         guard !quickOnly, closingSide == long, session.canTrade,
+              !quoteError, let stamp = quoteStamp, Date().timeIntervalSince(stamp) < 60,
               let available = availableToClose(long), closeQuantity > 0,
               closeQuantity <= available, let tick = selected?.tick, tick.isFinite, tick > 0,
               let price = Double(closePrice), price.isFinite, price > 0 else { return false }
@@ -1308,7 +1361,7 @@ struct TradingCenterView: View {
         let expanded = expandedHolding == rowID
         return VStack(spacing: 0) {
         Button {
-            if expanded { expandedHolding = nil } else {
+            if expanded { expandedHolding = nil; selectedQuantity = 1 } else {
                 selectHolding(p.symbol)
                 expandedHolding = rowID
                 selectedQuantity = frozen.map { max(0, qty - $0) } ?? 1
