@@ -43,7 +43,7 @@ final class DetailPagerUITests: XCTestCase {
     }
 
     private func drag(_ x: CGFloat, _ y: CGFloat, to endX: CGFloat, _ endY: CGFloat) {
-        point(x, y).press(forDuration: 0.05, thenDragTo: point(endX, endY))
+        point(x, y).press(forDuration: 0.02, thenDragTo: point(endX, endY), withVelocity: .fast, thenHoldForDuration: 0)
     }
 
     func testHomeEntriesAndImmediateSheet() {
@@ -74,11 +74,14 @@ final class DetailPagerUITests: XCTestCase {
         verify(0)
         for step in 0..<32 {
             let index = [1, 2, 1, 0][step % 4]
-            if step % 4 < 2 { drag(0.50, 0.79, to: 0.50, 0.40) }
-            else { drag(0.50, 0.40, to: 0.50, 0.79) }
+            if step % 4 < 2 { drag(0.50, 0.82, to: 0.50, 0.19) }
+            else { drag(0.50, 0.30, to: 0.50, 0.92) }
+            if !app.buttons["detail.contract." + ids[index]].exists {
+                print("PAGER TRACE", element("detail.viewport").value ?? "")
+            }
             verify(index)
             if step == 1 {
-                drag(0.50, 0.79, to: 0.50, 0.40)
+                drag(0.50, 0.82, to: 0.50, 0.19)
                 verify(2)
             }
         }

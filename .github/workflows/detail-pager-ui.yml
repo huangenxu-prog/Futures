@@ -21,10 +21,14 @@ jobs:
           udid=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(d["udid"] for key, devices in sorted(json.load(sys.stdin)["devices"].items(), reverse=True) if "iOS" in key for d in devices if "iPhone" in d["name"]))')
           xcrun simctl boot "$udid"
           xcrun simctl bootstatus "$udid" -b
-          xcodebuild test -project Futures.xcodeproj -scheme Futures -destination "platform=iOS Simulator,id=$udid" -parallel-testing-enabled NO -resultBundlePath Pager.xcresult INFOPLIST_KEY_QIHUI_API_BASE_URL=https://127.0.0.1:1
+          args=(-project Futures.xcodeproj -scheme Futures -destination "platform=iOS Simulator,id=$udid" -parallel-testing-enabled NO INFOPLIST_KEY_QIHUI_API_BASE_URL=https://127.0.0.1:1)
+          xcodebuild build-for-testing "${args[@]}"
+          for method in testChartInputAndPaging testHomeEntriesAndImmediateSheet; do
+            xcodebuild test-without-building "${args[@]}" "-only-testing:DetailPagerUITests/DetailPagerUITests/$method" -resultBundlePath "$method.xcresult"
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: detail-pager-xcresult
-          path: Pager.xcresult
+          path: '*.xcresult'
           retention-days: 7

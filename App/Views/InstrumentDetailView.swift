@@ -69,6 +69,9 @@ private struct DetailPager: UIViewControllerRepresentable {
         coordinator.keepNeighbors()
         #if DEBUG
         pager.view.accessibilityValue = "pages=" + String(pages.count)
+        if let scroll = pager.view.subviews.compactMap({ $0 as? UIScrollView }).first {
+            scroll.panGestureRecognizer.addTarget(coordinator, action: #selector(Coordinator.tracePan(_:)))
+        }
         #endif
         return pager
     }
@@ -125,6 +128,13 @@ private struct DetailPager: UIViewControllerRepresentable {
             refresh()
             keepNeighbors()
         }
+
+        #if DEBUG
+        @objc func tracePan(_ gesture: UIPanGestureRecognizer) {
+            guard let scroll = gesture.view as? UIScrollView else { return }
+            pager?.view.accessibilityValue = "pages=\(parent.pages.count) pan=\(gesture.state.rawValue) offset=\(scroll.contentOffset.y) size=\(scroll.contentSize.height) active=\(activeID)"
+        }
+        #endif
 
         func keepNeighbors() {
             guard let center = parent.pages.firstIndex(where: { $0.id == activeID }) else { return }
