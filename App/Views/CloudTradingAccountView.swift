@@ -127,6 +127,7 @@ private final class CloudTradeSession: ObservableObject {
     @Published private(set) var snapshot: CloudSnapshot?
     @Published private(set) var signedIn = false
     @Published private(set) var busy = false
+    @Published private(set) var latencyMS: Int?
     @Published private(set) var error: String?
     private var token: String?
     private var expectedMode = "simulation"
@@ -169,7 +170,7 @@ private final class CloudTradeSession: ObservableObject {
         snapshot = data; signedIn = true
         error = nil
     }
-    func recover(address: String) async {
+    func recover(address: String, mode: String = "simulation") async {
         guard !manualLogout, !busy, !signedIn, !recovering, Date() >= retryAfter else { return }
         let key = TradeKeychain.load(address)
         let user = TradeKeychain.load(address, kind: "username")
@@ -178,7 +179,7 @@ private final class CloudTradeSession: ObservableObject {
         recovering = true
         retryAfter = Date().addingTimeInterval(20)
         defer { recovering = false }
-        await login(address: address, key: key, username: user, password: password)
+        await login(address: address, key: key, username: user, password: password, mode: mode)
     }
     @Published private(set) var pendingOrder: String?
     @Published private(set) var actionMessage: String?
@@ -259,7 +260,7 @@ private final class CloudTradeSession: ObservableObject {
                                           body: ["username": username, "password": password, "mode": mode])
             guard let session = reply.token, !session.isEmpty, let data = reply.snapshot, accepts(data, mode: mode) else { throw CloudTradeError.rejected }
             install(data, token: session, url: url, address: address, key: key)
-            if isLive { return } // Keep live preview credentials in memory only.
+            if isLive { return } // Live credentials are configured explicitly in Settings.
             let saved = [
                 TradeKeychain.save(key, address: address),
                 TradeKeychain.save(username, address: address, kind: "username"),
@@ -287,7 +288,7 @@ private final class CloudTradeSession: ObservableObject {
             reconcile(data)
         } catch {
             guard current == generation, !Task.isCancelled else { return }
-            snapshot = nil
+            snapshot = nil; latencyMS = nil
             if let failure = error as? CloudTradeError, case .expired = failure {
                 generation = UUID()
                 _ = TradeKeychain.remove(activeAddress, kind: "session")
@@ -306,10 +307,9 @@ private final class CloudTradeSession: ObservableObject {
         let url = endpoint, session = token, key = accessKey
         manualLogout = true
         if !isLive && !activeAddress.isEmpty {
-            _ = TradeKeychain.remove(activeAddress, kind: "password")
             _ = TradeKeychain.remove(activeAddress, kind: "session")
         }
-        generation = UUID(); snapshot = nil; signedIn = false
+        generation = UUID(); snapshot = nil; signedIn = false; latencyMS = nil
         token = nil; endpoint = nil; accessKey = ""; error = nil
         defer { busy = false }
         if let url, let session {
@@ -330,7 +330,11 @@ private final class CloudTradeSession: ObservableObject {
                 req.httpBody = try JSONSerialization.data(withJSONObject: payload)
             } else { req.httpBody = try JSONEncoder().encode(body) }
         }
+        let started = ProcessInfo.processInfo.systemUptime
         let (data, response) = try await http.data(for: req)
+        if action == "snapshot", (response as? HTTPURLResponse)?.statusCode == 200 {
+            latencyMS = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+        }
         guard let status = (response as? HTTPURLResponse)?.statusCode else { throw CloudTradeError.unavailable }
         switch status {
         case 200: return try JSONDecoder().decode(CloudReply.self, from: data)
@@ -354,6 +358,8 @@ struct TradingCenterView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var session = CloudTradeSession.shared
     @AppStorage("qihui.trade.endpoint.v1") private var address = "https://8.153.96.190"
+    @AppStorage("qihui.trade.default-mode.v1") private var defaultMode = "simulation"
+    @AppStorage("qihui.trade.live-endpoint.v1") private var liveEndpoint = ""
     @State private var showConnectionSettings = false
     @State private var unlock = false
     @State private var cancelID: String?
@@ -438,9 +444,14 @@ struct TradingCenterView: View {
                 if quickOnly { quickHeader }
             }
             .toolbar(quickOnly ? .hidden : .visible, for: .navigationBar)
-            .navigationTitle(quickOnly ? "快捷开仓" : "交易")
+            .navigationTitle(quickOnly ? "快捷开仓" : (session.isLive && session.signedIn ? "实盘交易" : (defaultMode == "live_readonly" ? "实盘交易" : "模拟交易")))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
+                if !quickOnly && session.signedIn {
+                    ToolbarItem(placement: .topBarTrailing) { connectionIndicator }
+                }
+            }
             .sheet(isPresented: $selecting) {
                 PaperContractPicker(instruments: catalog, favoriteIDs: favoriteIDs, mainCodes: mainCodes) { c in
                     choose(c); selecting = false
@@ -497,6 +508,12 @@ struct TradingCenterView: View {
                     do { try await Task.sleep(for: .seconds(8)) } catch { return }
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .qihuiLiveQuotes)) { notification in
+                guard scenePhase == .active, let updates = notification.object as? [String: MarketDataService.MainContract], let c = selected, c.option == nil, let p = product(c.symbol), let q = updates[p.id], q.code == c.symbol, let last = q.last, last.isFinite, last > 0 else { return }
+                if let previous = detailedQuote?.time, let incoming = q.time, incoming < previous { return }
+                selected = PaperContract(symbol: c.symbol, name: c.name, tick: c.tick, multiplier: c.multiplier, last: last, bid: q.bid, ask: q.ask, option: nil)
+                detailedQuote = MarketDataService.ContractQuote(code: q.code, month: q.month, last: q.last, settlement: q.settlement, bid: q.bid, ask: q.ask, volume: q.volume, interest: q.interest, priceTick: c.tick, volumeMultiple: c.multiplier, bidVolume: q.bidVolume, askVolume: q.askVolume, opening: q.opening, highest: q.highest, lowest: q.lowest, upperLimit: detailedQuote?.upperLimit, lowerLimit: detailedQuote?.lowerLimit, time: q.time)
+            }
             .task(id: selectionRequest) {
                 guard let c = selected else { return }
                 let request = selectionRequest
@@ -521,11 +538,16 @@ struct TradingCenterView: View {
                 guard scenePhase == .active else { return }
                 while !Task.isCancelled {
                     if session.signedIn { await session.refresh() }
-                    else if !showConnectionSettings { await session.recover(address: address) }
+                    else if !showConnectionSettings { await connectDefault() }
                     do { try await Task.sleep(for: .seconds(3)) } catch { return }
                 }
             }
         }.tint(MarketPalette.accent)
+    }
+    private func connectDefault() async {
+        let target = defaultMode == "live_readonly" ? liveEndpoint : address
+        guard !target.isEmpty, defaultMode != "live_readonly" || target != address else { return }
+        await session.recover(address: target, mode: defaultMode)
     }
     private var loginPanel: some View {
         VStack(spacing: 16) {
@@ -535,9 +557,9 @@ struct TradingCenterView: View {
             if session.busy {
                 ProgressView()
             } else {
-                Button("连接模拟账户") {
+                Button("重新连接") {
                     session.allowManualLogin()
-                    Task { await session.recover(address: address) }
+                    Task { await connectDefault() }
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -595,19 +617,25 @@ struct TradingCenterView: View {
         if let initialContract { choose(initialContract); seedHoldingQuote(initialContract) }
     }
 
+    private var connectionIndicator: some View {
+        HStack(spacing: 4) {
+            Circle().fill(session.snapshot == nil ? Color.orange : Color.green).frame(width: 5, height: 5)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(session.snapshot == nil ? "连接待确认" : "账户已连接")
+                    .font(.system(size: 9)).foregroundStyle(MarketPalette.muted)
+                if let ms = session.latencyMS, session.snapshot != nil {
+                    Text("\(ms)ms").font(.system(size: 10)).monospacedDigit()
+                        .foregroundStyle(ms < 150 ? Color.green : Color.orange)
+                        .accessibilityLabel("账户快照请求耗时 \(ms) 毫秒")
+                }
+            }
+            Button { showAccount = true } label: {
+                Image(systemName: "person.crop.circle").font(.title3)
+            }.buttonStyle(.plain).accessibilityLabel("账户明细与设置")
+        }
+    }
     private var accountHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text(session.isLive ? "实盘只读" : "快期云端模拟").font(.caption.weight(.semibold))
-                Spacer()
-                Circle().fill(session.snapshot == nil ? Color.orange : Color.green).frame(width: 6, height: 6)
-                Text(session.snapshot == nil ? "连接待确认" : "账户已连接")
-                    .font(.caption2).foregroundStyle(MarketPalette.muted)
-                Button { showAccount = true } label: {
-                    Image(systemName: "person.crop.circle").font(.title3)
-                        .frame(width: 32, height: 28)
-                }.buttonStyle(.plain).accessibilityLabel("账户明细与设置")
-            }
             HStack(alignment: .top, spacing: 12) {
                 accountMetric("账户权益", money(session.snapshot?.account.balance, suffix: false), large: true)
                 accountMetric("持仓盈亏", money(session.snapshot?.account.float_profit, suffix: false),
@@ -976,7 +1004,7 @@ struct TradingCenterView: View {
     }
 
     private func selectHolding(_ symbol: String) {
-        if selected?.symbol == symbol { return }
+        if selected?.symbol == symbol { priceMode = .opponent; selectionRequest = UUID(); return }
         let contract = holdingContract(symbol)
         choose(contract)
         seedHoldingQuote(contract)
@@ -1034,9 +1062,12 @@ struct TradingCenterView: View {
             let received = Date()
             recentTradeQuotes = recentTradeQuotes.filter { received.timeIntervalSince($0.value.received) <= 30 }
             recentTradeQuotes[c.symbol] = CachedTradeQuote(contract: next, details: details, optionDetails: optionDetails, received: received)
-            detailedQuote = details
+            let previousTime = detailedQuote?.time
             optionQuote = optionDetails
-            selected = next; quoteStamp = received; quoteError = false
+            if let previous = previousTime, let incoming = details?.time, incoming < previous, let current = selected, current.symbol == next.symbol {
+                selected = PaperContract(symbol: next.symbol, name: next.name, tick: next.tick, multiplier: next.multiplier, last: current.last, bid: current.bid, ask: current.ask, option: next.option)
+            } else { selected = next; detailedQuote = details }
+            quoteStamp = received; quoteError = false
             if selectedPrice.isEmpty, let last = next.last, last > 0 { selectedPrice = String(last) }
             // Close confirmation price is user controlled; never replace it on a quote update.
         } catch {
@@ -1454,6 +1485,8 @@ struct TradeConnectionSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var session = CloudTradeSession.shared
     @AppStorage("qihui.trade.endpoint.v1") private var address = "https://8.153.96.190"
+    @AppStorage("qihui.trade.default-mode.v1") private var defaultMode = "simulation"
+    @AppStorage("qihui.trade.live-endpoint.v1") private var savedLiveEndpoint = ""
     @State private var draftAddress = ""
     @State private var username = ""
     @State private var password = ""
@@ -1476,7 +1509,13 @@ struct TradeConnectionSettingsView: View {
                         }.disabled(session.busy)
                     }
                 }
-                Section {
+                Section("默认交易模式") {
+                    Picker("默认登录", selection: $defaultMode) {
+                        Text("模拟交易").tag("simulation")
+                        Text("实盘只读").tag("live_readonly")
+                    }.pickerStyle(.segmented)
+                }.disabled(session.signedIn || session.busy)
+                Section("编辑账户配置") {
                     Picker("账户类型", selection: $real) {
                         Text("模拟交易").tag(false)
                         Text("实盘只读").tag(true)
@@ -1488,11 +1527,16 @@ struct TradeConnectionSettingsView: View {
                         TextField("快期用户名", text: $liveUsername)
                         SecureField("快期密码", text: $livePassword)
                         SecureField("实盘网关访问密钥", text: $liveKey)
-                        Text("仅查询账户，不支持下单及撤单；实盘密码及密钥不持久化。").font(.caption)
+                        Text("仅查询账户，不支持下单及撤单。凭据仅保存在本机钥匙串。").font(.caption)
                         Button("连接实盘只读账户") {
                             session.allowManualLogin()
                             Task {
                                 await session.login(address: liveAddress, key: liveKey, username: liveUsername, password: livePassword, mode: "live_readonly")
+                                if session.signedIn && session.isLive {
+                                    let results = [TradeKeychain.save(liveKey, address: liveAddress), TradeKeychain.save(liveUsername, address: liveAddress, kind: "username"), TradeKeychain.save(livePassword, address: liveAddress, kind: "password")]
+                                    if results.allSatisfy({ $0 }) { savedLiveEndpoint = liveAddress; message = "实盘只读配置已保存" }
+                                    else { message = "安全存储失败" }
+                                }
                                 livePassword = ""; liveKey = ""
                             }
                         }.disabled(liveAddress.isEmpty || liveAddress == address || liveUsername.isEmpty || livePassword.isEmpty || liveKey.isEmpty)
@@ -1542,6 +1586,10 @@ struct TradeConnectionSettingsView: View {
     }
     private func loadSaved() {
         draftAddress = address
+        liveAddress = savedLiveEndpoint
+        liveUsername = TradeKeychain.load(liveAddress, kind: "username")
+        livePassword = TradeKeychain.load(liveAddress, kind: "password")
+        liveKey = TradeKeychain.load(liveAddress)
         username = TradeKeychain.load(address, kind: "username")
         password = TradeKeychain.load(address, kind: "password")
         key = TradeKeychain.load(address)
