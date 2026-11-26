@@ -39,7 +39,9 @@ class RecoveryTests(unittest.TestCase):
         body = {"id": "c"*32, "symbol": "CZCE.SR701", "direction": "BUY",
                 "offset": "OPEN", "quantity": 2, "price": 5000.0}
         self.assertEqual(g.validate_order(body)[4:], (2, 5000.0))
-        for value in (2.5, 2.0, True, "2", 0, -1, 11):
+        for quantity in (11, 100, 200, 1000):
+            self.assertEqual(g.validate_order(dict(body, quantity=quantity))[4], quantity)
+        for value in (2.5, 2.0, True, "2", 0, -1):
             with self.subTest(quantity=value):
                 with self.assertRaises(ValueError):
                     g.validate_order(dict(body, quantity=value))
@@ -47,6 +49,31 @@ class RecoveryTests(unittest.TestCase):
             with self.subTest(price=value):
                 with self.assertRaises(ValueError):
                     g.validate_order(dict(body, price=value))
+
+    def test_large_close_respects_frozen_positions(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        with patch.object(g.threading.Thread, "start"):
+            s = g.Session("test", "password")
+        api = Mock()
+        symbol = "CZCE.SR701"
+        positions = {symbol: SimpleNamespace(pos_long=200, volume_long_frozen=30)}
+        payload = ("a"*32, symbol, "SELL", "CLOSE", 171, 5000.)
+        self.assertEqual(s.submit_order(api, {}, payload, positions), 422)
+        api.insert_order.assert_not_called()
+        self.assertEqual(s.submit_order(api, {}, payload[:4] + (170, 5000.), positions), 200)
+        self.assertEqual(api.insert_order.call_args.kwargs["volume"], 170)
+
+    def test_close_today_and_history_are_checked_separately(self):
+        from types import SimpleNamespace
+        symbol = "SHFE.ag2701"
+        positions = {symbol: SimpleNamespace(pos_long=200, volume_long_frozen=30,
+                    pos_long_today=100, volume_long_frozen_today=20,
+                    pos_long_his=100, volume_long_frozen_his=10)}
+        self.assertEqual(g.close_capacity(positions, symbol, "SELL", "CLOSETODAY"), 80)
+        self.assertEqual(g.close_capacity(positions, symbol, "SELL", "CLOSE"), 90)
+        self.assertIsNone(g.close_capacity(positions, symbol, "BUY", "CLOSE"))
+        self.assertIsNone(g.close_capacity({}, symbol, "SELL", "CLOSE"))
 
     def test_persistent_intent_blocks_replay_after_restart(self):
         import os
