@@ -22,10 +22,10 @@ struct InstrumentDetailView: View {
     }
 
     var body: some View {
-        DetailPager(pages: pages, initial: instrument, period: period) { item, active in
+        DetailPager(pages: pages, initial: instrument, period: period) { item, active, turnPage in
             AnyView(InstrumentDetailPage(instrument: item,
                 selectedContract: item.id == instrument.id ? selectedContract : nil,
-                period: $period, isActive: active, goBack: { dismiss() })
+                period: $period, isActive: active, turnPage: turnPage, goBack: { dismiss() })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("detail.page." + item.id)
@@ -47,7 +47,7 @@ private struct DetailPager: UIViewControllerRepresentable {
     let initial: FuturesInstrument
     // Invalidate hosted roots when the shared selection changes.
     let period: String
-    let content: (FuturesInstrument, Bool) -> AnyView
+    let content: (FuturesInstrument, Bool, @escaping (Int) -> Void) -> AnyView
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -59,8 +59,10 @@ private struct DetailPager: UIViewControllerRepresentable {
             scroll.contentInsetAdjustmentBehavior = .never
             scroll.panGestureRecognizer.maximumNumberOfTouches = 1
             scroll.isDirectionalLockEnabled = true
+            scroll.alwaysBounceVertical = pages.count > 1
         }
         let coordinator = context.coordinator
+        coordinator.pager = pager
         pager.dataSource = pages.count > 1 ? coordinator : nil
         pager.delegate = coordinator
         pager.setViewControllers([coordinator.host(for: initial)], direction: .forward, animated: false)
@@ -75,6 +77,8 @@ private struct DetailPager: UIViewControllerRepresentable {
 
     @MainActor final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
         var parent: DetailPager
+        weak var pager: UIPageViewController?
+        private var transitioning = false
         var activeID: String
         private var hosts: [String: UIHostingController<AnyView>] = [:]
 
@@ -85,12 +89,38 @@ private struct DetailPager: UIViewControllerRepresentable {
 
         func host(for item: FuturesInstrument) -> UIHostingController<AnyView> {
             if let existing = hosts[item.id] { return existing }
-            let host = UIHostingController(rootView: parent.content(item, item.id == activeID))
+            let host = UIHostingController(rootView: root(for: item))
             host.safeAreaRegions = []
             host.view.backgroundColor = .clear
             host.view.accessibilityElementsHidden = item.id != activeID
             hosts[item.id] = host
             return host
+        }
+
+        private func root(for item: FuturesInstrument) -> AnyView {
+            parent.content(item, item.id == activeID) { [weak self] offset in
+                self?.turnPage(from: item.id, offset: offset)
+            }
+        }
+
+        // The chart can own a vertical pan when its UIKit ancestor does not yet
+        // advertise a scrollable extent. Use the chart's existing direction callback.
+        private func turnPage(from id: String, offset: Int) {
+            guard !transitioning, id == activeID, let pager, let visible = pager.viewControllers?.first,
+                  let next = neighbor(of: visible, offset: offset) else { return }
+            transitioning = true
+            pager.setViewControllers([next], direction: offset > 0 ? .forward : .reverse, animated: true) { [weak self] _ in
+                self?.finishTransition()
+            }
+        }
+
+        private func finishTransition() {
+            transitioning = false
+            guard let visible = pager?.viewControllers?.first,
+                  let id = hosts.first(where: { $0.value === visible })?.key else { return }
+            activeID = id
+            refresh()
+            keepNeighbors()
         }
 
         func keepNeighbors() {
@@ -104,7 +134,7 @@ private struct DetailPager: UIViewControllerRepresentable {
         func refresh() {
             for (id, host) in hosts {
                 guard let item = parent.pages.first(where: { $0.id == id }) else { continue }
-                host.rootView = parent.content(item, id == activeID)
+                host.rootView = root(for: item)
                 host.view.accessibilityElementsHidden = id != activeID
             }
         }
@@ -124,13 +154,13 @@ private struct DetailPager: UIViewControllerRepresentable {
             neighbor(of: controller, offset: 1)
         }
 
+        func pageViewController(_ pager: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
+            transitioning = true
+        }
+
         func pageViewController(_ pager: UIPageViewController, didFinishAnimating finished: Bool,
                                 previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-            guard completed, let visible = pager.viewControllers?.first,
-                  let id = hosts.first(where: { $0.value === visible })?.key else { return }
-            activeID = id
-            refresh()
-            keepNeighbors()
+            finishTransition()
         }
     }
 }
@@ -144,12 +174,14 @@ private struct InstrumentDetailPage: View {
     @State private var showChartIndicatorSettings = false
     private let instrument: FuturesInstrument
     private let isActive: Bool
+    let turnPage: (Int) -> Void
     let goBack: () -> Void
     @Binding private var period: String
     @State private var selectedContract: MarketDataService.ContractQuote?
 
-    init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote?, period: Binding<String>, isActive: Bool, goBack: @escaping () -> Void) {
+    init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote?, period: Binding<String>, isActive: Bool, turnPage: @escaping (Int) -> Void, goBack: @escaping () -> Void) {
         self.instrument = instrument
+        self.turnPage = turnPage
         self.goBack = goBack
         self.isActive = isActive
         _period = period
@@ -215,7 +247,7 @@ private struct InstrumentDetailPage: View {
                         previousSettlement: selectedContract == nil ? quote?.settlement : selectedContract?.settlement,
                         showingIndicatorSettings: $showChartIndicatorSettings,
                         selectedCandleTime: $selectedCandleTime,
-                        isInteractive: isActive
+                        onVerticalSwipe: turnPage, isInteractive: isActive
                     )
                     .id(chartKey)
                     .frame(maxHeight: .infinity)

@@ -27,11 +27,11 @@ final class DetailPagerUITests: XCTestCase {
 
     private func verify(_ index: Int, file: StaticString = #filePath, line: UInt = #line) {
         let title = app.buttons["detail.contract." + ids[index]]
-        XCTAssertTrue(title.waitForExistence(timeout: 5), "Wrong contract", file: file, line: line)
+        XCTAssertTrue(title.exists || title.waitForExistence(timeout: 5), "Wrong contract", file: file, line: line)
         XCTAssertTrue(title.isHittable, file: file, line: line)
         let viewport = element("detail.viewport").frame
         let footer = app.buttons["指标参数设置"]
-        XCTAssertTrue(footer.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(footer.exists || footer.waitForExistence(timeout: 5), file: file, line: line)
         XCTAssertTrue(footer.isHittable, file: file, line: line)
         XCTAssertGreaterThan(viewport.height, app.frame.height * 0.80, file: file, line: line)
         XCTAssertEqual(footer.frame.maxY, viewport.maxY, accuracy: 1, file: file, line: line)
