@@ -20,6 +20,32 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_exact_main_quote_uses_current_connection_not_cold_query(self):
+        hub = gateway.LiveQuoteHub()
+        hub.record_poll(False)
+        row = {"code": "DCE.p2701", "month": "2701", "last": 8322,
+               "priceTick": 2, "volumeMultiple": 10}
+        hub.exact_quotes = {"DCE.p2701": row}
+        with patch.object(gateway, "LIVE_QUOTES", hub), patch.object(
+                gateway, "_exact_contract_cold") as cold:
+            self.assertEqual(gateway.exact_contract_quote("DCE.p2701"), row)
+            cold.assert_not_called()
+            cold.return_value = {"code": "DCE.p2705"}
+            self.assertEqual(gateway.exact_contract_quote("DCE.p2705"), {"code": "DCE.p2705"})
+            cold.assert_called_once_with("DCE.p2705")
+            hub.connection_state = "reconnecting"
+            gateway.exact_contract_quote("DCE.p2701")
+            self.assertEqual(cold.call_count, 2)
+
+    def test_exact_quote_route_rejects_continuous_symbol(self):
+        result = []
+        handler = SimpleNamespace(path="/v1/quote?symbol=DCE.p", headers={},
+                                  reply=lambda status, body: result.append((status, body)))
+        with patch.object(gateway, "MARKET_ACCESS", ""), patch.object(gateway, "TqApi") as api:
+            gateway.Handler.do_GET(handler)
+        self.assertEqual(result, [(400, {"error": "invalid_contract"})])
+        api.assert_not_called()
+
     def test_board_partial_request_never_opens_cold_sdk(self):
         live = {"CZCE.OI": {"code": "CZCE.OI701", "last": 10007}}
         with patch.object(gateway, "product_catalog", return_value=[
