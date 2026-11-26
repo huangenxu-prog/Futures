@@ -239,7 +239,7 @@ struct QuoteAppearanceFields: View {
                 ColorPicker("上涨／资金流入", selection: binding($darkUp, fallback: QuoteAppearance.darkUp), supportsOpacity: false)
                 ColorPicker("下跌／资金流出", selection: binding($darkDown, fallback: QuoteAppearance.darkDown), supportsOpacity: false)
             }
-            Section("行情配色 · 浅色") {
+            Section {
                 ColorPicker("上涨／资金流入", selection: binding($lightUp, fallback: QuoteAppearance.lightUp), supportsOpacity: false)
                 ColorPicker("下跌／资金流出", selection: binding($lightDown, fallback: QuoteAppearance.lightDown), supportsOpacity: false)
                 Button("恢复行情默认配色") {
@@ -248,6 +248,8 @@ struct QuoteAppearanceFields: View {
                     darkUp = CandleAppearance.automatic
                     darkDown = CandleAppearance.automatic
                 }
+            } header: {
+                Text("行情配色 · 浅色")
             } footer: {
                 Text("首页与合约详情报价、资金流向统一配色。深浅主题分别保存，不影响K线和指标。")
             }
