@@ -544,7 +544,7 @@ class LiveQuoteHub:
         self.thread = None
         self.expected_products = set()
         self.sdk_creations = 0
-        self.last_disk_save = 0.0
+        self.last_disk_save = float('-inf')
 
     def start(self):
         with self.condition:
@@ -656,7 +656,7 @@ class LiveQuoteHub:
                 continuous = api.get_quote_list(["KQ.m@" + product for product in products])
                 live_quotes = {}
                 last_sent = 0.0
-                last_published = {}
+                last_published = None
                 while True:
                     # wait_update is TqSdk's event-driven feed; no periodic HTTP quote polling.
                     updated = api.wait_update(deadline=time.time() + 0.2)
@@ -682,11 +682,11 @@ class LiveQuoteHub:
                                 current[product] = dict(details, code=code,
                                                         month=f"{int(year) % 100:02d}{int(month):02d}")
                     now = time.monotonic()
-                    if current and current != last_published and now - last_sent >= 0.15:
+                    if current != last_published and now - last_sent >= 0.15:
                         self.publish(current)
                         last_published = current
                         last_sent = now
-                    if current:
+                    if current and last_published == current:
                         self.save_board(catalog)
             except Exception as exc:
                 with self.condition:
