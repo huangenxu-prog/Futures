@@ -247,6 +247,21 @@ enum MarketDataService {
         }
     }
 
+    /// Exact delivery month only. Never substitute another month's quote.
+    static func contractQuote(symbol: String) async throws -> ContractQuote {
+        let url = try baseURL().appendingPathComponent("v1/quote")
+            .appending(queryItems: [URLQueryItem(name: "symbol", value: symbol)])
+        let (data, response) = try await httpSession.data(
+            for: authorizedRequest(url: url, timeoutInterval: 12, cachePolicy: .reloadIgnoringLocalCacheData)
+        )
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw MarketDataError.invalidResponse
+        }
+        let quote = try JSONDecoder().decode(ContractQuote.self, from: data)
+        guard quote.code == symbol else { throw MarketDataError.invalidResponse }
+        return quote
+    }
+
     static func listedContracts(for product: String) async throws -> [ContractQuote] {
         let url = try baseURL().appendingPathComponent("v1/contracts")
             .appending(queryItems: [URLQueryItem(name: "product", value: product)])
