@@ -400,7 +400,7 @@ private struct InstrumentDetailPage: View {
         }
         .sheet(item: $tradeContract) { contract in
             QuickTradeSheet(contract: contract)
-                .presentationDetents([.height(350), .large])
+                .presentationDetents([.height(460), .large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showOptions) {
