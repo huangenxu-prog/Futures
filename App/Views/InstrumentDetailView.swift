@@ -658,7 +658,7 @@ private struct InstrumentDetailPage: View {
             }
             }
             }
-            if isActive {
+            if isActive && periodSeconds < 86400 {
                 CandleCountdownView(barStart: displayedKey == chartKey ? rawBars.last?.time : nil,
                                     period: periodSeconds, running: scenePhase == .active)
             }
@@ -782,9 +782,9 @@ private struct CandleCountdownView: View {
     }
 
     private func label(at date: Date) -> String {
-        guard running, period > 0, period < 86400, let barStart else { return "--:--" }
+        guard running, period > 0, period < 86400, let barStart else { return "" }
         let remaining = Double(barStart) + Double(period) - date.timeIntervalSince1970
-        guard remaining > 0, remaining <= Double(period) else { return "--:--" }
+        guard remaining > 0, remaining <= Double(period) else { return "" }
         let seconds = Int(remaining.rounded(.up))
         if seconds >= 3600 {
             return String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
