@@ -174,10 +174,22 @@ def deploy(names, *, check, trade=False):
     print("TRADE_PID", before_pid, run("systemctl", "show", TRADE, "-p", "MainPID", "--value"), flush=True)
     print("AUDIT_TRADE_OK" if trade else "AUDIT_MARKET_OK", flush=True)
 
+def historical_fixture(name):
+    # This installer is an immutable historical migration, not a patch from
+    # today's main branch. Exercise its original target bytes from Git history.
+    expected = NEW_BLOBS[name]
+    current = (Path(__file__).parent / name).read_bytes()
+    if blob(current) == expected:
+        return current
+    return subprocess.check_output(
+        ["git", "cat-file", "blob", expected],
+        cwd=Path(__file__).resolve().parent, timeout=30)
+
+
 def self_test():
     with tempfile.TemporaryDirectory() as tmp:
         for name, expected in NEW_BLOBS.items():
-            current = (Path(__file__).parent / name).read_bytes()
+            current = historical_fixture(name)
             assert blob(current) == expected, name
             old = apply_delta(current, PATCHES[name], Path(tmp), reverse=True)
             assert blob(old) == OLD_BLOBS[name], name
@@ -185,7 +197,7 @@ def self_test():
             compile(current, name, "exec")
         # Simulate the exact missing contexts reported by the installed VPS.
         name = "market_gateway.py"
-        current = (Path(__file__).parent / name).read_bytes()
+        current = historical_fixture(name)
         base = apply_delta(current, PATCHES[name], Path(tmp), reverse=True)
         for fragment in (
             b"        self.live_timing = {}       # key -> (version, TqSdk observation epoch)\n",
