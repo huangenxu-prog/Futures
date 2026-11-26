@@ -8,6 +8,8 @@ struct QihuiSettingsView: View {
     let instruments: [FuturesInstrument]
     let favoriteIDs: [String]
     let mainCodes: [String:String]
+    private enum SettingsGroup: String { case general, quote, candle, chart, trade, server }
+    @State private var expandedGroup: SettingsGroup?
     @State private var marketConfigured = false
     @State private var marketKey = ""
     @State private var marketKeyError = false
@@ -17,10 +19,34 @@ struct QihuiSettingsView: View {
     @AppStorage("qihui.chart.period-order.v1") private var storedPeriodOrder = ""
     @AppStorage("qihui.chart.period-hidden.v1") private var hiddenPeriods = "3分,10分,120分"
     private var periods: [String] { QihuiPeriods.visible(storedPeriodOrder, hidden: hiddenPeriods) }
+    private func groupHeader(_ group: SettingsGroup, _ title: String, icon: String) -> some View {
+        Section {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expandedGroup = expandedGroup == group ? nil : group
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: icon).frame(width: 24).foregroundStyle(MarketPalette.accent)
+                    Text(title).foregroundStyle(MarketPalette.ink)
+                    Spacer()
+                    Image(systemName: expandedGroup == group ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(MarketPalette.muted)
+                }
+                .frame(minHeight: 35)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(expandedGroup == group ? "已展开" : "已收起")
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
-                Section("常规") {
+                groupHeader(.general, "常规设置", icon: "gearshape")
+                if expandedGroup == .general {
+                Section {
                     Text("涨跌幅基准").font(.caption).foregroundStyle(.secondary)
                     Picker("涨跌幅基准", selection: $changeBasis) {
                         Text("昨结").tag("settlement")
@@ -36,17 +62,26 @@ struct QihuiSettingsView: View {
                     }.pickerStyle(.menu)
 
                 }
-                QuoteAppearanceFields()
-                CandleAppearanceFields()
-                Section("图表与策略") {
+                }
+                groupHeader(.quote, "行情配色", icon: "paintpalette")
+                if expandedGroup == .quote { QuoteAppearanceFields() }
+                groupHeader(.candle, "K线样式", icon: "chart.bar.xaxis")
+                if expandedGroup == .candle { CandleAppearanceFields() }
+                groupHeader(.chart, "图表与策略", icon: "chart.xyaxis.line")
+                if expandedGroup == .chart {
+                Section {
                     Button { strategy = true } label: {
                         HStack { Text("策略回测"); Spacer(); Image(systemName: "chevron.right") }
                     }
                     Button("指标管理") { indicators = true }
                     Button("周期排序") { period = true }
                 }
-                TradeConnectionFields()
-                Section("服务器配置") {
+                }
+                groupHeader(.trade, "交易连接", icon: "wallet.bifold")
+                if expandedGroup == .trade { TradeConnectionFields() }
+                groupHeader(.server, "服务器配置", icon: "server.rack")
+                if expandedGroup == .server {
+                Section {
                     LabeledContent("行情服务器", value: MarketDataService.configuredHost)
                     LabeledContent("行情访问密钥", value: marketConfigured ? "已配置" : "未配置")
                     SecureField("更换行情访问密钥（可选）", text: $marketKey)
@@ -67,6 +102,7 @@ struct QihuiSettingsView: View {
 
                 }
 
+                }
             }
             .scrollContentBackground(backgroundStyle.isCustom ? .hidden : .automatic)
             .background(backgroundStyle.isCustom ? backgroundStyle.surface : Color.clear)
