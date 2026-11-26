@@ -12,6 +12,13 @@ struct StrategyBacktestView: View {
     @State private var symbol = ""
     @State private var period = 1800
     @State private var strategyID = "default"
+    @AppStorage("qihui.backtest.strategy-parameters.v1") private var savedParameters = Data()
+    private struct StrategyParameters: Codable {
+        var risk: Double = 1000
+        var target: Double = 2
+        var protectProfit: Bool = true
+        var customSource: String? = nil
+    }
     @State private var contracts: [MarketDataService.ContractQuote] = []
     @State private var loadingContracts = false
     @State private var contractError: String?
@@ -156,15 +163,39 @@ struct StrategyBacktestView: View {
                 }
             }
             .task(id: productID) { await loadContracts(productID) }
-            .onChange(of: strategyID) { _, value in
+            .onAppear { restoreParameters(for: strategyID) }
+            .onChange(of: strategyID) { old, value in
+                persistParameters(for: old)
                 if value == "default" { source = "LONG:CROSS(EMA(C,20),EMA(C,50));\nSHORT:CROSS(EMA(C,50),EMA(C,20));" }
                 else if let formula = formulas.first(where: { $0.id.uuidString == value }) { source = formula.source }
+                restoreParameters(for: value)
                 result = nil; error = nil
             }
+            .onChange(of: risk) { _, _ in result = nil; error = nil }
+            .onChange(of: target) { _, _ in result = nil; error = nil }
+            .onChange(of: protectProfit) { _, _ in result = nil; error = nil }
+            .onChange(of: source) { _, _ in result = nil; error = nil }
             .onChange(of: symbol) { _, _ in result = nil; error = nil }
             .onChange(of: period) { _, _ in result = nil; error = nil }
-            .onDisappear { task?.cancel() }
+            .onDisappear { persistParameters(for: strategyID); task?.cancel() }
         }
+    }
+
+    private func restoreParameters(for id: String) {
+        let all = (try? JSONDecoder().decode([String: StrategyParameters].self, from: savedParameters)) ?? [:]
+        let p = all[id] ?? StrategyParameters()
+        risk = p.risk; target = p.target; protectProfit = p.protectProfit
+        if id == "custom" {
+            source = p.customSource ?? "LONG:CROSS(EMA(C,20),EMA(C,50));\nSHORT:CROSS(EMA(C,50),EMA(C,20));"
+        }
+    }
+
+    private func persistParameters(for id: String) {
+        guard risk.isFinite, risk > 0, target.isFinite, (0...100).contains(target) else { return }
+        var all = (try? JSONDecoder().decode([String: StrategyParameters].self, from: savedParameters)) ?? [:]
+        all[id] = StrategyParameters(risk: risk, target: target, protectProfit: protectProfit,
+                                     customSource: id == "custom" ? source : nil)
+        if let data = try? JSONEncoder().encode(all) { savedParameters = data }
     }
 
     private func dismissInput() {
@@ -208,6 +239,7 @@ struct StrategyBacktestView: View {
         let p = parameters
         let requested = historyCount, warmup = warmupCount
         guard p.valid else { error = "回测参数无效"; return }
+        persistParameters(for: strategyID)
         let code = source, executionPeriod = period, executionSymbol = symbol
         running = true; error = nil; result = nil; resultTimes = []; phase = "获取历史K线"
         task = Task {

@@ -264,19 +264,7 @@ struct LightMarketView: View {
 
                 List {
                     ForEach(instruments) { item in
-                        marketRow(item)
-                            .onDrag { NSItemProvider(object: item.id as NSString) }
-                            .onDrop(of: [.text], isTargeted: nil) { providers in
-                                guard scope == .favorites, search.isEmpty, sortBy == "默认", let provider = providers.first, favorites.ids.contains(item.id) else { return false }
-                                _ = provider.loadObject(ofClass: NSString.self) { object, _ in
-                                    guard let id = object as? String else { return }
-                                    DispatchQueue.main.async {
-                                        guard favorites.ids.contains(id), let currentTarget = favorites.ids.firstIndex(of: item.id) else { return }
-                                        favorites.move(id, to: currentTarget)
-                                    }
-                                }
-                                return true
-                            }
+                        reorderableRow(item)
                             .listRowBackground(HomeMarketPalette.surface)
                             .listRowSeparatorTint(HomeMarketPalette.divider)
                             .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
@@ -484,6 +472,25 @@ struct LightMarketView: View {
         .padding(.horizontal, 12).frame(height: 33)
         .background(HomeMarketPalette.header)
         .overlay(alignment: .bottom) { Rectangle().fill(HomeMarketPalette.divider).frame(height: 1) }
+    }
+    @ViewBuilder private func reorderableRow(_ item: FuturesInstrument) -> some View {
+        if scope == .favorites && search.isEmpty && sortBy == "默认" {
+            marketRow(item)
+                            .onDrag { NSItemProvider(object: item.id as NSString) }
+                            .onDrop(of: [.text], isTargeted: nil) { providers in
+                                guard scope == .favorites, search.isEmpty, sortBy == "默认", let provider = providers.first, favorites.ids.contains(item.id) else { return false }
+                                _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+                                    guard let id = object as? String else { return }
+                                    DispatchQueue.main.async {
+                                        guard scope == .favorites, search.isEmpty, sortBy == "默认", favorites.ids.contains(id), let currentTarget = favorites.ids.firstIndex(of: item.id) else { return }
+                                        favorites.move(id, to: currentTarget)
+                                    }
+                                }
+                                return true
+                            }
+        } else {
+            marketRow(item)
+        }
     }
     private func marketRow(_ item: FuturesInstrument) -> some View {
         let q = quote(for: item.id)

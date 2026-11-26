@@ -444,7 +444,7 @@ struct TradingCenterView: View {
                 if quickOnly { quickHeader }
             }
             .toolbar(quickOnly ? .hidden : .visible, for: .navigationBar)
-            .navigationTitle(quickOnly ? "快捷开仓" : (session.isLive && session.signedIn ? "实盘交易" : (defaultMode == "live_readonly" ? "实盘交易" : "模拟交易")))
+            .navigationTitle(quickOnly ? "快捷开仓" : (session.signedIn ? (session.isLive ? "实盘交易" : "模拟交易") : (defaultMode == "live_readonly" ? "实盘交易" : "模拟交易")))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
@@ -514,8 +514,8 @@ struct TradingCenterView: View {
                 selected = PaperContract(symbol: c.symbol, name: c.name, tick: c.tick, multiplier: c.multiplier, last: last, bid: q.bid, ask: q.ask, option: nil)
                 detailedQuote = MarketDataService.ContractQuote(code: q.code, month: q.month, last: q.last, settlement: q.settlement, bid: q.bid, ask: q.ask, volume: q.volume, interest: q.interest, priceTick: c.tick, volumeMultiple: c.multiplier, bidVolume: q.bidVolume, askVolume: q.askVolume, opening: q.opening, highest: q.highest, lowest: q.lowest, upperLimit: detailedQuote?.upperLimit, lowerLimit: detailedQuote?.lowerLimit, time: q.time)
             }
-            .task(id: selectionRequest) {
-                guard let c = selected else { return }
+            .task(id: "\(selectionRequest)-\(scenePhase)-\(session.signedIn)") {
+                guard scenePhase == .active, session.signedIn, let c = selected else { return }
                 let request = selectionRequest
                 while !Task.isCancelled {
                     await refreshQuote(c, request: request)
@@ -1059,6 +1059,7 @@ struct TradingCenterView: View {
                 next = PaperContract(symbol: q.code, name: p.name, tick: q.priceTick, multiplier: q.volumeMultiple, last: q.last, bid: q.bid, ask: q.ask)
             }
             guard !Task.isCancelled, selectionRequest == request, selected?.symbol == c.symbol else { return }
+            guard next.symbol == c.symbol, next.hasMetadata else { throw MarketDataError.noData }
             let received = Date()
             recentTradeQuotes = recentTradeQuotes.filter { received.timeIntervalSince($0.value.received) <= 30 }
             recentTradeQuotes[c.symbol] = CachedTradeQuote(contract: next, details: details, optionDetails: optionDetails, received: received)
@@ -1501,7 +1502,6 @@ struct TradeConnectionFields: View {
     @State private var username = ""
     @State private var password = ""
     @State private var key = ""
-    @State private var real = false
     @State private var liveAddress = ""
     @State private var liveUsername = ""
     @State private var livePassword = ""
@@ -1510,7 +1510,7 @@ struct TradeConnectionFields: View {
     var body: some View {
         Group {
                 Section("账户状态") {
-                    LabeledContent("交易模式", value: session.isLive && session.signedIn ? "实盘只读" : "快期云端模拟")
+                    LabeledContent("交易模式", value: session.signedIn ? (session.isLive ? "实盘只读" : "快期云端模拟") : "未连接")
                     LabeledContent("登录状态", value: session.signedIn ? "已登录" : "未登录")
                     if session.signedIn {
                         Button("退出账户", role: .destructive) {
@@ -1537,7 +1537,7 @@ struct TradeConnectionFields: View {
                                 await session.login(address: liveAddress, key: liveKey, username: liveUsername, password: livePassword, mode: "live_readonly")
                                 if session.signedIn && session.isLive {
                                     let results = [TradeKeychain.save(liveKey, address: liveAddress), TradeKeychain.save(liveUsername, address: liveAddress, kind: "username"), TradeKeychain.save(livePassword, address: liveAddress, kind: "password")]
-                                    if results.allSatisfy({ $0 }) { savedLiveEndpoint = liveAddress; message = "实盘只读配置已保存" }
+                                    if results.allSatisfy({ $0 }) { savedLiveEndpoint = liveAddress; defaultMode = "live_readonly"; message = "实盘只读配置已保存" }
                                     else { message = "安全存储失败" }
                                 }
                                 livePassword = ""; liveKey = ""
@@ -1560,7 +1560,8 @@ struct TradeConnectionFields: View {
                             session.allowManualLogin()
                             Task {
                                 await session.login(address: target, key: key, username: user, password: password)
-                                if session.signedIn {
+                                if session.signedIn && !session.isLive {
+                                    defaultMode = "simulation"
                                     address = target
                                     message = "账户已连接"
                                     password = ""; key = ""

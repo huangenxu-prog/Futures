@@ -321,18 +321,27 @@ private struct InstrumentDetailPage: View {
         .padding(.horizontal, 3)
         .background(MarketPalette.surface)
         .toolbar(.hidden, for: .navigationBar)
-        .task(id: chartSymbol + (isActive ? "/active" : "/preview")) {
-            guard isActive else { return }
+        .task(id: chartSymbol + (isActive ? "/active" : "/preview") + (scenePhase == .active ? "/foreground" : "/paused")) {
+            guard isActive, scenePhase == .active else { return }
             let symbol = chartSymbol
             statisticsQuote = nil
             currentPriceTick = selectedContract?.priceTick
             currentVolumeMultiple = selectedContract?.volumeMultiple
-            if let contract = try? await MarketDataService.contractQuote(symbol: symbol) {
-                guard !Task.isCancelled, chartSymbol == symbol else { return }
-                statisticsQuote = contract
-                if let tick = contract.priceTick, tick > 0 { currentPriceTick = tick }
-                if let multiple = contract.volumeMultiple, multiple > 0 { currentVolumeMultiple = multiple }
-            }
+            repeat {
+                if let contract = try? await MarketDataService.contractQuote(symbol: symbol) {
+                    guard !Task.isCancelled, chartSymbol == symbol else { return }
+                    if let previous = statisticsQuote?.time, let incoming = contract.time, incoming < previous {
+                        // Never replace a newer exact quote with an older snapshot.
+                    } else {
+                        statisticsQuote = contract
+                        if let tick = contract.priceTick, tick > 0 { currentPriceTick = tick }
+                        if let multiple = contract.volumeMultiple, multiple > 0 { currentVolumeMultiple = multiple }
+                    }
+                }
+                // Main contracts already receive live board updates.
+                guard selectedContract != nil, !Task.isCancelled else { return }
+                do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            } while !Task.isCancelled
         }
         .task(id: chartKey + (scenePhase == .active ? "/foreground" : "/paused") + (isActive ? "/live" : "/preview")) {
             guard scenePhase == .active else { return }
