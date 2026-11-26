@@ -19,6 +19,10 @@ struct FormulaBar: Sendable {
         self.volume = volume; self.openInterest = openInterest; self.closeInterest = closeInterest
     }
 }
+enum FormulaPlatform: String, Codable, CaseIterable, Sendable {
+    case native, tongdaxin, hexin, wenhua
+}
+
 struct FormulaDefinition: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var name = "自定义指标"
@@ -26,6 +30,8 @@ struct FormulaDefinition: Codable, Equatable, Identifiable, Sendable {
     var overlay = true
     var enabled = false
     var composition: FormulaComposition? = nil
+    var platform: FormulaPlatform? = nil
+    var effectivePlatform: FormulaPlatform { platform ?? .native }
 }
 
 /// Only ASCII letters/underscore and Han ideographs are allowed to start
@@ -91,8 +97,8 @@ struct FormulaOutput: Sendable {
 struct FormulaProgram: Sendable {
     private let statements: [FormulaStatement]
 
-    init(_ source: String) throws {
-        var parser = try FormulaParser(source)
+    init(_ source: String, platform: FormulaPlatform = .native) throws {
+        var parser = try FormulaParser(source, platform: platform)
         statements = try parser.parse()
         // Validate even an empty chart: functions and variables cannot be
         // deferred until live data happens to arrive.
@@ -322,6 +328,8 @@ struct FormulaProgram: Sendable {
                 "MA":2,"EMA":2,"SMA":3,"WMA":2,"HMA":2,"DEMA":2,"TEMA":2,"DMA":2,"WILDER":2,
                 "HHV":2,"LLV":2,"SUM":2,"STD":2,
                 "REF":2,"COUNT":2,"IF":3,"CROSS":2,"BARSLAST":1,"ABS":1,"MAX":2,"MIN":2,
+                "SQRT":1,"POW":2,"EXP":1,"LN":1,"LOG":1,"SIGN":1,
+                "FLOOR":1,"CEILING":1,"INTPART":1,"SIN":1,"COS":1,"TAN":1,
                 "RANGE":3,"VALUEWHEN":2,"FILTER":2,"HHVBARS":2,"LLVBARS":2,"EXIST":2,"EVERY":2,"NOT":1,"BARSCOUNT":1
             ]
             guard let expected = arity[fn] else { throw FormulaFailure("暂不支持函数：\(fn)") }
@@ -332,6 +340,32 @@ struct FormulaProgram: Sendable {
                 return x.indices.map { i in
                     guard let v = x[i], let a = low[i], let b = high[i] else { return nil }
                     return v > a && v < b ? 1 : 0
+                }
+            }
+            if ["SQRT","EXP","LN","LOG","SIGN","FLOOR","CEILING","INTPART","SIN","COS","TAN"].contains(fn) {
+                return x.map { value in
+                    guard let v = value else { return nil }
+                    switch fn {
+                    case "SQRT": return v >= 0 ? finite(sqrt(v)) : nil
+                    case "EXP": return finite(exp(v))
+                    case "LN": return v > 0 ? finite(log(v)) : nil
+                    case "LOG": return v > 0 ? finite(log10(v)) : nil
+                    case "SIGN": return v > 0 ? 1 : (v < 0 ? -1 : 0)
+                    case "FLOOR": return finite(floor(v))
+                    case "CEILING": return finite(ceil(v))
+                    case "INTPART": return finite(v.rounded(.towardZero))
+                    case "SIN": return finite(sin(v))
+                    case "COS": return finite(cos(v))
+                    case "TAN": return finite(tan(v))
+                    default: return nil
+                    }
+                }
+            }
+            if fn == "POW" {
+                let y = try eval(args[1],env,n)
+                return zip(x,y).map { a,b in
+                    guard let a, let b else { return nil }
+                    return finite(pow(a,b))
                 }
             }
             if fn == "ABS" { return x.map { $0.map(abs) } }
@@ -533,11 +567,13 @@ struct FormulaProgram: Sendable {
 }
 
 private struct FormulaParser {
+    private let platform: FormulaPlatform
     private var tokens: [FormulaToken]
     private var index = 0
     private var token: FormulaToken { tokens[index] }
 
-    init(_ source: String) throws {
+    init(_ source: String, platform: FormulaPlatform) throws {
+        self.platform = platform
         guard source.utf8.count <= 32768 else { throw FormulaFailure("公式过长，上限32768字节") }
         let chars = Array(source)
         var result: [FormulaToken] = [], i = 0
@@ -690,6 +726,9 @@ private struct FormulaParser {
             if !accept(")") {
                 repeat { args.append(try expression(depth:depth+1)) } while accept(",")
                 try expect(")")
+            }
+            if platform == .tongdaxin && name == "IFN" && args.count == 3 {
+                return .call("IF", [args[0], args[2], args[1]])
             }
             return .call(name,args)
         default: throw FormulaFailure("缺少有效表达式，位置 \(index+1)")
