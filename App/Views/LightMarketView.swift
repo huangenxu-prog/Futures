@@ -56,7 +56,6 @@ struct LightMarketView: View {
     @State private var scope: Scope = .favorites
     @State private var search = ""
     @State private var editing = false
-    @State private var expandedQuoteID: String?
     @AppStorage("qihui.appearance.mode.v1") private var appearanceMode = AppAppearanceMode.dark.rawValue
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedInstrument: FuturesInstrument?
@@ -216,7 +215,6 @@ struct LightMarketView: View {
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 if favorites.ids.contains(item.id) {
                                     Button("移出自选", role: .destructive) {
-                                        if expandedQuoteID == item.id { expandedQuoteID = nil }
                                         favorites.toggle(item.id)
                                     }
                                 } else {
@@ -335,7 +333,6 @@ struct LightMarketView: View {
                     scope = option
                     selectedCategory = "全部"
                     editing = false
-                    expandedQuoteID = nil
                 } label: {
                     VStack(spacing: 9) {
                         Text(option.rawValue)
@@ -405,12 +402,12 @@ struct LightMarketView: View {
     private var showsFavoriteControl: Bool { scope != .favorites || !search.isEmpty }
 
     private let nameWidth: CGFloat = 115
-    private let columns = ["最新价","涨跌幅","成交量","持仓量","昨结","日增仓","今开","最高","最低","振幅","中间价"]
+    private let columns = ["最新价", "涨跌幅", "日增仓"]
     private var columnHeadings: some View {
         HStack(spacing: 5) {
             Text("品种").frame(width: nameWidth, alignment: .leading)
-            ForEach(0..<3) { index in
-                Text(columns[index]).frame(maxWidth: .infinity, alignment: .trailing)
+            ForEach(columns, id: \.self) { column in
+                Text(column).frame(maxWidth: .infinity, alignment: .trailing)
             }
             if showsFavoriteControl || editing { Color.clear.frame(width: 23) }
         }
@@ -423,68 +420,45 @@ struct LightMarketView: View {
     private func marketRow(_ item: FuturesInstrument) -> some View {
         let q = quote(for: item.id)
         let isFavorite = favorites.ids.contains(item.id)
-        let expanded = expandedQuoteID == item.id && !editing
-        return VStack(spacing: 0) {
+        return HStack(spacing: 5) {
             HStack(spacing: 5) {
-                Button {
-                    guard !editing else { return }
-                    detailSequence = instruments
-                    selectedInstrument = item
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(item.name + (q.map { " " + $0.month } ?? ""))
-                            .font(.system(size: 14, weight: .semibold)).foregroundStyle(MarketPalette.ink)
-                            .lineLimit(1).minimumScaleFactor(0.68)
-                        Text(q?.code ?? item.id)
-                            .font(.system(size: 9, design: .monospaced)).foregroundStyle(MarketPalette.muted)
-                            .lineLimit(1).minimumScaleFactor(0.7)
-                    }.frame(width: nameWidth, alignment: .leading).frame(height: 57)
-                    .contentShape(Rectangle())
-                }.buttonStyle(.plain)
-                Button {
-                    guard !editing else { return }
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        expandedQuoteID = expanded ? nil : item.id
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        ForEach(0..<3) { index in
-                            Text(dataValue(index, q))
-                                .font(.system(size: index == 0 ? 14 : 12, weight: .medium, design: .rounded))
-                                .foregroundStyle(index < 2 ? MarketPalette.movement(q?.change(basis: changeBasis)) : MarketPalette.ink)
-                                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
-                                .frame(maxWidth: .infinity, alignment: .trailing)
-                        }
-                    }.frame(height: 57).contentShape(Rectangle())
-                }.buttonStyle(.plain)
-                .accessibilityLabel(expanded ? "收起行情详情" : "展开行情详情")
-                if showsFavoriteControl {
-                    Button { favorites.toggle(item.id) } label: {
-                        Image(systemName: isFavorite ? "star.fill" : "star").font(.system(size: 12))
-                            .foregroundStyle(isFavorite ? MarketPalette.accent : MarketPalette.muted)
-                            .frame(width: 23, height: 40)
-                    }.buttonStyle(.borderless)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.name + (q.map { " " + $0.month } ?? ""))
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(MarketPalette.ink)
+                        .lineLimit(1).minimumScaleFactor(0.68)
+                    Text(q?.code ?? item.id)
+                        .font(.system(size: 9, design: .monospaced)).foregroundStyle(MarketPalette.muted)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                }.frame(width: nameWidth, alignment: .leading)
+                ForEach(0..<3) { index in
+                    Text(dataValue(index, q))
+                        .font(.system(size: index == 0 ? 14 : 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(MarketPalette.movement(index == 2 ? q?.interestChange : q?.change(basis: changeBasis)))
+                        .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-            }.frame(height: 57)
-            if expanded {
-                VStack(spacing: 9) {
-                    ForEach(0..<2) { row in
-                        HStack(spacing: 10) {
-                            ForEach(0..<3) { col in
-                                let index = 3 + row * 3 + col
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(columns[index]).font(.caption2).foregroundStyle(MarketPalette.muted)
-                                    Text(dataValue(index, q)).font(.subheadline.weight(.medium))
-                                        .monospacedDigit().foregroundStyle(MarketPalette.ink)
-                                        .lineLimit(1).minimumScaleFactor(0.65)
-                                }.frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
-                    }
-                }.padding(10).background(MarketPalette.raised, in: RoundedRectangle(cornerRadius: 6))
-                    .padding(.bottom, 7)
             }
-        }
+            .frame(height: 57)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !editing else { return }
+                detailSequence = instruments
+                selectedInstrument = item
+            }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                guard !editing else { return }
+                detailSequence = instruments
+                selectedInstrument = item
+            }
+            if showsFavoriteControl {
+                Button { favorites.toggle(item.id) } label: {
+                    Image(systemName: isFavorite ? "star.fill" : "star").font(.system(size: 12))
+                        .foregroundStyle(isFavorite ? MarketPalette.accent : MarketPalette.muted)
+                        .frame(width: 23, height: 40)
+                }.buttonStyle(.borderless)
+            }
+        }.frame(height: 57)
     }
     private func dataValue(_ index: Int, _ q: MarketDataService.MainContract?) -> String {
         func number(_ value: Double?) -> String {
@@ -495,19 +469,9 @@ struct LightMarketView: View {
         switch index {
         case 0: return number(q.last)
         case 1: return q.changePercent(basis: changeBasis)
-        case 2: return CompactMarketQuantity.format(q.volume)
-        case 3: return CompactMarketQuantity.format(q.interest)
-        case 4: return number(q.settlement)
-        case 5: return number(q.interestChange)
-        case 6: return number(q.opening)
-        case 7: return number(q.highest)
-        case 8: return number(q.lowest)
-        case 9:
-            guard let h = q.highest, let l = q.lowest, let base = q.settlement, base > 0, h >= l else { return "--" }
-            return String(format: "%.2f%%", (h-l)/base*100)
-        case 10:
-            guard let bid = q.bid, let ask = q.ask, bid > 0, ask >= bid else { return "--" }
-            return number((bid+ask)/2)
+        case 2:
+            guard let change = q.interestChange, change.isFinite else { return "--" }
+            return (change > 0 ? "+" : "") + number(change)
         default: return "--"
         }
     }
