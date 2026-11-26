@@ -14,6 +14,7 @@ import signal
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PREFIX = "/v1/trade/"
@@ -572,6 +573,26 @@ def start_configured_session():
     return True
 
 
+def scheduled_restart_slot(now):
+    """Return a unique Beijing-time slot only during its scheduled minute."""
+    local = now.astimezone(timezone(timedelta(hours=8)))
+    hhmm = (local.hour, local.minute)
+    if hhmm not in ((8, 30), (12, 0), (20, 30)):
+        return None
+    return local.strftime("%Y-%m-%d %H:%M")
+
+
+def claim_restart_slot(path, slot):
+    # Claim before shutdown; a supervisor restart within the same minute
+    # must not create a restart loop. No account information is stored.
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    os.close(fd)
+    with sqlite3.connect(path, timeout=5) as db:
+        db.execute("PRAGMA synchronous=FULL")
+        db.execute("CREATE TABLE IF NOT EXISTS slots (slot TEXT PRIMARY KEY)")
+        return db.execute("INSERT OR IGNORE INTO slots VALUES (?)", (slot,)).rowcount == 1
+
+
 def main():
     global ORDER_LEDGER
     if len(ACCESS) < 32:
@@ -598,8 +619,15 @@ def main():
     with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
         server.timeout = 0.5
         start_configured_session()
+        restart_enabled = os.environ.get("QIHUI_TRADE_SCHEDULED_RESTART", "0") == "1"
+        restart_path = "live-readonly-restarts.sqlite3" if TRADE_MODE == "live_readonly" else "trade-restarts.sqlite3"
         while not MAINTENANCE.is_set():
             server.handle_request()
+            if restart_enabled:
+                slot = scheduled_restart_slot(datetime.now(timezone.utc))
+                if slot is not None and claim_restart_slot(restart_path, slot):
+                    audit("scheduled_restart_requested", slot=slot)
+                    MAINTENANCE.set()
         audit("maintenance_started")
         # Never force-close an in-flight local command ourselves. External
         # service-manager stop timeouts must be configured separately.
