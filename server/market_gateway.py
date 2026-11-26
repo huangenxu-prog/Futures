@@ -633,7 +633,7 @@ KLINE_MAX_MEMORY_SERIES = 24   # soft LRU bound; active readers take precedence
 KLINE_HISTORY_REFRESH_SECONDS = 600
 # The favorites' stored history need not be re-downloaded every 10 minutes.
 # Opening a chart always requests an up-to-date reconciliation separately.
-KLINE_WARM_HISTORY_FRESH_SECONDS = 3600
+KLINE_WARM_HISTORY_FRESH_SECONDS = 900
 KLINE_SAVE_INTERVAL = 30
 KLINE_CACHE_DIR = os.environ.get("QIHUI_KLINE_CACHE_DIR", "/root/tq_test/cache/klines")
 KLINE_PERIOD_ORDER = (900, 300, 1800, 3600, 60, 86400)
@@ -1055,7 +1055,7 @@ class SharedKlineHub:
             for symbol in list(dict.fromkeys(symbols)):
                 if now < self.warm_until.get(symbol, 0):
                     continue
-                self.warm_until[symbol] = now + 3600
+                self.warm_until[symbol] = now + KLINE_WARM_HISTORY_FRESH_SECONDS
                 accepted += 1
                 for period in FAVORITE_WARM_PERIODS:
                     key = (quote_symbol(symbol), period)
@@ -1164,7 +1164,7 @@ class SharedKlineHub:
                 with self.condition:
                     self.history_running.discard(key)
                     self.condition.notify_all()
-            if batches >= 3:
+            if batches >= 8:
                 try:
                     api.close()
                 except Exception:
