@@ -212,6 +212,7 @@ class Session:
         self.seen = {}
         self.submitted = set()
         self.snapshot_monotonic = None
+        self.sdk_update_monotonic = None
         self.last_access = time.monotonic()
         self.worker = threading.Thread(target=self.run, args=(username, password), daemon=True)
         self.worker.start()
@@ -267,7 +268,10 @@ class Session:
                         with LOCK:
                             self.inflight -= 1
                         done.set()
-                api.wait_update(deadline=time.time() + 0.5)
+                updated = api.wait_update(deadline=time.time() + 0.5)
+                if updated:
+                    with self.data_lock:
+                        self.sdk_update_monotonic = time.monotonic()
                 data = snapshot(account, positions, orders, fills)
                 if data is not None and ORDER_LEDGER is not None:
                     now = time.monotonic()
@@ -346,6 +350,10 @@ class Session:
                 return None
             result = dict(self.data)
             # Measures worker snapshot age, not upstream exchange connectivity.
+            result["sdk_update_age_ms"] = (int((time.monotonic() - self.sdk_update_monotonic) * 1000)
+                                           if self.sdk_update_monotonic is not None else None)
+            # Neither timestamp proves an authenticated broker connection.
+            result["broker_connection_verified"] = False
             result["snapshot_age_ms"] = (int((time.monotonic() - self.snapshot_monotonic) * 1000)
                                          if self.snapshot_monotonic is not None else None)
             return result
