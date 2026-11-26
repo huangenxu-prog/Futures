@@ -214,7 +214,8 @@ ORDER_LEDGER = None
 
 
 class Session:
-    def __init__(self, username, password):
+    def __init__(self, username, password, keepalive=False):
+        self.keepalive = keepalive
         self.token = secrets.token_urlsafe(32)
         self.username = username
         self.mode = TRADE_MODE
@@ -252,7 +253,7 @@ class Session:
             fills = api.get_trade()
             reconciliation = None
             next_reconcile = 0.0
-            while not self.stop.is_set() and time.monotonic() - self.last_access < IDLE:
+            while not self.stop.is_set() and (self.keepalive or time.monotonic() - self.last_access < IDLE):
                 try:
                     action, payload, done, result = self.commands.get_nowait()
                 except queue.Empty:
@@ -547,6 +548,30 @@ def drain_session(timeout=30):
     return not s.worker.is_alive()
 
 
+def startup_credentials():
+    """Explicit opt-in; credentials supplied by private service configuration."""
+    if os.environ.get("QIHUI_TRADE_AUTO_LOGIN", "0") != "1":
+        return None
+    username = os.environ.get("QIHUI_TQ_USERNAME", "")
+    password = os.environ.get("QIHUI_TQ_PASSWORD", "")
+    if not all(0 < len(value) <= 512 for value in (username, password)):
+        raise RuntimeError("automatic login credentials missing or invalid")
+    return username, password
+
+
+def start_configured_session():
+    global SESSION
+    credentials = startup_credentials()
+    if credentials is None:
+        return False
+    with LOCK:
+        if MAINTENANCE.is_set() or (SESSION is not None and SESSION.worker.is_alive()):
+            return False
+        SESSION = Session(*credentials, keepalive=True)
+    audit("configured_session_started")
+    return True
+
+
 def main():
     global ORDER_LEDGER
     if len(ACCESS) < 32:
@@ -572,6 +597,7 @@ def main():
     signal.signal(signal.SIGINT, request_maintenance)
     with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
         server.timeout = 0.5
+        start_configured_session()
         while not MAINTENANCE.is_set():
             server.handle_request()
         audit("maintenance_started")
