@@ -119,7 +119,10 @@ final class DetailPagerUITests: XCTestCase {
         app.activate()
         verify(0)
         let fiveMinutes = app.buttons["5m"]
-        fiveMinutes.tap()
+        let labelFrame = fiveMinutes.frame
+        XCTAssertTrue(app.frame.contains(labelFrame))
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: labelFrame.midX - app.frame.minX, dy: labelFrame.midY - app.frame.minY)).tap()
         XCTAssertTrue(fiveMinutes.isSelected)
         for (index, forwards) in [(1, true), (0, false)] {
             if forwards { drag(0.50, 0.79, to: 0.50, 0.19) }
