@@ -163,6 +163,25 @@ class OrderIntentLedger:
             row = db.execute("SELECT payload FROM intents WHERE account=? AND oid=?", (account, oid)).fetchone()
             return tuple(json.loads(row[0])) if row else None
 
+    def reconcile_snapshot(self, account, rows):
+        # Missing historical records are not proof of rejection or cancellation.
+        observed = {row["id"]: row for row in rows}
+        result = {"confirmed": 0, "conflict": 0, "not_confirmed": 0}
+        with sqlite3.connect(self.path, timeout=5) as db:
+            for oid, encoded in db.execute("SELECT oid, payload FROM intents WHERE account=?", (account,)):
+                row = observed.get(oid)
+                if row is None:
+                    result["not_confirmed"] += 1
+                    continue
+                actual = [oid, row["symbol"], row["direction"], row["offset"], row["quantity"], row["price"]]
+                if actual != json.loads(encoded):
+                    result["conflict"] += 1
+                elif row["exchange_order_id"] or row["display_state"] in ("FILLED", "REJECTED"):
+                    result["confirmed"] += 1
+                else:
+                    result["not_confirmed"] += 1
+        return result
+
     def reserve(self, account, payload):
         oid = payload[0]
         encoded = json.dumps(payload, separators=(",", ":"), allow_nan=False)
@@ -213,6 +232,8 @@ class Session:
             positions = api.get_position()
             orders = api.get_order()
             fills = api.get_trade()
+            reconciliation = None
+            next_reconcile = 0.0
             while not self.stop.is_set() and time.monotonic() - self.last_access < IDLE:
                 try:
                     action, payload, done, result = self.commands.get_nowait()
@@ -248,6 +269,13 @@ class Session:
                         done.set()
                 api.wait_update(deadline=time.time() + 0.5)
                 data = snapshot(account, positions, orders, fills)
+                if data is not None and ORDER_LEDGER is not None:
+                    now = time.monotonic()
+                    if now >= next_reconcile:
+                        reconciliation = ORDER_LEDGER.reconcile_snapshot(self.ledger_namespace(), data["orders"])
+                        audit("order_snapshot_reconciliation", **reconciliation)
+                        next_reconcile = now + 30
+                    data["order_reconciliation"] = reconciliation
                 with self.data_lock:
                     self.data = data
                     self.snapshot_monotonic = time.monotonic() if data is not None else None
