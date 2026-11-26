@@ -333,12 +333,18 @@ def quote_symbol(symbol):
     return symbol
 
 
+def option_underlying_code(symbol):
+    match = re.fullmatch(r"((?:CFFEX|SHFE|DCE|CZCE|INE|GFEX)\.[A-Za-z]+[0-9]{3,4})-?[CP]-?[0-9]+(?:\.[0-9]+)?", symbol or "")
+    return match.group(1) if match else None
+
+
 def supported_symbol(symbol):
     # Accept catalog-validated product codes (continuous charts) as well
     # as exact delivery months. Do not bypass catalog validation.
     if re.fullmatch(r"(CFFEX|SHFE|DCE|CZCE|INE|GFEX)\.[A-Za-z]+", symbol or ""):
         return supported_product(symbol)
-    return supported_product(contract_product(symbol))
+    underlying = option_underlying_code(symbol)
+    return supported_product(contract_product(underlying or symbol))
 
 
 def selected_quotes(products):
@@ -460,6 +466,42 @@ def main_contracts():
         QUERY_WORKER.release_api(api)
 
 
+def option_quote_row(code, quote):
+    row = dict(snapshot(quote), code=code, strike=float(quote.strike_price),
+               side=quote.option_class)
+    for field, key in (("price_tick", "priceTick"), ("volume_multiple", "volumeMultiple"),
+                       ("upper_limit", "upperLimit"), ("lower_limit", "lowerLimit"),
+                       ("expire_datetime", "expireEpoch")):
+        value = getattr(quote, field, None)
+        if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
+            if key == "expireEpoch" and value > 1e12:
+                value /= 1e9
+            row[key] = float(value)
+    return row
+
+
+@reusable_query
+@cached_short_query
+def exact_option_quote(symbol, underlying):
+    if option_underlying_code(symbol) != underlying or not supported_product(contract_product(underlying)):
+        raise ValueError("invalid option")
+    api = QUERY_WORKER.acquire_api()
+    try:
+        quote = api.get_quote_list([symbol])[0]
+        deadline = time.time() + 2
+        while not getattr(quote, "datetime", "") and time.time() < deadline:
+            api.wait_update(deadline=min(deadline, time.time() + 0.3))
+        if (quote.underlying_symbol != underlying or getattr(quote, "expired", False)
+                or quote.option_class not in ("CALL", "PUT") or not math.isfinite(quote.strike_price)):
+            raise ValueError("invalid option")
+        row = option_quote_row(symbol, quote)
+        if not row.get("time"):
+            raise RuntimeError("option_quote_unavailable")
+        return row
+    finally:
+        QUERY_WORKER.release_api(api)
+
+
 @reusable_query
 @cached_short_query
 def option_chain(underlying):
@@ -472,13 +514,7 @@ def option_chain(underlying):
             for code, quote in zip(batch, api.get_quote_list(batch)):
                 if (quote.underlying_symbol == underlying and math.isfinite(quote.strike_price)
                         and quote.option_class in ("CALL", "PUT")):
-                    row = dict(snapshot(quote), code=code, strike=quote.strike_price,
-                               side=quote.option_class)
-                    for field, key in (("price_tick", "priceTick"),
-                                       ("volume_multiple", "volumeMultiple")):
-                        value = getattr(quote, field, None)
-                        if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
-                            row[key] = float(value)
+                    row = option_quote_row(code, quote)
                     result.append(row)
         return sorted(result, key=lambda row: (row["strike"], row["side"], row["code"]))
     finally:
@@ -1762,6 +1798,15 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 print("挂牌合约查询失败:", type(exc).__name__, str(exc)[:140], flush=True)
                 self.reply(503, {"error": "contracts_unavailable"})
+            return
+        if url.path == "/v1/option-quote":
+            params = parse_qs(url.query)
+            try:
+                self.reply(200, exact_option_quote(params.get("symbol", [""])[0], params.get("underlying", [""])[0]))
+            except ValueError:
+                self.reply(400, {"error": "invalid_option"})
+            except Exception:
+                self.reply(503, {"error": "option_quote_unavailable"})
             return
         if url.path == "/v1/options":
             code = parse_qs(url.query).get("symbol", [""])[0]

@@ -1,260 +1,284 @@
 import SwiftUI
 
-/// T-shaped options chain and exact-contract quick order entry.
-/// Missing prices are shown as "--"; no fabricated IV or Greeks.
+private func optionNumber(_ value: Double?) -> String {
+    guard let value, value.isFinite else { return "--" }
+    return value.formatted(.number.precision(.fractionLength(0...2)))
+}
+private func optionDays(_ value: Double?) -> String {
+    guard let value, value.isFinite, value > 0 else { return "--" }
+    return String(max(0, Int(ceil((value - Date().timeIntervalSince1970) / 86400)))) + "天"
+}
+
 struct OptionChainView: View {
     let code: String
     let underlyingLast: Double?
-    let underlyingName:String
-
-    init(code: String, underlyingLast: Double? = nil,underlyingName:String? = nil) {
-        self.code = code
-        self.underlyingLast = underlyingLast
-        self.underlyingName = underlyingName ?? code
+    let underlyingName: String
+    init(code: String, underlyingLast: Double? = nil, underlyingName: String? = nil) {
+        self.code = code; self.underlyingLast = underlyingLast; self.underlyingName = underlyingName ?? code
     }
-
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("qihui.change.basis.v1") private var basis = "settlement"
     @State private var rows: [MarketDataService.OptionQuote] = []
-    @State private var loading = true
+    @State private var last: Double?
+    @State private var side = "PUT"
+    @State private var selected: MarketDataService.OptionQuote?
     @State private var error: String?
-    @State private var displayVolume = false
-    @State private var side: Side = .both
-    @State private var selectedOption:MarketDataService.OptionQuote?
-
-    private enum Side {
-        case both, call, put
+    @State private var loading = false
+    @State private var initialPosition = false
+    @State private var anchor: Double?
+    @State private var sort = 0
+    @State private var descending = false
+    private let headings = ["最新价","涨幅%","持仓量","成交量","日增仓","买一","卖一","买一量","卖一量","今开","最高","最低","昨结"]
+    private var spot: Double? { last ?? underlyingLast }
+    private var name: String { underlyingName + String(code.reversed().prefix(while: { $0.isNumber }).reversed()) }
+    private var nearest: Double? {
+        guard let spot else { return nil }
+        return rows.map(\.strike).min { abs($0-spot) < abs($1-spot) }
     }
-
-    private struct StrikePair: Identifiable {
-        let strike: Double
-        let call: MarketDataService.OptionQuote?
-        let put: MarketDataService.OptionQuote?
-        var id: Double { strike }
-    }
-
-    private var pairedRows: [StrikePair] {
-        let sorted = rows.sorted { $0.code < $1.code }
-        let strikes = Array(Set(sorted.map(\.strike))).sorted()
-        return strikes.map { strike in
-            StrikePair(
-                strike: strike,
-                call: sorted.first { $0.strike == strike && $0.side == "CALL" },
-                put: sorted.first { $0.strike == strike && $0.side == "PUT" }
-            )
+    private var visible: [MarketDataService.OptionQuote] {
+        rows.filter { $0.side == side }.sorted { a,b in
+            if sort == 0 { return descending ? a.strike > b.strike : a.strike < b.strike }
+            let x = values(a)[sort-1], y = values(b)[sort-1]
+            guard let x else { return false }; guard let y else { return true }
+            return x == y ? a.strike < b.strike : (descending ? x > y : x < y)
         }
     }
-
-    private var visiblePairs: [StrikePair] {
-        switch side {
-        case .both: return pairedRows
-        case .call: return pairedRows.filter { $0.call != nil }
-        case .put: return pairedRows.filter { $0.put != nil }
-        }
+    private func values(_ q: MarketDataService.OptionQuote) -> [Double?] {
+        let ref = basis == "open" ? q.opening : q.settlement
+        let change = ref.flatMap { r in r > 0 ? q.last.map { ($0-r)/r*100 } : nil }
+        let increase = q.previousInterest.flatMap { p in q.interest.map { $0-p } }
+        return [q.last,change,q.interest,q.volume,increase,q.bid,q.ask,q.bidVolume,q.askVolume,q.opening,q.highest,q.lowest,q.settlement]
     }
-
-    private var visibleContractCount: Int {
-        switch side {
-        case .both: return rows.count
-        case .call: return rows.filter { $0.side == "CALL" }.count
-        case .put: return rows.filter { $0.side == "PUT" }.count
-        }
-    }
-
-    private func label(_ value: Double?) -> String {
-        value?.formatted(.number.precision(.fractionLength(0...2))) ?? "--"
-    }
-
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
+            VStack(spacing: 10) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("期权 T 型报价")
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundStyle(MarketPalette.ink)
-                        Text(code + " · 挂牌期权")
-                            .font(.system(size: 12))
-                            .foregroundStyle(MarketPalette.muted)
+                        Text("标的最新价").font(.caption).foregroundStyle(MarketPalette.muted)
+                        Text(optionNumber(spot)).font(.title2.bold()).monospacedDigit()
                     }
                     Spacer()
-                    if let underlyingLast {
-                        VStack(alignment: .trailing, spacing: 4) {
-                            Text("标的最新")
-                                .font(.system(size: 10))
-                                .foregroundStyle(MarketPalette.muted)
-                            Text(label(underlyingLast))
-                                .font(.system(size: 17, weight: .semibold, design: .rounded))
-                                .foregroundStyle(MarketPalette.ink)
-                        }
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text("剩余期限").font(.caption).foregroundStyle(MarketPalette.muted)
+                        Text(optionDays(visible.first(where: { $0.expireEpoch != nil })?.expireEpoch)).font(.title2.bold()).foregroundStyle(MarketPalette.countdown)
                     }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 14)
-
-                if loading {
-                    ProgressView("获取期权行情")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error {
-                    VStack(spacing: 14) {
-                        Text(error).foregroundStyle(MarketPalette.muted)
-                        Button("重新加载") { Task { await load() } }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if pairedRows.isEmpty {
-                    ContentUnavailableView("暂无挂牌期权", systemImage: "chart.bar.xaxis")
-                } else {
-                    VStack(spacing: 0) {
-                        HStack(spacing: 8) {
-                            sideButton("看涨 CALL", value: .call)
-                            sideButton("全部", value: .both)
-                            sideButton("看跌 PUT", value: .put)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 5)
-
-                        HStack(spacing: 0) {
-                            if side != .put {
-                                headerCell(displayVolume ? "成交量" : "买一")
-                                headerCell("最新")
-                            }
-                            Text("行权价")
-                                .frame(width: 72)
-                                .foregroundStyle(MarketPalette.ink)
-                            if side != .call {
-                                headerCell("最新")
-                                headerCell(displayVolume ? "成交量" : "卖价")
-                            }
-                        }
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(MarketPalette.muted)
-                        .frame(height: 35)
-                        .background(MarketPalette.background)
-
-                        ScrollView {
-                            LazyVStack(spacing: 0) {
-                                ForEach(visiblePairs) { pair in
-                                    HStack(spacing: 0) {
-                                        if side != .put {
-                                            optionCells(pair.call,isCall:true)
-                                        }
-                                        Text(label(pair.strike))
-                                            .font(.system(size: 13, weight: .bold, design: .rounded))
-                                            .foregroundStyle(MarketPalette.ink)
-                                            .frame(width: 72, height: 48)
-                                            .background(underlyingLast.map {
-                                                abs($0 - pair.strike) < max(1, $0 * 0.0025)
-                                            } == true ? MarketPalette.accent.opacity(0.08) : .clear)
-                                        if side != .call {
-                                            optionCells(pair.put,isCall:false)
-                                        }
+                }.padding(.horizontal, 14)
+                Picker("方向", selection: $side) { Text("沽 PUT").tag("PUT"); Text("购 CALL").tag("CALL") }.pickerStyle(.segmented).padding(.horizontal, 12)
+                if loading && rows.isEmpty { Spacer(); ProgressView("获取期权行情"); Spacer() }
+                else if rows.isEmpty { Spacer(); Text(error ?? "暂无挂牌期权"); Button("重试") { Task { await load() } }; Spacer() }
+                else {
+                    if let error { Text(error).font(.caption).foregroundStyle(MarketPalette.muted) }
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical) {
+                            HStack(alignment: .top, spacing: 0) {
+                                VStack(spacing: 0) {
+                                    Button("行权价") { changeSort(0) }.font(.caption.weight(.semibold)).frame(width: 66, height: 32)
+                                    ForEach(visible) { q in
+                                        Button { selected = q } label: {
+                                            Text(optionNumber(q.strike)).font(.system(size: 14, weight: .semibold)).monospacedDigit()
+                                                .foregroundStyle(q.strike == nearest ? MarketPalette.countdown : MarketPalette.ink)
+                                                .frame(width: 66, height: 43).contentShape(Rectangle())
+                                        }.buttonStyle(.plain).id(q.strike)
+                                        Divider().frame(height: 1)
                                     }
-                                    .padding(.horizontal, 8)
-                                    .overlay(alignment: .bottom) {
-                                        Rectangle().fill(MarketPalette.divider).frame(height: 0.5)
+                                }.background(MarketPalette.raised)
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    VStack(spacing: 0) {
+                                        HStack(spacing: 0) {
+                                            ForEach(headings.indices, id: \.self) { j in
+                                                Button(headings[j] + (sort == j+1 ? (descending ? "↓" : "↑") : "")) { changeSort(j+1) }
+                                                    .font(.caption).foregroundStyle(MarketPalette.muted).frame(width: 75, height: 32)
+                                            }
+                                        }
+                                        ForEach(visible) { q in
+                                            Button { selected = q } label: {
+                                                HStack(spacing: 0) {
+                                                    ForEach(headings.indices, id: \.self) { j in
+                                                        let v = values(q)[j]
+                                                        Text(optionNumber(v) + (j == 1 && v != nil ? "%" : ""))
+                                                            .font(.system(size: 13)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+                                                            .foregroundStyle(j == 1 || j == 4 ? MarketPalette.movement(v) : MarketPalette.ink)
+                                                            .frame(width: 75, height: 43)
+                                                    }
+                                                }.contentShape(Rectangle())
+                                            }.buttonStyle(.plain)
+                                            Divider().frame(height: 1)
+                                        }
                                     }
                                 }
                             }
+                        }.refreshable { await load() }
+                        .onChange(of: rows.count) { _, count in
+                            if count > 0 && !initialPosition, let nearest { initialPosition = true; anchor = nearest; proxy.scrollTo(nearest, anchor: .center) }
                         }
-                        .refreshable {await load()}
-                        HStack(spacing: 8) {
-                            Button(displayVolume ? "查看买卖报价" : "查看成交量") {
-                                displayVolume.toggle()
-                            }
-                            Spacer()
-                            Text("\(visibleContractCount) 个合约 · \(visiblePairs.count) 个行权价")
-                                .foregroundStyle(MarketPalette.muted)
+                        .onChange(of: side) { _, _ in
+                            if let target = anchor ?? nearest { proxy.scrollTo(target, anchor: .center) }
                         }
-                        .font(.system(size: 11))
-                        .padding(.horizontal, 16)
-                        .frame(height: 40)
-                        .background(MarketPalette.background)
                     }
                 }
-
-                Text("点击看涨或看跌报价即可下单 · 模拟买方交易")
-                    .font(.system(size: 10))
-                    .foregroundStyle(MarketPalette.muted)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+            }.background(MarketPalette.background)
+            .navigationTitle(name + " 期权").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } }
+            .navigationDestination(isPresented: Binding(get: { selected != nil }, set: { if !$0 { selected = nil } })) {
+                if let q = selected { OptionDetailView(underlying: code, name: name, initial: q, initialSpot: spot) }
             }
-            .background(MarketPalette.surface.ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
-            .safeAreaInset(edge: .top) {
-                HStack {
-                    Spacer()
-                    Button("完成") { dismiss() }
-                        .font(.system(size: 14))
-                        .padding(.trailing, 16)
-                }
-                .frame(height: 28)
-                .background(MarketPalette.surface)
+            .task(id: "\(code)-\(scenePhase)-\(selected?.code ?? "")") {
+                guard scenePhase == .active, selected == nil else { return }
+                repeat { await load(); do { try await Task.sleep(for: .seconds(20)) } catch { return } } while !Task.isCancelled
             }
-            .sheet(item:$selectedOption) { option in
-                QuickTradeSheet(contract:option.paperContract(underlying:code,name:underlyingName))
-                    .presentationDetents([.height(460), .large])
-                    .presentationDragIndicator(.visible)
-
-            }
-            .task(id: code) { await load() }
-        }
-        .tint(MarketPalette.accent)
+        }.tint(MarketPalette.accent)
     }
-
-    private func sideButton(_ title: String, value: Side) -> some View {
-        Button {
-            side = value
-        } label: {
-            Text(title)
-                .font(.system(size: 12, weight: side == value ? .semibold : .medium))
-                .foregroundStyle(side == value ? MarketPalette.accent : MarketPalette.muted)
-                .frame(maxWidth: .infinity)
-                .frame(height: 32)
-                .background(side == value ? MarketPalette.accent.opacity(0.10) : MarketPalette.background)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(side == value ? .isSelected : [])
+    private func changeSort(_ column: Int) {
+        if sort == column { descending.toggle() } else { sort = column; descending = column != 0 }
     }
-
-    private func headerCell(_ title: String) -> some View {
-        Text(title).frame(maxWidth: .infinity)
-    }
-
-    private func optionCells(_ option:MarketDataService.OptionQuote?,isCall:Bool)->some View {
-        Button {
-            if let option {selectedOption = option}
-        } label:{
-            HStack(spacing:0) {
-                if isCall {
-                    valueCell(displayVolume ? option?.volume : option?.bid)
-                    valueCell(option?.last)
-                } else {
-                    valueCell(option?.last)
-                    valueCell(displayVolume ? option?.volume : option?.ask)
-                }
-            }.frame(maxWidth:.infinity).frame(height:48).contentShape(Rectangle())
-        }.buttonStyle(.plain).disabled(option == nil)
-            .accessibilityLabel(option.map{(isCall ? "看涨 " : "看跌 ")+label($0.strike)+" 下单"} ?? "无合约")
-    }
-    private func valueCell(_ value: Double?) -> some View {
-        Text(label(value))
-            .font(.system(size: 12, weight: .medium, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(value == nil ? MarketPalette.muted : MarketPalette.ink)
-            .frame(maxWidth: .infinity)
-            .lineLimit(1)
-            .minimumScaleFactor(0.75)
-    }
-
     @MainActor private func load() async {
-        loading = rows.isEmpty
-        defer { loading = false }
+        guard !loading else { return }; loading = true; defer { loading = false }
         do {
-            rows = try await MarketDataService.options(for: code)
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
+            let result = try await MarketDataService.options(for: code)
+            guard !Task.isCancelled else { return }
+            rows = result; error = nil
+            if let q = try? await MarketDataService.contractQuote(symbol: code), !Task.isCancelled { last = q.last }
+        } catch { if !Task.isCancelled { self.error = "行情更新失败，请重试" } }
+    }
+}
+
+private struct OptionDetailView: View {
+    let underlying: String
+    let name: String
+    let initial: MarketDataService.OptionQuote
+    let initialSpot: Double?
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var quote: MarketDataService.OptionQuote?
+    @State private var spot: Double?
+    @State private var underlyingBars: [MarketBar] = []
+    @State private var optionBars: [MarketBar] = []
+    @State private var period = 1800
+    @State private var selectedTime: Int64?
+    @State private var error: String?
+    @State private var trading = false
+    private var q: MarketDataService.OptionQuote { quote ?? initial }
+    private var put: Bool { q.side == "PUT" }
+    private var label: String { (put ? "沽" : "购") + optionNumber(q.strike) }
+    private var underlyingPrice: Double? { spot ?? initialSpot }
+    private var intrinsic: Double? { underlyingPrice.map { max(0, put ? q.strike-$0 : $0-q.strike) } }
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                HStack {
+                    metric("期权最新", optionNumber(q.last), color: MarketPalette.movement(q.settlement.flatMap { s in q.last.map { $0-s } }))
+                    metric("标的价格", optionNumber(underlyingPrice))
+                    metric("剩余期限", optionDays(q.expireEpoch), color: MarketPalette.countdown)
+                }
+                Divider()
+                chartSection(name + " · 标的走势", bars: underlyingBars)
+                Divider()
+                chartSection(label + " · 期权走势", bars: optionBars)
+                HStack {
+                    ForEach([60,300,900,1800,3600,86400], id: \.self) { p in
+                        Button(p == 86400 ? "日线" : "\(p/60)分") { period = p }
+                            .font(.system(size: 13, weight: .medium)).foregroundStyle(period == p ? MarketPalette.accent : MarketPalette.muted)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                if let error { Text(error).font(.caption).foregroundStyle(MarketPalette.muted) }
+                Divider()
+                HStack { metric("行权价", optionNumber(q.strike)); metric("买一", optionNumber(q.bid)); metric("卖一", optionNumber(q.ask)) }
+                HStack {
+                    metric("内在价值", optionNumber(intrinsic))
+                    metric("时间价值", optionNumber(intrinsic.flatMap { v in q.last.map { $0-v } }))
+                    metric("到期盈亏平衡价", optionNumber(q.last.map { put ? q.strike-$0 : q.strike+$0 }))
+                }
+                Text("按最新权利金估算，未计手续费").font(.caption2).foregroundStyle(MarketPalette.muted)
+                Button { trading = true } label: {
+                    Text("快捷交易").font(.headline).frame(maxWidth: .infinity).padding(12)
+                }.buttonStyle(.borderedProminent)
+            }.padding(12)
+        }.background(MarketPalette.background)
+        .navigationTitle(name + " " + label).navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $trading) {
+            QuickTradeSheet(contract: q.paperContract(underlying: underlying, name: name))
+                .presentationDetents([.height(460), .large]).presentationDragIndicator(.visible)
+        }
+        .task(id: "\(period)-\(scenePhase)") {
+            guard scenePhase == .active else { return }
+            underlyingBars = []; optionBars = []; selectedTime = nil; error = nil
+            let p = period
+            repeat {
+                async let u = try? MarketDataService.fetch(symbol: underlying, period: p, count: 200, mergeCached: false)
+                async let o = try? MarketDataService.fetch(symbol: initial.code, period: p, count: 200, mergeCached: false)
+                let (ub, ob) = await (u, o)
+                guard !Task.isCancelled, period == p else { return }
+                if let ub, !ub.isEmpty { underlyingBars = ub }
+                if let ob, !ob.isEmpty { optionBars = ob }
+                error = ub == nil || ob == nil ? "部分K线暂不可用，请核对行情网关" : nil
+                do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            } while !Task.isCancelled
+        }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            repeat {
+                if let updated = try? await MarketDataService.optionQuote(symbol: initial.code, underlying: underlying), !Task.isCancelled { quote = updated }
+                if let updated = try? await MarketDataService.contractQuote(symbol: underlying), !Task.isCancelled { spot = updated.last }
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            } while !Task.isCancelled
+        }
+    }
+    private func metric(_ title: String, _ value: String, color: Color = MarketPalette.ink) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.caption).foregroundStyle(MarketPalette.muted)
+            Text(value).font(.system(size: 19, weight: .semibold)).monospacedDigit().foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.6)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func chartSection(_ title: String, bars: [MarketBar]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.subheadline.weight(.semibold))
+            OptionCandles(bars: bars, axis: Array(Set(underlyingBars.map(\.time) + optionBars.map(\.time))).sorted().suffix(52).map { $0 }, selectedTime: $selectedTime)
+                .frame(height: 155)
+            if let selectedTime, let bar = bars.first(where: { $0.time == selectedTime }) {
+                Text("收 " + optionNumber(bar.close) + "  高 " + optionNumber(bar.high) + "  低 " + optionNumber(bar.low)).font(.caption2)
+            }
+        }
+    }
+}
+
+private struct OptionCandles: View {
+    let bars: [MarketBar]
+    let axis: [Int64]
+    @Binding var selectedTime: Int64?
+    var body: some View {
+        GeometryReader { geo in
+            Canvas { ctx, size in
+                let plotted = bars.filter { axis.contains($0.time) }
+                guard let lo = plotted.map(\.low).min(), let hi = plotted.map(\.high).max(), !axis.isEmpty else { return }
+                let span = max(hi-lo, 0.000001), width = max(1,size.width-42), height = size.height-12
+                let step = width / CGFloat(axis.count)
+                func y(_ p: Double) -> CGFloat { 6 + CGFloat((hi-p)/span)*max(1,height-12) }
+                for j in 0...3 {
+                    let v = hi-span*Double(j)/3, yy = y(v)
+                    var line = Path(); line.move(to: CGPoint(x:0,y:yy)); line.addLine(to: CGPoint(x:width,y:yy))
+                    ctx.stroke(line, with: .color(MarketPalette.divider), style: StrokeStyle(lineWidth:0.6,dash:[3,3]))
+                    ctx.draw(Text(optionNumber(v)).font(.system(size:9)).foregroundStyle(MarketPalette.muted), at: CGPoint(x:width+3,y:yy), anchor:.leading)
+                }
+                for (index,t) in axis.enumerated() {
+                    guard let b = plotted.first(where: { $0.time == t }) else { continue }
+                    let x = (CGFloat(index)+0.5)*step, color = b.close >= b.open ? MarketPalette.up : MarketPalette.down
+                    var wick = Path(); wick.move(to: CGPoint(x:x,y:y(b.high))); wick.addLine(to: CGPoint(x:x,y:y(b.low)))
+                    ctx.stroke(wick, with:.color(color),lineWidth:0.8)
+                    let rect = CGRect(x:x-step*0.3,y:min(y(b.open),y(b.close)),width:max(1,step*0.6),height:max(1,abs(y(b.open)-y(b.close))))
+                    if b.close >= b.open { ctx.stroke(Path(rect),with:.color(color),lineWidth:1) } else { ctx.fill(Path(rect),with:.color(color)) }
+                }
+                if let selectedTime, let index = axis.firstIndex(of:selectedTime) {
+                    let x = (CGFloat(index)+0.5)*step
+                    var line = Path(); line.move(to:CGPoint(x:x,y:0)); line.addLine(to:CGPoint(x:x,y:height))
+                    ctx.stroke(line,with:.color(MarketPalette.muted),style:StrokeStyle(lineWidth:1,dash:[3,3]))
+                }
+            }.contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                guard !axis.isEmpty else { return }
+                let ratio = value.location.x / max(1,geo.size.width-42)
+                selectedTime = axis[min(axis.count-1,max(0,Int(ratio*CGFloat(axis.count))))]
+            })
         }
     }
 }

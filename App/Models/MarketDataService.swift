@@ -291,11 +291,27 @@ enum MarketDataService {
         let priceTick, volumeMultiple: Double?
         var settlement, opening, highest, lowest, upperLimit, lowerLimit, bidVolume, askVolume: Double?
         var time: String?
+        var previousInterest: Double? = nil
+        var expireEpoch: Double? = nil
         var id: String { code }
         func paperContract(underlying:String,name:String)->PaperContract {
             PaperContract(symbol:code,name:name,tick:priceTick,multiplier:volumeMultiple,last:last,bid:bid,ask:ask,
                           option:PaperOptionDetails(underlying:underlying,side:side,strike:strike))
         }
+    }
+
+    static func optionQuote(symbol: String, underlying: String) async throws -> OptionQuote {
+        let url = try baseURL().appendingPathComponent("v1/option-quote")
+            .appending(queryItems: [URLQueryItem(name: "symbol", value: symbol), URLQueryItem(name: "underlying", value: underlying)])
+        let (data, response) = try await httpSession.data(for: authorizedRequest(url: url, timeoutInterval: 12, cachePolicy: .reloadIgnoringLocalCacheData))
+        if (response as? HTTPURLResponse)?.statusCode == 404 {
+            guard let row = try await options(for: underlying).first(where: { $0.code == symbol }) else { throw MarketDataError.noData }
+            return row
+        }
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw MarketDataError.invalidResponse }
+        let row = try JSONDecoder().decode(OptionQuote.self, from: data)
+        guard row.code == symbol else { throw MarketDataError.invalidResponse }
+        return row
     }
 
     static func options(for code: String) async throws -> [OptionQuote] {

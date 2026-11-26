@@ -759,7 +759,7 @@ struct TradingCenterView: View {
             }.buttonStyle(.borderless)
             HStack(spacing: 8) {
                 tradeButton("开多", color: MarketPalette.up)
-                tradeButton("开空", color: MarketPalette.down)
+                if selected?.option != nil { unifiedCloseButton } else { tradeButton("开空", color: MarketPalette.down) }
             }
             if let quickConfirmationError { Text(quickConfirmationError).font(.caption).foregroundStyle(.red) }
             Text(quoteError ? "报价获取失败，请核对价格" : (quoteStamp == nil ? "等待报价" : "参考报价 · " + (quoteStamp?.formatted(date: .omitted, time: .standard) ?? "")))
@@ -1049,7 +1049,7 @@ struct TradingCenterView: View {
             var details: MarketDataService.ContractQuote?
             var optionDetails: MarketDataService.OptionQuote?
             if let option = c.option {
-                guard let q = try await MarketDataService.options(for: option.underlying).first(where: { $0.code == c.symbol }) else { throw MarketDataError.noData }
+                let q = try await MarketDataService.optionQuote(symbol: c.symbol, underlying: option.underlying)
                 optionDetails = q
                 next = q.paperContract(underlying: option.underlying, name: c.name)
             } else {
@@ -1263,7 +1263,7 @@ struct TradingCenterView: View {
         return max(0, (long ? p.long : p.short) - frozen)
     }
     private func validClose(_ long: Bool) -> Bool {
-        guard !quickOnly, closingSide == long, session.canTrade,
+        guard (!quickOnly || selected?.option != nil), closingSide == long, session.canTrade,
               !quoteError, let stamp = quoteStamp, Date().timeIntervalSince(stamp) < 60,
               let available = availableToClose(long), closeQuantity > 0,
               closeQuantity <= available, let tick = selected?.tick, tick.isFinite, tick > 0,
