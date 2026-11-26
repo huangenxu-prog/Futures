@@ -128,6 +128,29 @@ class RecoveryTests(unittest.TestCase):
                 self.assertIs(g.make_account("live_readonly"), sdk.TqAccount.return_value)
             sdk.TqAccount.assert_called_once_with("test-broker", "test-account", "test-password")
 
+    def test_maintenance_drains_idle_session(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        worker = Mock()
+        worker.is_alive.return_value = False
+        session = SimpleNamespace(inflight=0, stop=g.threading.Event(), worker=worker)
+        with patch.object(g, "SESSION", session), patch.object(g, "MAINTENANCE", g.threading.Event()):
+            self.assertTrue(g.drain_session(timeout=1))
+            self.assertTrue(g.MAINTENANCE.is_set())
+            self.assertTrue(session.stop.is_set())
+            worker.join.assert_called_once()
+
+    def test_maintenance_does_not_stop_inflight_session(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        worker = Mock()
+        session = SimpleNamespace(inflight=1, stop=g.threading.Event(), worker=worker)
+        with patch.object(g, "SESSION", session), patch.object(g, "MAINTENANCE", g.threading.Event()):
+            self.assertFalse(g.drain_session(timeout=0))
+            self.assertTrue(g.MAINTENANCE.is_set())
+            self.assertFalse(session.stop.is_set())
+            worker.join.assert_not_called()
+
     def test_password_verifier(self):
         with patch.object(g.threading.Thread, "start"):
             s = g.Session("test", "password")
