@@ -7,7 +7,7 @@ struct QihuiSettingsView: View {
     let instruments: [FuturesInstrument]
     let favoriteIDs: [String]
     let mainCodes: [String:String]
-    @State private var marketAccess = false
+    @State private var marketConfigured = false
     @State private var marketKey = ""
     @State private var marketKeyError = false
     @State private var strategy = false
@@ -27,10 +27,28 @@ struct QihuiSettingsView: View {
                         Text("今开").tag("open")
                     }.pickerStyle(.segmented)
                     Text("今开为交易日开盘价；行情未提供基准时显示 --。").font(.caption).foregroundStyle(.secondary)
-                    Button("行情访问密钥") {
-                        marketKey = ""
-                        marketKeyError = false
-                        marketAccess = true
+
+                }
+                Section("服务器配置") {
+                    LabeledContent("行情服务器", value: MarketDataService.configuredHost)
+                    LabeledContent("行情访问密钥", value: marketConfigured ? "已配置" : "未配置")
+                    SecureField("更换行情访问密钥（可选）", text: $marketKey)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if marketKeyError { Text("密钥格式无效或保存失败").foregroundStyle(.red) }
+                    Button("保存行情密钥") {
+                        if MarketAccessKey.save(marketKey.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                            marketKey = ""; marketKeyError = false; marketConfigured = !MarketAccessKey.load().isEmpty
+                        } else { marketKeyError = true }
+                    }.disabled(marketKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Text("行情正常时无需设置。密钥仅保存在本机钥匙串，修改后重新打开期汇。").font(.caption).foregroundStyle(.secondary)
+                    if marketConfigured {
+                        Button("清除行情密钥", role: .destructive) {
+                            if MarketAccessKey.save("") { marketConfigured = false; marketKey = ""; marketKeyError = false }
+                            else { marketKeyError = true }
+                        }
+                    }
+                    Button { account = true } label: {
+                        HStack { Text("交易网关与账户配置"); Spacer(); Image(systemName: "chevron.right") }
                     }
                 }
                 Section("图表与指标") {
@@ -57,30 +75,8 @@ struct QihuiSettingsView: View {
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
-            .sheet(isPresented: $marketAccess) {
-                NavigationStack {
-                    Form {
-                        SecureField("输入独立行情密钥", text: $marketKey)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        Text("密钥仅保存在本机钥匙串。保存后重新打开期汇，以新密钥连接。").font(.caption)
-                        if marketKeyError { Text("密钥格式无效或保存失败").foregroundStyle(.red) }
-                        Button("保存") {
-                            if MarketAccessKey.save(marketKey.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                                marketKey = ""
-                                marketAccess = false
-                            } else { marketKeyError = true }
-                        }.disabled(marketKey.isEmpty)
-                        Button("清除已保存密钥", role: .destructive) {
-                            if MarketAccessKey.save("") { marketAccess = false }
-                            else { marketKeyError = true }
-                        }
-                    }
-                    .navigationTitle("行情访问密钥")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { marketAccess = false } } }
-                }
-            }
+            .onAppear { marketConfigured = !MarketAccessKey.load().isEmpty }
+            .onDisappear { marketKey = "" }
             .sheet(isPresented: $strategy) { StrategyCenterView(instruments: instruments, favoriteIDs: favoriteIDs, mainCodes: mainCodes) }
             .sheet(isPresented: $account) { TradeConnectionSettingsView() }
             .sheet(isPresented: $indicators) { IndicatorSettingsView(settings: ChartDisplaySettings.load()) { $0.save() } }

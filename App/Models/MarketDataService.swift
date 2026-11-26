@@ -108,6 +108,7 @@ enum MarketDataService {
 
     // Configure via QIHUI_API_BASE_URL in Info.plist at build time.
     // Must be an authenticated HTTPS gateway reachable from the device.
+    static var configuredHost: String { (try? baseURL().host) ?? "--" }
     private static func baseURL() throws -> URL {
         // Temporary device-test endpoint. Quick Tunnel URLs change when restarted.
         // The Info.plist setting takes precedence when available.
@@ -180,6 +181,8 @@ enum MarketDataService {
         var opening: Double? = nil
         var highest: Double? = nil
         var lowest: Double? = nil
+        var estimatedFunds: Double? = nil
+        var estimatedFundFlow: Double? = nil
         let time: String?
 
         var identity: MainContract {
@@ -222,6 +225,13 @@ enum MarketDataService {
         var opening: Double? = nil
         var highest: Double? = nil
         var lowest: Double? = nil
+        var previousInterest: Double? = nil
+        var estimatedFunds: Double? = nil
+        var estimatedFundFlow: Double? = nil
+        var interestChange: Double? {
+            guard let interest, let previousInterest else { return nil }
+            return interest - previousInterest
+        }
         var upperLimit: Double? = nil
         var lowerLimit: Double? = nil
         let time: String?

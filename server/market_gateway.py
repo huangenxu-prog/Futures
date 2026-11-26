@@ -413,6 +413,23 @@ def snapshot(quote):
         value = getattr(quote, field, None)
         if value is not None and math.isfinite(value):
             values[key] = float(value)
+    # Quote.margin, when supplied, is a reference per-lot margin, not a
+    # broker-specific margin rate. Hold the inferred rate constant for comparison.
+    margin = getattr(quote, "margin", None)
+    last = values.get("last")
+    interest = values.get("interest")
+    previous = values.get("previousInterest")
+    settlement = values.get("settlement")
+    if (getattr(quote, "ins_class", "") == "FUTURE"
+            and isinstance(margin, (int, float)) and math.isfinite(margin) and margin > 0
+            and last is not None and last > 0 and interest is not None and interest >= 0):
+        funds = interest * margin
+        if math.isfinite(funds):
+            values["estimatedFunds"] = funds
+            if previous is not None and previous >= 0 and settlement is not None and settlement > 0:
+                flow = funds - previous * margin * settlement / last
+                if math.isfinite(flow):
+                    values["estimatedFundFlow"] = flow
     return values
 
 

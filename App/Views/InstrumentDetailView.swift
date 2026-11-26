@@ -259,6 +259,7 @@ private struct InstrumentDetailPage: View {
     @State private var selectedCandleTime: Int64? = nil
     @State private var loadError: String? = nil
     @State private var loading = false
+    @State private var statisticsQuote: MarketDataService.ContractQuote?
     @State private var currentPriceTick: Double?
     @State private var currentVolumeMultiple: Double?
     @AppStorage("qihui.chart.period-hidden.v1") private var hiddenPeriods = "3分,10分,120分"
@@ -323,10 +324,12 @@ private struct InstrumentDetailPage: View {
         .task(id: chartSymbol + (isActive ? "/active" : "/preview")) {
             guard isActive else { return }
             let symbol = chartSymbol
+            statisticsQuote = nil
             currentPriceTick = selectedContract?.priceTick
             currentVolumeMultiple = selectedContract?.volumeMultiple
             if let contract = try? await MarketDataService.contractQuote(symbol: symbol) {
                 guard !Task.isCancelled, chartSymbol == symbol else { return }
+                statisticsQuote = contract
                 if let tick = contract.priceTick, tick > 0 { currentPriceTick = tick }
                 if let multiple = contract.volumeMultiple, multiple > 0 { currentVolumeMultiple = multiple }
             }
@@ -620,15 +623,34 @@ private struct InstrumentDetailPage: View {
         .frame(minHeight: 45)
     }
 
+    private func fundsText(_ value: Double?) -> String {
+        guard let value, value.isFinite else { return "--" }
+        return String(format: "%.2f亿", value / 100_000_000)
+    }
     private var marketStatistics: some View {
-        HStack(spacing: 4) {
-            smallQuote("成交", CompactMarketQuantity.format(selectedContract == nil ? quote?.volume : selectedContract?.volume), MarketPalette.ink)
-            Spacer(minLength: 3)
-            smallQuote("持仓", CompactMarketQuantity.format(selectedContract == nil ? quote?.interest : selectedContract?.interest), MarketPalette.ink)
-            Spacer(minLength: 3)
-            smallQuote("增仓", selectedContract == nil ? (quote?.interestChange?.formatted() ?? "--") : "--", MarketPalette.ink)
+        let exact = statisticsQuote?.code == chartSymbol ? statisticsQuote : nil
+        let main = quote?.code == chartSymbol ? quote : nil
+        let current = selectedContract == nil ? main : nil
+        let funds = current?.estimatedFunds ?? exact?.estimatedFunds
+        let flow = current?.estimatedFundFlow ?? exact?.estimatedFundFlow
+        let change = selectedContract == nil ? current?.interestChange : exact?.interestChange ?? selectedContract?.interestChange
+        return GeometryReader { geometry in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    Group {
+                        smallQuote("成交", CompactMarketQuantity.format(selectedContract == nil ? current?.volume : exact?.volume ?? selectedContract?.volume), MarketPalette.ink)
+                        smallQuote("持仓", CompactMarketQuantity.format(selectedContract == nil ? current?.interest : exact?.interest ?? selectedContract?.interest), MarketPalette.ink)
+                        smallQuote("增仓", change?.formatted() ?? "--", MarketPalette.ink)
+                        smallQuote("资金流", fundsText(flow), MarketPalette.movement(flow))
+                        smallQuote("沉淀", fundsText(funds), MarketPalette.ink)
+                        smallQuote("今开", (selectedContract == nil ? current?.opening : exact?.opening ?? selectedContract?.opening)?.formatted() ?? "--", MarketPalette.ink)
+                        smallQuote("昨结", (selectedContract == nil ? current?.settlement : exact?.settlement ?? selectedContract?.settlement)?.formatted() ?? "--", MarketPalette.ink)
+                    }
+                    .frame(width: max(0, (geometry.size.width - 20) / 4), alignment: .leading)
+                }
+                .padding(.horizontal, 10)
+            }
         }
-        .padding(.horizontal, 10)
         .frame(height: 24)
     }
 
