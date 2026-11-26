@@ -1,0 +1,86 @@
+name: PineTS JavaScriptCore probe
+on:
+  push:
+    branches: [experiment/pinets-integration]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Fetch pinned upstream release
+        run: |
+          curl --fail --location --retry 3 -o pinets.js https://github.com/LuxAlgo/PineTS/releases/download/v0.14.0/pinets.min.browser.js
+          echo '0566f4af419ec9cbed3f7dbcd8957d051c85948ea388cd6c528fa9af6e517259  pinets.js' | shasum -a 256 -c -
+      - name: Compile and execute JavaScriptCore probe
+        run: |
+          cat > probe.swift <<'SWIFT'
+          import Foundation
+          import JavaScriptCore
+          let context = JSContext()!
+          var failure: String?
+          context.exceptionHandler = { _, exception in
+              failure = exception?.toString() ?? "Unknown JavaScript exception"
+          }
+          let source = try String(contentsOfFile: "pinets.js", encoding: .utf8)
+          context.evaluateScript(source)
+          if let failure { fatalError(failure) }
+          context.evaluateScript("""
+          var probeResult = null;
+          var probeError = null;
+          (async function() {
+            try {
+              const bars = Array.from({length: 200}, (_, i) => ({
+                open: 100+i, high: 101+i, low: 99+i, close: 100+i,
+                volume: 1000+i, openTime: 1704067200000+i*60000,
+                closeTime: 1704067200000+(i+1)*60000-1
+              }));
+              const results = {};
+              const scripts = [
+                ['EMA', '// @version=6'.replace('// ', '//') + '\\nindicator("EMA", overlay=true)\\nplot(ta.ema(close, 20), "EMA")'],
+                ['MACD', '//@version=6\\nindicator("MACD")\\n[m,s,h] = ta.macd(close,12,26,9)\\nplot(m,"MACD")\\nplot(s,"Signal")\\nplot(h,"Hist",style=plot.style_histogram)'],
+                ['RSI', '//@version=5\\nindicator("RSI")\\nplot(ta.rsi(close,14),"RSI")']
+              ];
+              for (const [name, script] of scripts) {
+                const pine = new PineTS(bars);
+                const {plots} = await pine.run(script);
+                results[name] = {};
+                for (const [key, series] of Object.entries(plots)) {
+                  results[name][key] = {count:series.data.length, last:series.data[series.data.length-1].value};
+                }
+              }
+              probeResult = JSON.stringify(results);
+            } catch(e) { probeError = String(e.stack || e); }
+          })();
+          """)
+          let deadline = Date().addingTimeInterval(30)
+          while Date() < deadline {
+              if let failure { fatalError(failure) }
+              if let error = context.objectForKeyedSubscript("probeError"), !error.isNull { fatalError(error.toString()) }
+              if let result = context.objectForKeyedSubscript("probeResult"), !result.isNull {
+                  let json = result.toString()!
+                  print(json)
+                  let data = Data(json.utf8)
+                  let output = try JSONSerialization.jsonObject(with: data) as! [String: [String: [String: Double]]]
+                  func check(_ group: String, _ series: String, _ expected: Double) {
+                      guard let v = output[group]?[series], v["count"] == 200,
+                            let last = v["last"], abs(last-expected) < 0.01 else {
+                          fatalError("Unexpected output: "+group+"/"+series)
+                      }
+                  }
+                  check("EMA", "EMA", 289.5)
+                  check("MACD", "MACD", 7)
+                  check("MACD", "Signal", 7)
+                  check("MACD", "Hist", 0)
+                  check("RSI", "RSI", 100)
+                  print("PASS: native Pine v5/v6, 200 candles, EMA/MACD/RSI")
+                  exit(0)
+              }
+              RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+          }
+          fatalError("Promise did not finish")
+          SWIFT
+          swiftc probe.swift -framework JavaScriptCore -o probe
+          ./probe
