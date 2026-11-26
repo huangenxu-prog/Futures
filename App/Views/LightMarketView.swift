@@ -123,7 +123,7 @@ struct LightMarketView: View {
 
     private var quoteRequestKey: String {
         [scope.rawValue, selectedCategory, search,
-         favorites.ids.joined(separator: ","), String(catalog.count)].joined(separator: "|")
+         favorites.ids.joined(separator: ","), catalog.map(\.id).joined(separator: ",")].joined(separator: "|")
     }
 
     private var favoriteWarmKey: String {
@@ -155,19 +155,38 @@ struct LightMarketView: View {
 
     @MainActor
     private func refreshVisibleQuotes() async {
-        // Main contracts are already delivered by the shared SSE feed.
-        // Re-requesting them starts another TqSdk login every 30 seconds on
-        // the older on-demand path and delays the remaining catalog batches.
+        // Keep the last valid quote across failed or partial responses.
+        // Missing quotes go first, then refresh already populated rows.
         let ids = quoteRequestIDs.filter { contracts[$0]?.last == nil }
-        for start in stride(from: 0, to: ids.count, by: 40) {
+        let ordered = ids.filter { onDemandQuotes[$0]?.last == nil }
+                    + ids.filter { onDemandQuotes[$0]?.last != nil }
+        var missing: [String] = []
+        for start in stride(from: 0, to: ordered.count, by: 12) {
             if Task.isCancelled { return }
-            let chunk = Array(ids[start..<min(start + 40, ids.count)])
-            if let received = try? await MarketDataService.selectedProductQuotes(chunk) {
-                onDemandQuotes.merge(received) { _, new in new }
+            let chunk = Array(ordered[start..<min(start + 12, ordered.count)])
+            let received = (try? await MarketDataService.selectedProductQuotes(chunk)) ?? [:]
+            if Task.isCancelled { return }
+            let valid = received.filter { chunk.contains($0.key) && $0.value.last?.isFinite == true }
+            onDemandQuotes.merge(valid) { old, new in
+                if let oldTime = old.time, let newTime = new.time, newTime < oldTime { return old }
+                return new
             }
-            // Sequential requests prevent a full-market subscription burst.
-            if start + 40 < ids.count {
-                try? await Task.sleep(for: .milliseconds(500))
+            missing.append(contentsOf: chunk.filter { valid[$0] == nil })
+            if start + 12 < ordered.count {
+                do { try await Task.sleep(for: .milliseconds(750)) } catch { return }
+            }
+        }
+        // Retry a bounded subset using smaller requests; leave other missing
+        // rows at the front of the next ordinary refresh cycle.
+        let retry = Array(missing.prefix(12))
+        for start in stride(from: 0, to: retry.count, by: 4) {
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            let chunk = Array(retry[start..<min(start + 4, retry.count)])
+            guard let received = try? await MarketDataService.selectedProductQuotes(chunk),
+                  !Task.isCancelled else { continue }
+            onDemandQuotes.merge(received.filter { chunk.contains($0.key) && $0.value.last?.isFinite == true }) { old, new in
+                if let oldTime = old.time, let newTime = new.time, newTime < oldTime { return old }
+                return new
             }
         }
     }
@@ -216,11 +235,11 @@ struct LightMarketView: View {
                 let right: Double?
                 switch order {
                 case "成交量":
-                    left = contracts[lhs.id]?.volume
-                    right = contracts[rhs.id]?.volume
+                    left = quote(for: lhs.id)?.volume
+                    right = quote(for: rhs.id)?.volume
                 case "日增仓":
-                    left = contracts[lhs.id]?.interestChange
-                    right = contracts[rhs.id]?.interestChange
+                    left = quote(for: lhs.id)?.interestChange
+                    right = quote(for: rhs.id)?.interestChange
                 default:
                     left = changePercentage(lhs)
                     right = changePercentage(rhs)
