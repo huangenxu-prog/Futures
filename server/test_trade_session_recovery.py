@@ -48,6 +48,31 @@ class RecoveryTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     g.validate_order(dict(body, price=value))
 
+    def test_persistent_intent_blocks_replay_after_restart(self):
+        import os
+        import tempfile
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "intents.sqlite3")
+            with patch.object(g.threading.Thread, "start"):
+                first = g.Session("test", "password")
+                second = g.Session("test", "password")
+                other = g.Session("other", "password")
+            payload = ("d"*32, "CZCE.SR701", "BUY", "OPEN", 1, 5000.)
+            api = Mock()
+            api.insert_order.side_effect = RuntimeError("unknown outcome")
+            with patch.object(g, "ORDER_LEDGER", g.OrderIntentLedger(path)):
+                with self.assertRaises(RuntimeError):
+                    first.submit_order(api, {}, payload)
+            api.insert_order.side_effect = None
+            with patch.object(g, "ORDER_LEDGER", g.OrderIntentLedger(path)):
+                self.assertEqual(second.submit_order(api, {}, payload), 503)
+                self.assertEqual(second.submit_order(api, {}, payload[:-1] + (5001.,)), 409)
+                api.insert_order.assert_called_once()
+                self.assertEqual(other.submit_order(api, {}, payload), 200)
+                self.assertEqual(api.insert_order.call_count, 2)
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
     def test_password_verifier(self):
         with patch.object(g.threading.Thread, "start"):
             s = g.Session("test", "password")
