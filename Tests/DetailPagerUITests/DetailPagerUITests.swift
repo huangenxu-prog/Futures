@@ -65,7 +65,27 @@ final class DetailPagerUITests: XCTestCase {
         }
     }
 
-    func testChartInputAndPaging() {
+    // Read the same visible time range that VoiceOver announces on the chart.
+    private func visibleMinutes() throws -> Double {
+        let chart = app.otherElements.matching(NSPredicate(format: "label == %@", "K线图")).firstMatch
+        let spoken = try XCTUnwrap(chart.value as? String)
+        let pattern = try NSRegularExpression(pattern: #"\d{2}/\d{2} \d{2}:\d{2}"#)
+        let matches = pattern.matches(in: spoken, range: NSRange(spoken.startIndex..., in: spoken))
+        XCTAssertEqual(matches.count, 2, spoken)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy/MM/dd HH:mm"
+        let dates = try matches.map { match in
+            let range = try XCTUnwrap(Range(match.range, in: spoken))
+            return try XCTUnwrap(formatter.date(from: "2024/" + String(spoken[range])))
+        }
+        let start = try XCTUnwrap(dates.first)
+        let end = try XCTUnwrap(dates.last)
+        return end.timeIntervalSince(start) / 60
+    }
+
+    func testChartInputAndPaging() throws {
         launch(light: false)
         enter(0)
         verify(0)
@@ -85,13 +105,27 @@ final class DetailPagerUITests: XCTestCase {
                 verify(2)
             }
         }
+        let before = try visibleMinutes()
+        element("detail.viewport").pinch(withScale: 3, velocity: 1)
+        verify(0)
+        let after = try visibleMinutes()
+        print("Chart window in minutes before and after pinch:", before, after)
+        XCTAssertGreaterThan(after, 0)
+        XCTAssertLessThan(after, before)
         drag(0.22, 0.49, to: 0.77, 0.49)
         XCTAssertTrue(app.buttons["回到最新K线"].waitForExistence(timeout: 5))
-        verify(0)
-        element("detail.viewport").pinch(withScale: 1.7, velocity: 1)
         verify(0)
         XCUIDevice.shared.press(.home)
         app.activate()
         verify(0)
+        let fiveMinutes = app.buttons["5m"]
+        fiveMinutes.tap()
+        XCTAssertTrue(fiveMinutes.isSelected)
+        for (index, forwards) in [(1, true), (0, false)] {
+            if forwards { drag(0.50, 0.79, to: 0.50, 0.19) }
+            else { drag(0.50, 0.30, to: 0.50, 0.92) }
+            XCTAssertTrue(app.buttons["detail.contract." + ids[index]].waitForExistence(timeout: 5))
+            XCTAssertTrue(fiveMinutes.isSelected)
+        }
     }
 }
