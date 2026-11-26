@@ -27,14 +27,14 @@ struct IndicatorSettingsView: View {
                     averageRow("EMA 2", kind: .emaSlow, value: $draft.emaSlow)
                     averageRow("WMA", kind: .wma, value: $draft.wma)
 
-                    ForEach($draft.additionalAverages) { $average in
+                    ForEach(draft.additionalAverages) { average in
                         VStack(alignment:.leading,spacing:8) {
                             HStack(spacing:8) {
-                                Toggle("启用", isOn: $average.enabled)
+                                Toggle("启用", isOn: averageBinding(average, \.enabled))
                                     .labelsHidden()
                                     .accessibilityLabel("显示 \(average.label)")
                                 Spacer(minLength:0)
-                                Picker("类型", selection: $average.type) {
+                                Picker("类型", selection: averageBinding(average, \.type)) {
                                     ForEach(MovingAverageType.allCases) { type in
                                         Text(type.title).tag(type)
                                     }
@@ -43,14 +43,14 @@ struct IndicatorSettingsView: View {
                                 .pickerStyle(.menu)
                                 .fixedSize(horizontal:true,vertical:false)
                                 if average.type == .dma {
-                                    TextField("权重",value:$average.dynamicAlpha,format:.number)
+                                    TextField("权重",value:averageBinding(average, \.dynamicAlpha),format:.number)
     .focused($focusedField,equals:"alpha-\(average.id)")
                                         .keyboardType(.decimalPad)
                                         .multilineTextAlignment(.trailing)
                                         .frame(width:64)
                                         .accessibilityLabel("DMA 权重")
                                 } else {
-                                    TextField("周期", value: $average.period, format: .number)
+                                    TextField("周期", value: averageBinding(average, \.period), format: .number)
     .focused($focusedField,equals:"period-\(average.id)")
                                         .keyboardType(.numberPad)
                                         .multilineTextAlignment(.trailing)
@@ -74,7 +74,7 @@ struct IndicatorSettingsView: View {
                                 HStack {
                                     Text("平滑权重 M").font(.caption).foregroundStyle(.secondary)
                                     Spacer()
-                                    TextField("M",value:$average.smoothingWeight,format:.number)
+                                    TextField("M",value:averageBinding(average, \.smoothingWeight),format:.number)
     .focused($focusedField,equals:"weight-\(average.id)")
                                         .keyboardType(.numberPad)
                                         .multilineTextAlignment(.trailing)
@@ -89,9 +89,7 @@ struct IndicatorSettingsView: View {
                     } label: {
                         Label("新增均线", systemImage: "plus.circle")
                     }
-                } header: { Text("主图 · 均线") }
-
-                Section("主图 · BOLL") {
+                    DisclosureGroup("BOLL") {
                     Toggle("显示 BOLL", isOn: enabledBinding(.boll))
                     parameter("计算周期", value: $draft.bollPeriod, id:"bollPeriod")
                     HStack {
@@ -104,28 +102,30 @@ struct IndicatorSettingsView: View {
                             .frame(width: 90)
                     }
                 }
-                Section("副图 · MACD") {
+                DisclosureGroup("SAR") {
+                    Toggle("显示 SAR", isOn: enabledBinding(.sar))
+                    decimalParameter("加速因子", value: $draft.sarStep)
+                    decimalParameter("最大加速因子", value: $draft.sarMaximum)
+                }
+                } header: { Text("主图指标") }
+                Section("副图指标") {
+                DisclosureGroup("MACD") {
                     Toggle("显示 MACD", isOn: enabledBinding(.macd))
                     parameter("快线周期", value: $draft.macdFast, id:"macdFast")
                     parameter("慢线周期", value: $draft.macdSlow, id:"macdSlow")
                     parameter("信号周期", value: $draft.macdSignal, id:"macdSignal")
                 }
-                Section("副图 · KDJ") {
+                DisclosureGroup("KDJ") {
                     Toggle("显示 KDJ", isOn: enabledBinding(.kdj))
                     parameter("RSV 周期", value: $draft.kdjPeriod, id:"kdjPeriod")
                     parameter("K 平滑周期", value: $draft.kdjK, id:"kdjK")
                     parameter("D 平滑周期", value: $draft.kdjD, id:"kdjD")
                 }
-                Section("副图 · ATR") {
+                DisclosureGroup("ATR") {
                     Toggle("显示 ATR", isOn: enabledBinding(.atr))
                     parameter("计算周期", value: $draft.atrPeriod, id:"atrPeriod")
                 }
-                Section("主图 · SAR") {
-                    Toggle("显示 SAR", isOn: enabledBinding(.sar))
-                    decimalParameter("加速因子", value: $draft.sarStep)
-                    decimalParameter("最大加速因子", value: $draft.sarMaximum)
-                }
-                Section("副图与分时") {
+                DisclosureGroup("其他副图与分时") {
                     Toggle("显示分时",isOn:enabledBinding(.intraday))
                     Toggle("显示 OPI 持仓量", isOn: enabledBinding(.opi))
                     Toggle("显示 VOL", isOn: enabledBinding(.volume))
@@ -133,10 +133,11 @@ struct IndicatorSettingsView: View {
                     Toggle("显示 RSI", isOn: enabledBinding(.rsi))
                     parameter("RSI 周期", value: $draft.rsi, id:"rsi")
                 }
+                }
                 Section("自定义指标") {
-                    ForEach($draft.formulas) { $formula in
+                    ForEach(draft.formulas) { formula in
                         HStack {
-                            Toggle(formula.name, isOn: $formula.enabled)
+                            Toggle(formula.name, isOn: formulaEnabledBinding(formula))
                             Menu {
                                 if formula.composition != nil {
                                     Button("编辑组合",systemImage:"slider.horizontal.3") { dismissInput(); composingFormula = formula }
@@ -233,6 +234,24 @@ struct IndicatorSettingsView: View {
             }
         }
         .tint(MarketPalette.accent)
+    }
+
+    // Resolve by stable UUID on every access; SwiftUI controls may retain
+    // bindings beyond an array mutation or a dismissed row.
+    private func averageBinding<T>(_ snapshot: AdditionalMovingAverage, _ key: WritableKeyPath<AdditionalMovingAverage, T>) -> Binding<T> {
+        Binding(get: {
+            (draft.additionalAverages.first { $0.id == snapshot.id } ?? snapshot)[keyPath: key]
+        }, set: { value in
+            guard let index = draft.additionalAverages.firstIndex(where: { $0.id == snapshot.id }) else { return }
+            draft.additionalAverages[index][keyPath: key] = value
+        })
+    }
+    private func formulaEnabledBinding(_ snapshot: FormulaDefinition) -> Binding<Bool> {
+        Binding(get: { draft.formulas.first { $0.id == snapshot.id }?.enabled ?? snapshot.enabled },
+                set: { value in
+                    guard let index = draft.formulas.firstIndex(where: { $0.id == snapshot.id }) else { return }
+                    draft.formulas[index].enabled = value
+                })
     }
 
     private func dismissInput() {

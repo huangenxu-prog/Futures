@@ -20,6 +20,7 @@ struct QihuiSettingsView: View {
         NavigationStack {
             Form {
                 Section("常规") {
+                    Text("涨跌幅基准").font(.caption).foregroundStyle(.secondary)
                     Picker("涨跌幅基准", selection: $changeBasis) {
                         Text("昨结").tag("settlement")
                         Text("今开").tag("open")
@@ -32,6 +33,15 @@ struct QihuiSettingsView: View {
                     }.pickerStyle(.segmented)
 
                 }
+                Section("图表与策略") {
+                    Button { strategy = true } label: {
+                        HStack { Text("策略回测"); Spacer(); Image(systemName: "chevron.right") }
+                    }
+                    Button("指标管理") { indicators = true }
+                    Button("周期排序") { period = true }
+                }
+                CandleAppearanceFields()
+                TradeConnectionFields()
                 Section("服务器配置") {
                     LabeledContent("行情服务器", value: MarketDataService.configuredHost)
                     LabeledContent("行情访问密钥", value: marketConfigured ? "已配置" : "未配置")
@@ -51,17 +61,6 @@ struct QihuiSettingsView: View {
                         }
                     }
 
-                }
-                Section("图表与指标") {
-                    Button("周期排序") { period = true }
-                    Button("指标管理") { indicators = true }
-                }
-                CandleAppearanceFields()
-                TradeConnectionFields()
-                Section("策略与回测") {
-                    Button { strategy = true } label: {
-                        HStack { Text("策略回测"); Spacer(); Image(systemName: "chevron.right") }
-                    }
                 }
 
             }

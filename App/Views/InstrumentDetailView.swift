@@ -656,9 +656,12 @@ private struct InstrumentDetailPage: View {
                         smallQuote("昨结", (selectedContract == nil ? current?.settlement : exact?.settlement ?? selectedContract?.settlement)?.formatted() ?? "--", MarketPalette.ink)
                     }
                     .frame(width: max(0, (geometry.size.width - 20) / 4), alignment: .leading)
+                    .clipped()
                 }
-                .padding(.horizontal, 10)
             }
+            .frame(width: max(0, geometry.size.width - 20))
+            .clipped()
+            .padding(.horizontal, 10)
         }
         .frame(height: 24)
     }
