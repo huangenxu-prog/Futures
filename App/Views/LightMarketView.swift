@@ -89,8 +89,11 @@ struct LightMarketView: View {
     @State private var editing = false
     @AppStorage("qihui.appearance.mode.v1") private var appearanceMode = AppAppearanceMode.dark.rawValue
     @Environment(\.colorScheme) private var colorScheme
-    @State private var selectedInstrument: FuturesInstrument?
-    @State private var detailSequence: [FuturesInstrument] = []
+    private struct DetailSelection: Hashable {
+        let instrument: FuturesInstrument
+        let sequence: [FuturesInstrument]
+    }
+    @State private var detailSelection: DetailSelection?
     @AppStorage("qihui.change.basis.v1") private var changeBasis = "settlement"
     @State private var showingStrategyCenter = false
     @State private var showingTradingCenter = false
@@ -272,9 +275,9 @@ struct LightMarketView: View {
             .background(HomeMarketPalette.header.ignoresSafeArea())
             .tint(HomeMarketPalette.accent)
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(item: $selectedInstrument) { item in
-                InstrumentDetailView(instrument: item, sequence: detailSequence)
-                    .id(item.id)
+            .navigationDestination(item: $detailSelection) { selection in
+                InstrumentDetailView(instrument: selection.instrument, sequence: selection.sequence)
+                    .id(selection.instrument.id)
                     .environment(\.mainContracts, contracts.merging(onDemandQuotes) {
                         live, extra in live.last == nil ? extra : live
                     })
@@ -475,14 +478,12 @@ struct LightMarketView: View {
             .contentShape(Rectangle())
             .onTapGesture {
                 guard !editing else { return }
-                detailSequence = instruments
-                selectedInstrument = item
+                detailSelection = DetailSelection(instrument: item, sequence: instruments)
             }
             .accessibilityAddTraits(.isButton)
             .accessibilityAction {
                 guard !editing else { return }
-                detailSequence = instruments
-                selectedInstrument = item
+                detailSelection = DetailSelection(instrument: item, sequence: instruments)
             }
             if showsFavoriteControl {
                 Button { favorites.toggle(item.id) } label: {

@@ -9,6 +9,8 @@ struct QihuiappApp: App {
             #elseif DEBUG
             if ProcessInfo.processInfo.arguments.contains("-qihui-chart-replay") {
                 ChartReplayView()
+            } else if ProcessInfo.processInfo.arguments.contains("-detail-pager-ui-test") {
+                DetailPagerFixture()
             } else {
                 ContentView()
             }
