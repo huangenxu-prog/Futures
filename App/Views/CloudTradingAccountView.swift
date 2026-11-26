@@ -347,7 +347,15 @@ struct TradingCenterView: View {
     @State private var unlock = false
     @State private var cancelID: String?
     @Environment(\.futuresCatalog) private var catalog
+    @Environment(\.mainContracts) private var liveMainQuotes
     @State private var selected: PaperContract?
+    private struct CachedTradeQuote {
+        let contract: PaperContract
+        let details: MarketDataService.ContractQuote?
+        let optionDetails: MarketDataService.OptionQuote?
+        let received: Date
+    }
+    @State private var recentTradeQuotes: [String: CachedTradeQuote] = [:]
     @State private var selecting = false
     @State private var expandedHolding: String?
     @State private var detailedQuote: MarketDataService.ContractQuote?
@@ -511,9 +519,9 @@ struct TradingCenterView: View {
             } message: { Text("未知结果可能已经下单，切勿重复提交。") }
             .task(id: selectionRequest) {
                 guard let c = selected else { return }
-                await Task.yield()
+                let request = selectionRequest
                 while !Task.isCancelled {
-                    await refreshQuote(c)
+                    await refreshQuote(c, request: request)
                     do { try await Task.sleep(for: .seconds(5)) } catch { return }
                 }
             }
@@ -761,7 +769,7 @@ struct TradingCenterView: View {
                     .background(MarketPalette.raised, in: RoundedRectangle(cornerRadius: 5))
             }
             HStack {
-                Text(quoteError ? "报价失败" : (quoteStamp == nil ? "等待报价" : "参考报价"))
+                Text(quoteError ? "报价失败" : (quoteStamp == nil ? (selected?.last == nil ? "等待报价" : "参考行情 · 确认中") : "参考报价"))
                 Spacer()
                 Text("最大可开 -- · 保证金 --")
             }.font(.caption2).foregroundStyle(MarketPalette.muted)
@@ -842,6 +850,31 @@ struct TradingCenterView: View {
         selected = c; selectedPrice = c.last.flatMap { $0.isFinite && $0 > 0 ? String($0) : nil } ?? ""
         priceMode = .opponent; selectedQuantity = 1; closeToday = false; quoteStamp = nil; quoteError = false; selectionRequest = UUID()
     }
+    // A display-only seed must never authorize a new order or reuse another
+    // month's prices. The existing network refresh supplies tradable metadata.
+    private func seedHoldingQuote(_ c: PaperContract) {
+        let cached = recentTradeQuotes[c.symbol].flatMap {
+            Date().timeIntervalSince($0.received) <= 30 ? $0 : nil
+        }
+        if let cached {
+            detailedQuote = cached.details
+            optionQuote = cached.optionDetails
+            let q = cached.contract
+            selected = PaperContract(symbol: c.symbol, name: c.name, tick: nil, multiplier: nil,
+                                     last: q.last, bid: q.bid, ask: q.ask, option: c.option)
+        }
+        if c.option == nil, let p = product(c.symbol), let q = liveMainQuotes[p.id],
+           q.code == c.symbol, let last = q.last, last.isFinite, last > 0 {
+            selected = PaperContract(symbol: c.symbol, name: c.name, tick: nil, multiplier: nil,
+                                     last: last, bid: q.bid, ask: q.ask, option: nil)
+            detailedQuote = MarketDataService.ContractQuote(
+                code: q.code, month: q.month, last: q.last, settlement: q.settlement,
+                bid: q.bid, ask: q.ask, volume: q.volume, interest: q.interest,
+                priceTick: nil, volumeMultiple: nil, bidVolume: q.bidVolume, askVolume: q.askVolume,
+                opening: q.opening, highest: q.highest, lowest: q.lowest,
+                upperLimit: cached?.details?.upperLimit, lowerLimit: cached?.details?.lowerLimit, time: q.time)
+        }
+    }
     private func product(_ symbol: String) -> FuturesInstrument? {
         catalog.filter { symbol.hasPrefix($0.id) }.max { $0.id.count < $1.id.count }
     }
@@ -874,9 +907,11 @@ struct TradingCenterView: View {
            let strike = Double(symbol[strikeRange]), strike > 0 {
             option = PaperOptionDetails(underlying: String(symbol[u]), side: symbol[side].uppercased() == "C" ? "CALL" : "PUT", strike: strike)
         }
-        choose(PaperContract(symbol: symbol, name: product(symbol)?.name ?? contractName(symbol), tick: nil, multiplier: nil, last: nil, bid: nil, ask: nil, option: option))
+        let contract = PaperContract(symbol: symbol, name: product(symbol)?.name ?? contractName(symbol), tick: nil, multiplier: nil, last: nil, bid: nil, ask: nil, option: option)
+        choose(contract)
+        seedHoldingQuote(contract)
     }
-    @MainActor private func refreshQuote(_ c: PaperContract) async {
+    @MainActor private func refreshQuote(_ c: PaperContract, request: UUID) async {
         do {
             let next: PaperContract
             var details: MarketDataService.ContractQuote?
@@ -890,14 +925,18 @@ struct TradingCenterView: View {
                 details = q
                 next = PaperContract(symbol: q.code, name: p.name, tick: q.priceTick, multiplier: q.volumeMultiple, last: q.last, bid: q.bid, ask: q.ask)
             }
-            guard !Task.isCancelled, selected?.symbol == c.symbol else { return }
+            guard !Task.isCancelled, selectionRequest == request, selected?.symbol == c.symbol else { return }
+            let received = Date()
+            recentTradeQuotes = recentTradeQuotes.filter { received.timeIntervalSince($0.value.received) <= 30 }
+            recentTradeQuotes[c.symbol] = CachedTradeQuote(contract: next, details: details, optionDetails: optionDetails, received: received)
             detailedQuote = details
             optionQuote = optionDetails
-            selected = next; quoteStamp = Date(); quoteError = false
+            selected = next; quoteStamp = received; quoteError = false
             if selectedPrice.isEmpty, let last = next.last, last > 0 { selectedPrice = String(last) }
             // Close confirmation price is user controlled; never replace it on a quote update.
         } catch {
-            guard !Task.isCancelled, selected?.symbol == c.symbol else { return }
+            guard !Task.isCancelled, selectionRequest == request, selected?.symbol == c.symbol else { return }
+            recentTradeQuotes.removeValue(forKey: c.symbol)
             detailedQuote = nil
             optionQuote = nil
             quoteError = true
@@ -922,6 +961,7 @@ struct TradingCenterView: View {
             LazyVStack(spacing: 0) {
             if session.snapshot == nil {
                 Text("账户数据暂不可用").font(.caption).foregroundStyle(.secondary)
+                if tab == "持仓" { positionSummaryUnavailable }
             } else if tab == "持仓" {
                 HStack(spacing: 4) {
                     Text("合约 / 多空").frame(maxWidth: .infinity, alignment: .leading)
@@ -938,6 +978,7 @@ struct TradingCenterView: View {
                     if held.isEmpty {
                         Text("暂无持仓").font(.caption).foregroundStyle(.secondary)
                     }
+                    positionSummary(held)
                 }
             } else if tab == "成交" {
                 HStack(spacing: 3) {
@@ -994,13 +1035,6 @@ struct TradingCenterView: View {
                 if orders.isEmpty { Text(tab == "挂单" ? "暂无挂单" : "暂无委托或未取得数据").font(.caption).foregroundStyle(.secondary) }
             }
             }
-            }
-            if tab == "持仓" {
-                if let snapshot = session.snapshot {
-                    positionSummary(snapshot.positions.filter { $0.long > 0 || $0.short > 0 })
-                } else {
-                    positionSummaryUnavailable
-                }
             }
         }.padding(.top, 5).frame(maxHeight: .infinity, alignment: .top)
     }
