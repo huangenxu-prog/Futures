@@ -1,172 +1,139 @@
 import SwiftUI
+import UIKit
 import Combine
 
-// Native vertical paging: retain the current and adjacent page identities.
 struct InstrumentDetailView: View {
-    private let initial: FuturesInstrument
-    private let initialContract: MarketDataService.ContractQuote?
+    let instrument: FuturesInstrument
+    let selectedContract: MarketDataService.ContractQuote?
     private let pages: [FuturesInstrument]
     @State private var period = "15分"
-    @State private var visibleID: String?
-    @State private var activeID: String
-    @State private var scrolling = false
-    @State private var userHasScrolled = false
-    @State private var initialPageFrame: CGRect?
-    @State private var initialAlignmentAttempts = 0
-    @Namespace private var pagerViewport
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.mainContracts) private var contracts
+    @Environment(\.futuresCatalog) private var catalog
+    @Environment(\.scenePhase) private var phase
+    @EnvironmentObject private var favorites: Favorites
 
     init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote? = nil, sequence: [FuturesInstrument] = []) {
-        initial = instrument
-        initialContract = selectedContract
+        self.instrument = instrument
+        self.selectedContract = selectedContract
         var seen = Set<String>()
         let unique = sequence.filter { seen.insert($0.id).inserted }
-        pages = unique.contains(where: { $0.id == instrument.id }) ? unique : [instrument]
-        _visibleID = State(initialValue: instrument.id)
-        _activeID = State(initialValue: instrument.id)
+        pages = seen.contains(instrument.id) ? unique : [instrument]
     }
 
-    private var activeIndex: Int { pages.firstIndex { $0.id == activeID } ?? 0 }
-    private var shownID: String { userHasScrolled ? (visibleID ?? activeID) : initial.id }
-
     var body: some View {
-        Group {
-            if pages.count <= 1 {
-                detail(initial, active: true)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical) {
-                        VStack(spacing: 0) {
-                            ForEach(Array(pages.enumerated()), id: \.element.id) { index, item in
-                                Group {
-                                    if abs(index - activeIndex) <= 1 || item.id == shownID {
-                                        detail(item, active: item.id == activeID)
-                                    } else {
-                                        MarketPalette.surface
-                                    }
-                                }
-                                .containerRelativeFrame(.vertical)
-                                .frame(maxWidth: .infinity)
-                                .clipped()
-                                .background {
-                                    if item.id == initial.id && !userHasScrolled {
-                                        GeometryReader { geometry in
-                                            Color.clear.preference(key: InitialPageFrameKey.self,
-                                                value: geometry.frame(in: .named(pagerViewport)))
-                                        }
-                                    }
-                                }
-                                .id(item.id)
-                            }
-                        }.scrollTargetLayout()
-                    }
-                    .coordinateSpace(name: pagerViewport)
-                    .scrollIndicators(.hidden)
-                    .scrollTargetBehavior(.paging)
-                    .scrollPosition(id: $visibleID, anchor: .top)
-                    .onScrollPhaseChange { _, phase in
-                        scrolling = phase != .idle
-                        if phase == .tracking || phase == .interacting {
-                            userHasScrolled = true
-                        }
-                        if phase == .idle, userHasScrolled, let id = visibleID, id != activeID {
-                            activeID = id
-                        }
-                    }
-                    .onChange(of: visibleID) { _, id in
-                        if userHasScrolled, !scrolling, let id, id != activeID { activeID = id }
-                    }
-                    .onScrollGeometryChange(for: PagerMetrics.self) { geometry in
-                        PagerMetrics(height: geometry.containerSize.height,
-                                     top: geometry.contentInsets.top,
-                                     bottom: geometry.contentInsets.bottom)
-                    } action: { _, metrics in
-                        guard !userHasScrolled, metrics.height > 1 else { return }
-                        placeInitialPage(proxy)
-                    }
-                    .onPreferenceChange(InitialPageFrameKey.self) { frame in
-                        guard !userHasScrolled else { return }
-                        initialPageFrame = frame
-                    }
-                    .onAppear { placeInitialPage(proxy) }
-                    .task {
-                        // Initial navigation can settle after onAppear and the
-                        // first scroll geometry callback. Inspect the actual
-                        // target frame after layout, not an inferred page index.
-                        // Bounded retries never participate in user paging.
-                        for delay in [80, 160, 260, 400, 600] {
-                            do { try await Task.sleep(for: .milliseconds(delay)) }
-                            catch { return }
-                            guard !Task.isCancelled, !userHasScrolled else { return }
-                            guard let frame = initialPageFrame,
-                                  frame.height > 1, frame.minY.isFinite,
-                                  abs(frame.minY) > 1,
-                                  initialAlignmentAttempts < 5 else { continue }
-                            initialAlignmentAttempts += 1
-                            #if DEBUG
-                            print("[pager] initial alignment correction \(initial.id) top=\(frame.minY) attempt=\(initialAlignmentAttempts)")
-                            #endif
-                            placeInitialPage(proxy)
-                        }
-                    }
-                    #if DEBUG
-                    .onScrollGeometryChange(for: PagerTrace.self) { geometry in
-                        PagerTrace(offset: geometry.contentOffset.y.rounded(),
-                                   height: geometry.containerSize.height.rounded(),
-                                   top: geometry.contentInsets.top.rounded(),
-                                   bottom: geometry.contentInsets.bottom.rounded())
-                    } action: { _, trace in
-                        guard !userHasScrolled else { return }
-                        print("[pager] initial=\(initial.id) visible=\(visibleID ?? "nil") active=\(activeID) offset=\(trace.offset) height=\(trace.height) top=\(trace.top) bottom=\(trace.bottom)")
-                    }
-                    #endif
-                    .clipped()
-                }
-            }
+        DetailPager(pages: pages, initial: instrument, period: period) { item, active in
+            AnyView(InstrumentDetailPage(instrument: item,
+                selectedContract: item.id == instrument.id ? selectedContract : nil,
+                period: $period, isActive: active, goBack: { dismiss() })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("detail.page." + item.id)
+                .environment(\.mainContracts, contracts)
+                .environment(\.futuresCatalog, catalog)
+                .environment(\.scenePhase, phase)
+                .environmentObject(favorites))
         }
+        .id(instrument.id)
         .background(MarketPalette.surface.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .onAppear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: true) }
         .onDisappear { NotificationCenter.default.post(name: .qihuiDetailVisibility, object: false) }
     }
+}
 
-    private func placeInitialPage(_ proxy: ScrollViewProxy) {
-        guard !userHasScrolled else { return }
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            proxy.scrollTo(initial.id, anchor: .top)
+private struct DetailPager: UIViewControllerRepresentable {
+    let pages: [FuturesInstrument]
+    let initial: FuturesInstrument
+    // Invalidate hosted roots when the shared selection changes.
+    let period: String
+    let content: (FuturesInstrument, Bool) -> AnyView
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIViewController(context: Context) -> UIPageViewController {
+        let pager = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .vertical)
+        pager.view.clipsToBounds = true
+        pager.view.accessibilityIdentifier = "detail.viewport"
+        for scroll in pager.view.subviews.compactMap({ $0 as? UIScrollView }) {
+            scroll.contentInsetAdjustmentBehavior = .never
+            scroll.panGestureRecognizer.maximumNumberOfTouches = 1
+            scroll.isDirectionalLockEnabled = true
+        }
+        let coordinator = context.coordinator
+        pager.dataSource = pages.count > 1 ? coordinator : nil
+        pager.delegate = coordinator
+        pager.setViewControllers([coordinator.host(for: initial)], direction: .forward, animated: false)
+        coordinator.keepNeighbors()
+        return pager
+    }
+
+    func updateUIViewController(_ pager: UIPageViewController, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.refresh()
+    }
+
+    @MainActor final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
+        var parent: DetailPager
+        var activeID: String
+        private var hosts: [String: UIHostingController<AnyView>] = [:]
+
+        init(_ parent: DetailPager) {
+            self.parent = parent
+            activeID = parent.initial.id
+        }
+
+        func host(for item: FuturesInstrument) -> UIHostingController<AnyView> {
+            if let existing = hosts[item.id] { return existing }
+            let host = UIHostingController(rootView: parent.content(item, item.id == activeID))
+            host.safeAreaRegions = []
+            host.view.backgroundColor = .clear
+            host.view.accessibilityElementsHidden = item.id != activeID
+            hosts[item.id] = host
+            return host
+        }
+
+        func keepNeighbors() {
+            guard let center = parent.pages.firstIndex(where: { $0.id == activeID }) else { return }
+            let neighbors = parent.pages[max(0, center - 1)...min(parent.pages.count - 1, center + 1)]
+            let ids = Set(neighbors.map(\.id))
+            hosts = hosts.filter { ids.contains($0.key) }
+            for item in neighbors { _ = host(for: item) }
+        }
+
+        func refresh() {
+            for (id, host) in hosts {
+                guard let item = parent.pages.first(where: { $0.id == id }) else { continue }
+                host.rootView = parent.content(item, id == activeID)
+                host.view.accessibilityElementsHidden = id != activeID
+            }
+        }
+
+        private func neighbor(of controller: UIViewController, offset: Int) -> UIViewController? {
+            guard let id = hosts.first(where: { $0.value === controller })?.key,
+                  let index = parent.pages.firstIndex(where: { $0.id == id }),
+                  parent.pages.indices.contains(index + offset) else { return nil }
+            return host(for: parent.pages[index + offset])
+        }
+
+        func pageViewController(_ pager: UIPageViewController, viewControllerBefore controller: UIViewController) -> UIViewController? {
+            neighbor(of: controller, offset: -1)
+        }
+
+        func pageViewController(_ pager: UIPageViewController, viewControllerAfter controller: UIViewController) -> UIViewController? {
+            neighbor(of: controller, offset: 1)
+        }
+
+        func pageViewController(_ pager: UIPageViewController, didFinishAnimating finished: Bool,
+                                previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
+            guard completed, let visible = pager.viewControllers?.first,
+                  let id = hosts.first(where: { $0.value === visible })?.key else { return }
+            activeID = id
+            refresh()
+            keepNeighbors()
         }
     }
-
-    private func detail(_ item: FuturesInstrument, active: Bool) -> some View {
-        InstrumentDetailPage(instrument: item, selectedContract: item.id == initial.id ? initialContract : nil,
-                             period: $period, isActive: active)
-            .allowsHitTesting(active)
-            .accessibilityHidden(!active)
-    }
 }
-
-private struct InitialPageFrameKey: PreferenceKey {
-    static let defaultValue: CGRect? = nil
-    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
-        if let next = nextValue() { value = next }
-    }
-}
-
-private struct PagerMetrics: Equatable {
-    let height: CGFloat
-    let top: CGFloat
-    let bottom: CGFloat
-}
-
-#if DEBUG
-private struct PagerTrace: Equatable {
-    let offset: CGFloat
-    let height: CGFloat
-    let top: CGFloat
-    let bottom: CGFloat
-}
-#endif
 
 private struct InstrumentDetailPage: View {
     @Environment(\.mainContracts) private var contracts
@@ -177,18 +144,19 @@ private struct InstrumentDetailPage: View {
     @State private var showChartIndicatorSettings = false
     private let instrument: FuturesInstrument
     private let isActive: Bool
+    let goBack: () -> Void
     @Binding private var period: String
     @State private var selectedContract: MarketDataService.ContractQuote?
 
-    init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote?, period: Binding<String>, isActive: Bool) {
+    init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote?, period: Binding<String>, isActive: Bool, goBack: @escaping () -> Void) {
         self.instrument = instrument
+        self.goBack = goBack
         self.isActive = isActive
         _period = period
         _selectedContract = State(initialValue: selectedContract)
     }
 
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.dismiss) private var dismiss
     @AppStorage("qihui.chart.period-order.v1") private var storedPeriodOrder = ""
     @State private var showPeriodOrder = false
     @State private var rawBars: [MarketBar] = []
@@ -473,13 +441,14 @@ private struct InstrumentDetailPage: View {
 
     private var topBar: some View {
         HStack(spacing: 6) {
-            Button { dismiss() } label: {
+            Button { goBack() } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 17, weight: .medium))
                     .frame(width: 28, height: 34)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("detail.back")
             Button { showContracts = true } label: {
                 HStack(spacing: 6) {
                     Text(instrument.name + (selectedContract?.month ?? quote?.month ?? ""))
@@ -497,6 +466,7 @@ private struct InstrumentDetailPage: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("切换合约月份")
+            .accessibilityIdentifier("detail.contract." + instrument.id)
             Spacer(minLength: 2)
             headerAction("期权") { showOptions = true }
             headerAction("下单") { openTrade() }

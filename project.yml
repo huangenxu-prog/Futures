@@ -32,4 +32,15 @@ targets:
         INFOPLIST_KEY_QIHUI_API_BASE_URL: "https://8.153.96.190"
         TARGETED_DEVICE_FAMILY: "1"
     scheme:
-      testTargets: []
+      testTargets: [DetailPagerUITests]
+  DetailPagerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [Tests/DetailPagerUITests]
+    dependencies:
+      - target: Futures
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.huangenxu.futures.detailpager-tests
+        TEST_TARGET_NAME: Futures
