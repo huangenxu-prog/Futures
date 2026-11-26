@@ -10,6 +10,7 @@ import queue
 import re
 import os
 import secrets
+import sqlite3
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -145,6 +146,33 @@ def snapshot(account, positions, orders=None, fills=None):
             "fills": [fill_row(k, v) for k, v in (fills or {}).items() if v.instrument_id and v.volume > 0],
             "simulation_orders": True}
 
+class OrderIntentLedger:
+    """Durable simulation order intents. Never replay an uncertain submission."""
+    def __init__(self, path):
+        self.path = path
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+        with sqlite3.connect(path) as db:
+            db.execute("CREATE TABLE IF NOT EXISTS intents (account TEXT NOT NULL, oid TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(account, oid))")
+
+    def reserve(self, account, payload):
+        oid = payload[0]
+        encoded = json.dumps(payload, separators=(",", ":"), allow_nan=False)
+        with sqlite3.connect(self.path, timeout=5) as db:
+            db.execute("PRAGMA synchronous=FULL")
+            cursor = db.execute("INSERT OR IGNORE INTO intents VALUES (?, ?, ?)", (account, oid, encoded))
+            if cursor.rowcount == 1:
+                return "new"
+            row = db.execute("SELECT payload FROM intents WHERE account=? AND oid=?", (account, oid)).fetchone()
+            return "same" if row and row[0] == encoded else "conflict"
+
+
+ORDER_LEDGER = None
+
+
 class Session:
     def __init__(self, username, password):
         self.token = secrets.token_urlsafe(32)
@@ -248,6 +276,15 @@ class Session:
             return 409
         if len(self.seen) >= 1000:
             return 429
+        if ORDER_LEDGER is not None:
+            namespace = hashlib.sha256(("TqKq:" + self.username).encode("utf-8")).hexdigest()
+            reservation = ORDER_LEDGER.reserve(namespace, payload)
+            if reservation == "conflict":
+                return 409
+            if reservation == "same":
+                # A prior process may have transmitted this order. Require
+                # reconciliation, even if the broker currently lists no order.
+                return 503
         self.seen[oid] = payload
         api.insert_order(symbol=symbol, direction=direction, offset=offset,
                          volume=qty, limit_price=price, order_id=oid)
@@ -389,9 +426,11 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply(result.get("status", 503))
 
 def main():
+    global ORDER_LEDGER
     if len(ACCESS) < 32:
         raise SystemExit("Set a private QIHUI_TRADE_ACCESS_KEY of at least 32 characters")
     configure_audit("trade-audit.jsonl")
+    ORDER_LEDGER = OrderIntentLedger("trade-intents.sqlite3")
     ThreadingHTTPServer(("127.0.0.1", 8766), Handler).serve_forever()
 
 if __name__ == "__main__":
