@@ -37,6 +37,7 @@ struct QihuiSettingsView: View {
 
                 }
                 QuoteAppearanceFields()
+                CandleAppearanceFields()
                 Section("图表与策略") {
                     Button { strategy = true } label: {
                         HStack { Text("策略回测"); Spacer(); Image(systemName: "chevron.right") }
@@ -44,7 +45,6 @@ struct QihuiSettingsView: View {
                     Button("指标管理") { indicators = true }
                     Button("周期排序") { period = true }
                 }
-                CandleAppearanceFields()
                 TradeConnectionFields()
                 Section("服务器配置") {
                     LabeledContent("行情服务器", value: MarketDataService.configuredHost)
