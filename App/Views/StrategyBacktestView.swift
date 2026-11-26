@@ -4,21 +4,34 @@ import Charts
 struct StrategyBacktestView: View {
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focusedField: String?
-    let symbol: String
-    let period: Int
+    let instruments: [FuturesInstrument]
+    let favoriteIDs: [String]
+    let mainCodes: [String:String]
     let formulas: [FormulaDefinition]
-    let priceTick: Double?
-    var contractMultiplier: Double? = nil
+    @State private var productID = ""
+    @State private var symbol = ""
+    @State private var period = 1800
+    @State private var strategyID = "default"
+    @State private var contracts: [MarketDataService.ContractQuote] = []
+    @State private var loadingContracts = false
+    @State private var contractError: String?
+    @State private var showTrades = false
+    private var chosen: MarketDataService.ContractQuote? { contracts.first { $0.code == symbol } }
+    private var sortedProducts: [FuturesInstrument] {
+        instruments.sorted {
+            let a = favoriteIDs.firstIndex(of: $0.id) ?? Int.max
+            let b = favoriteIDs.firstIndex(of: $1.id) ?? Int.max
+            return a == b ? $0.name.localizedCompare($1.name) == .orderedAscending : a < b
+        }
+    }
     @State private var source = "LONG:CROSS(EMA(C,20),EMA(C,50));\nSHORT:CROSS(EMA(C,50),EMA(C,20));"
-    @State private var multiplier = ""
-    @State private var tick = ""
-    @State private var initial = 50_000.0
-    @State private var lots = 1
+    private let initial = 50_000.0
+    private let lots = 1
     @State private var risk = 1000.0
     @State private var target = 2.0
     @State private var protectProfit = true
-    @State private var historyCount = 1200
-    @State private var warmupCount = 500
+    private let historyCount = 500
+    private let warmupCount = 500
     @State private var resultTimes: [Int64] = []
     @State private var phase = ""
     @State private var running = false
@@ -30,60 +43,62 @@ struct StrategyBacktestView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("回测策略") {
-                    Text("\(symbol) · \(period/60)分钟")
-                        if !formulas.isEmpty {
-                            Menu("载入已有公式") {
-                                ForEach(formulas) { formula in
-                                    Button(formula.name) { dismissInput(); source = formula.source }
-                                }
-                            }
+                Section("回测条件") {
+                    Picker("策略", selection: $strategyID) {
+                        Text("EMA20/50 交叉").tag("default")
+                        ForEach(formulas) { formula in Text(formula.name).tag(formula.id.uuidString) }
+                        Text("自定义策略").tag("custom")
+                    }
+                    Picker("品种", selection: $productID) {
+                        Text("请选择").tag("")
+                        ForEach(sortedProducts) { item in Text(item.name).tag(item.id) }
+                    }
+                    if loadingContracts { ProgressView("读取合约") }
+                    if let contractError {
+                        Text(contractError).font(.caption).foregroundStyle(.red)
+                        Button("重试") { Task { await loadContracts(productID) } }
+                    }
+                    Picker("合约", selection: $symbol) {
+                        Text("请选择").tag("")
+                        ForEach(contracts) { contract in
+                            Text(contract.code + (contract.code == mainCodes[productID] ? " · 主力" : "")).tag(contract.code)
                         }
-                        TextEditor(text:$source).font(.system(size:12,design:.monospaced))
-    .focused($focusedField,equals:"source")
-                            .frame(minHeight:110).autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                        Text("LONG/SHORT：多空信号，EXIT：平仓，STOP：可选结构止损价。信号在收盘确认，下一根开盘成交。")
-                            .font(.caption)
-                }
-                Section("模拟账户") {
-                    TextField("初始本金（元）", value: $initial, format: .number).keyboardType(.decimalPad)
-                    Picker("目标历史长度",selection:$historyCount) {
-                        Text("500根").tag(500)
-                        Text("1200根").tag(1200)
-                        Text("3000根").tag(3000)
-                        Text("6000根").tag(6000)
+                    }.disabled(loadingContracts || contracts.isEmpty)
+                    Picker("周期", selection: $period) {
+                        ForEach([60,180,300,600,900,1800,3600,7200,86400,604800], id: \.self) { seconds in
+                            Text(seconds == 86400 ? "日线" : seconds == 604800 ? "周线" : "\(seconds/60)分钟").tag(seconds)
+                        }
                     }
-                    Picker("指标预热",selection:$warmupCount) {
-                        Text("200根").tag(200)
-                        Text("500根").tag(500)
-                        Text("1000根").tag(1000)
-                    }
-                    Text("预热K线只用于指标和结构计算，不计入模拟交易。实际预热不足会明确提示。").font(.caption)
-                    numberField("合约乘数",text:$multiplier)
-                    numberField("最小变动价位",text:$tick)
-                    Stepper("固定手数 \(lots)",value:$lots,in:1...100)
-                    HStack {
-                        Text("计划净亏损上限（元）")
-                        Spacer()
-                        TextField("风险",value:$risk,format:.number).keyboardType(.decimalPad)
-    .focused($focusedField,equals:"risk")
-                            .multilineTextAlignment(.trailing).frame(width:100)
-                    }
-                    HStack {
-                        Text("止盈倍数（0关闭）")
-                        Spacer()
-                        TextField("倍数",value:$target,format:.number).keyboardType(.decimalPad)
-    .focused($focusedField,equals:"target")
-                            .multilineTextAlignment(.trailing).frame(width:90)
-                    }
-                    Toggle("盈利回撤归零离场",isOn:$protectProfit)
-                    Text("理论回测未计入手续费、滑点及保证金限制，不代表实际交易收益或持仓能力。同根止盈止损冲突按止损优先处理。")
-                        .font(.caption)
+                    Text("本金5万元 · 最近500根已收盘K线 · 固定1手").font(.caption).foregroundStyle(.secondary)
+                }.disabled(running)
+                if strategyID == "custom" {
+                    Section("自定义策略") {
+                        TextEditor(text: $source).font(.system(size:12,design:.monospaced))
+                            .focused($focusedField,equals:"source").frame(minHeight:110)
+                            .autocorrectionDisabled().textInputAutocapitalization(.never)
+                        Text("LONG / SHORT：入场；EXIT：平仓；STOP：结构止损。").font(.caption)
+                    }.disabled(running)
                 }
                 Section {
+                    DisclosureGroup("策略参数") {
+                        HStack {
+                            Text("计划净亏损上限")
+                            Spacer()
+                            TextField("风险", value: $risk, format: .number).keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing).frame(width:100)
+                        }
+                        HStack {
+                            Text("止盈倍数")
+                            Spacer()
+                            TextField("倍数", value: $target, format: .number).keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing).frame(width:90)
+                        }
+                        Toggle("盈利回撤归零离场", isOn: $protectProfit)
+                    }
+                }.disabled(running)
+                Section {
                     Button(running ? "正在回测…" : "开始回测") { start() }
-                        .disabled(running)
+                        .disabled(running || chosen == nil || loadingContracts)
                     if running {
                         ProgressView(phase)
                         Button("取消回测",role:.cancel) { task?.cancel() }
@@ -103,7 +118,8 @@ struct StrategyBacktestView: View {
                         LabeledContent("最大回撤",value:result.maxDrawdown.formatted(.percent.precision(.fractionLength(2))))
                         LabeledContent("拒绝入场",value:String(result.rejected))
                         LabeledContent("同根止盈止损冲突",value:String(result.ambiguous))
-                        Text("未计入手续费、滑点及保证金限制").font(.caption).foregroundStyle(.secondary)
+                        Text("每边1跳滑点；未计入手续费及保证金限制").font(.caption).foregroundStyle(.secondary)
+                        if result.trades.count < 30 { Text("交易样本较少").font(.caption).foregroundStyle(.orange) }
                         Text(coverage).font(.caption).foregroundStyle(.secondary)
                         Chart(Array(result.equity.enumerated()),id:\.offset) { item in
                             LineMark(x:.value("K线",item.offset),y:.value("权益",item.element))
@@ -112,6 +128,7 @@ struct StrategyBacktestView: View {
                         .frame(height:150)
                     }
                     Section("最近成交") {
+                        DisclosureGroup("交易明细", isExpanded: $showTrades) {
                         ForEach(result.trades.suffix(50)) { trade in
                             VStack(alignment:.leading) {
                                 Text("\(trade.side > 0 ? "多" : "空") · \(trade.reason)")
@@ -123,12 +140,13 @@ struct StrategyBacktestView: View {
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
                         }
+                        }
                     }
                 }
             }
             .scrollDismissesKeyboard(.immediately)
             .onSubmit { dismissInput() }
-            .navigationTitle("指标回测")
+            .navigationTitle("策略中心")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement:.cancellationAction) { Button("关闭") { dismissInput(); dismiss() } }
@@ -137,10 +155,14 @@ struct StrategyBacktestView: View {
                     Button("完成") { dismissInput() }.fontWeight(.semibold)
                 }
             }
-            .onAppear {
-                if tick.isEmpty, let priceTick, priceTick > 0 { tick = String(priceTick) }
-                if multiplier.isEmpty, let contractMultiplier, contractMultiplier > 0 { multiplier = String(contractMultiplier) }
+            .task(id: productID) { await loadContracts(productID) }
+            .onChange(of: strategyID) { _, value in
+                if value == "default" { source = "LONG:CROSS(EMA(C,20),EMA(C,50));\nSHORT:CROSS(EMA(C,50),EMA(C,20));" }
+                else if let formula = formulas.first(where: { $0.id.uuidString == value }) { source = formula.source }
+                result = nil; error = nil
             }
+            .onChange(of: symbol) { _, _ in result = nil; error = nil }
+            .onChange(of: period) { _, _ in result = nil; error = nil }
             .onDisappear { task?.cancel() }
         }
     }
@@ -158,40 +180,47 @@ struct StrategyBacktestView: View {
         return formatter.string(from:Date(timeIntervalSince1970:Double(resultTimes[index])))
     }
 
-    private func numberField(_ title:String,text:Binding<String>) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            TextField("填写",text:text).keyboardType(.decimalPad)
-    .focused($focusedField,equals:title)
-                .multilineTextAlignment(.trailing).frame(width:95)
+    @MainActor private func loadContracts(_ id: String) async {
+        contracts = []; symbol = ""; contractError = nil
+        guard !id.isEmpty else { loadingContracts = false; return }
+        loadingContracts = true
+        defer { if productID == id { loadingContracts = false } }
+        do {
+            let rows = try await MarketDataService.listedContracts(for: id)
+            guard !Task.isCancelled, productID == id else { return }
+            contracts = rows
+            symbol = rows.first(where: { $0.code == mainCodes[id] })?.code ?? rows.first?.code ?? ""
+            if rows.isEmpty { contractError = "暂无挂牌合约" }
+        } catch {
+            guard !Task.isCancelled, productID == id else { return }
+            contractError = error.localizedDescription
         }
     }
     private func start() {
         dismissInput()
-        guard let m = Double(multiplier), let t = Double(tick) else {
+        guard let chosen, let m = chosen.volumeMultiple, let t = chosen.priceTick else {
             error = "缺少合约乘数或最小变动价位，请核对合约数据。"; return
         }
         var parameters = BacktestParameters(initial:initial,multiplier:m,tick:t,marginRate:1,feePerSide:0,
-                                   slippageTicks:0,lots:lots,stopRisk:risk,targetR:target)
+                                   slippageTicks:1,lots:lots,stopRisk:risk,targetR:target)
         parameters.ignoreMargin = true
         parameters.breakEvenAfterProfit = protectProfit
         let p = parameters
         let requested = historyCount, warmup = warmupCount
         guard p.valid else { error = "回测参数无效"; return }
-        let code = source, executionPeriod = period
+        let code = source, executionPeriod = period, executionSymbol = symbol
         running = true; error = nil; result = nil; resultTimes = []; phase = "获取历史K线"
         task = Task {
             defer { running = false }
             do {
-                let history = try await MarketDataService.backtestHistory(symbol:symbol,period:executionPeriod,count:requested+warmup+1)
+                let history = try await MarketDataService.backtestHistory(symbol:executionSymbol,period:executionPeriod,count:requested+warmup+1)
                 // Exclude newest bar conservatively, including when market
                 // is closed, to avoid accidental unfinished-bar signals.
-                let closed = Array(history.dropLast())
+                let closed = Array(history.dropLast().suffix(requested + warmup))
                 guard closed.count >= 50 else { throw FormulaFailure("有效历史不足50根") }
                 // Preserve at least 50 tradable bars when the exchange
                 // returns less history than requested; never invent data.
-                let startIndex = min(warmup,max(0,closed.count-50))
+                let startIndex = max(0, closed.count-requested)
                 let testCount = closed.count-startIndex
                 let bars = closed.map { FormulaBar(open:$0.open,high:$0.high,low:$0.low,close:$0.close,
                     volume:Double($0.volume),openInterest:$0.openInterest,closeInterest:$0.closeInterest) }
