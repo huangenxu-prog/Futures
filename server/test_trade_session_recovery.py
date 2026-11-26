@@ -100,6 +100,34 @@ class RecoveryTests(unittest.TestCase):
                 self.assertEqual(second.submit_order(api, orders, payload), 409)
                 api.insert_order.assert_called_once()
 
+    def test_live_readonly_cannot_submit_order(self):
+        from unittest.mock import Mock
+        with patch.object(g, "TRADE_MODE", "live_readonly"), patch.object(g.threading.Thread, "start"):
+            s = g.Session("test", "password")
+        api = Mock()
+        payload = ("f"*32, "CZCE.SR701", "BUY", "OPEN", 1, 5000.)
+        self.assertEqual(s.submit_order(api, {}, payload), 403)
+        api.insert_order.assert_not_called()
+        self.assertFalse(s.seen)
+
+    def test_account_adapter_requires_explicit_live_configuration(self):
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        sdk = SimpleNamespace(TqKq=Mock(), TqAccount=Mock())
+        with patch.dict(sys.modules, {"tqsdk": sdk}), patch.dict(g.os.environ, {}, clear=True):
+            self.assertIs(g.make_account("simulation"), sdk.TqKq.return_value)
+            with self.assertRaises(RuntimeError):
+                g.make_account("live_readonly")
+            sdk.TqAccount.assert_not_called()
+            with self.assertRaises(ValueError):
+                g.make_account("unknown")
+            with patch.dict(g.os.environ, {"QIHUI_LIVE_BROKER": "test-broker",
+                                            "QIHUI_LIVE_ACCOUNT": "test-account",
+                                            "QIHUI_LIVE_PASSWORD": "test-password"}):
+                self.assertIs(g.make_account("live_readonly"), sdk.TqAccount.return_value)
+            sdk.TqAccount.assert_called_once_with("test-broker", "test-account", "test-password")
+
     def test_password_verifier(self):
         with patch.object(g.threading.Thread, "start"):
             s = g.Session("test", "password")
