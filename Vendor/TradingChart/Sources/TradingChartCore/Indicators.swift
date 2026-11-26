@@ -263,8 +263,9 @@ public struct IndicatorSignal: Hashable, Sendable {
     public var value: Double
     public var text: String
     public var color: ChartColor?
-    public init(time: Date, value: Double, text: String, color: ChartColor? = nil) {
-        self.time = time; self.value = value; self.text = text; self.color = color
+    public var fontSize: Double
+    public init(time: Date, value: Double, text: String, color: ChartColor? = nil, fontSize: Double = 11) {
+        self.time = time; self.value = value; self.text = text; self.color = color; self.fontSize = fontSize
     }
 }
 

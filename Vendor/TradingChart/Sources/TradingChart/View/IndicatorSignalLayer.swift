@@ -56,7 +56,7 @@ struct IndicatorSignalLayer: View {
                     let px = x(signal.time), py = mapping.y(of:signal.value)
                     guard px.isFinite,py.isFinite else { continue }
                     let color = signal.color.map(Color.init) ?? theme.line
-                    let text = Text(signal.text).font(.system(size:11,weight:.semibold)).foregroundColor(color)
+                    let text = Text(signal.text).font(.system(size:CGFloat(signal.fontSize),weight:.semibold)).foregroundColor(color)
                     context.draw(text,at:CGPoint(x:px,y:py),anchor:.center)
                 }
             }

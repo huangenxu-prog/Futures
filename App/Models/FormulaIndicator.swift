@@ -38,7 +38,7 @@ struct QihuiFormulaIndicator: ChartIndicator {
                 case .signal(let label):
                     for (bar,value) in zip(input.candles,output.values) {
                         guard let value else { continue }
-                        signals.append(IndicatorSignal(time:bar.time,value:value,text:label,color:color))
+                        signals.append(IndicatorSignal(time:bar.time,value:value,text:label,color:color,fontSize:output.fontSize ?? 11))
                     }
                 }
             } else if output.histogram {
@@ -59,7 +59,7 @@ struct QihuiFormulaIndicator: ChartIndicator {
             }
         }
         return IndicatorOutput(lines:lines,histograms:histograms,
-                               sticks:sticks.sorted { $0.time < $1.time },
+                               sticks:sticks.enumerated().sorted { a,b in a.element.time == b.element.time ? a.offset < b.offset : a.element.time < b.element.time }.map(\.element),
                                signals:signals.sorted { $0.time < $1.time },
                                segmentSeries:segmentSeries)
     }

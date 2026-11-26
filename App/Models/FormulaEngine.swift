@@ -62,6 +62,7 @@ private struct FormulaStatement: Sendable {
     let width: Double
     let histogram: Bool
     let drawing: Bool
+    let fontSize: Double?
 }
 
 struct FormulaSegment: Sendable, Equatable {
@@ -84,6 +85,7 @@ struct FormulaOutput: Sendable {
     let width: Double
     let histogram: Bool
     var drawing: FormulaDrawing? = nil
+    var fontSize: Double? = nil
 }
 
 struct FormulaProgram: Sendable {
@@ -120,15 +122,19 @@ struct FormulaProgram: Sendable {
         env["HLC3"] = bars.map { ($0.high+$0.low+$0.close)/3 }
         env["OHLC4"] = bars.map { ($0.open+$0.high+$0.low+$0.close)/4 }
         var results: [FormulaOutput] = []
+        var constants: [String: Double] = [:]
         for statement in statements {
+            let expr = Self.substitute(statement.expr, constants)
             if statement.drawing {
-                results.append(try Self.draw(statement, env, n))
+                let resolved = FormulaStatement(name:statement.name,expr:expr,visible:statement.visible,color:statement.color,width:statement.width,histogram:statement.histogram,drawing:true,fontSize:statement.fontSize)
+                results.append(try Self.draw(resolved, env, n))
                 continue
             }
             guard env[statement.name] == nil else {
                 throw FormulaFailure("变量重复定义：\(statement.name)")
             }
-            let values = try Self.eval(statement.expr, env, n)
+            let values = try Self.eval(expr, env, n)
+            if case .constant(let value) = expr { constants[statement.name] = value }
             env[statement.name] = values
             if statement.visible {
                 results.append(FormulaOutput(name: statement.name, values: values,
@@ -136,6 +142,16 @@ struct FormulaProgram: Sendable {
             }
         }
         return results
+    }
+
+    private static func substitute(_ expr: FormulaExpr, _ constants: [String:Double]) -> FormulaExpr {
+        switch expr {
+        case .variable(let name): return constants[name].map { .constant($0) } ?? expr
+        case .unary(let op,let v): return .unary(op,substitute(v,constants))
+        case .binary(let op,let a,let b): return .binary(op,substitute(a,constants),substitute(b,constants))
+        case .call(let name,let args): return .call(name,args.map { substitute($0,constants) })
+        default: return expr
+        }
     }
 
     private static func draw(_ statement: FormulaStatement, _ env: [String:[Double?]], _ n: Int) throws -> FormulaOutput {
@@ -205,7 +221,27 @@ struct FormulaProgram: Sendable {
             return v
         }
         return FormulaOutput(name:name,values:values,color:statement.color,width:statement.width,
-                             histogram:false,drawing:.signal(text:label))
+                             histogram:false,drawing:.signal(text:label),fontSize:statement.fontSize)
+    }
+
+    private static func dynamicExtreme(_ x: [Double?], periods: [Double?], highest: Bool) -> [Double?] {
+        guard !x.isEmpty else { return [] }
+        func combine(_ a: Double?, _ b: Double?) -> Double? {
+            guard let a, let b else { return nil }; return highest ? max(a,b) : min(a,b)
+        }
+        var table = [x], logs = Array(repeating:0,count:x.count+1)
+        if x.count >= 2 { for i in 2...x.count { logs[i] = logs[i/2]+1 } }
+        var span = 2
+        while span <= x.count {
+            let prev = table[table.count-1], half = span/2
+            table.append((0...(x.count-span)).map { combine(prev[$0],prev[$0+half]) })
+            span *= 2
+        }
+        return x.indices.map { i in
+            guard let p = periods[i], p.isFinite, p.rounded() == p, p >= 1, p <= Double(i+1) else { return nil }
+            let length = Int(p), level = logs[length], width = 1 << level
+            return combine(table[level][i-length+1],table[level][i-width+1])
+        }
     }
 
     private static func finite(_ x: Double) -> Double? { x.isFinite ? x : nil }
@@ -279,16 +315,25 @@ struct FormulaProgram: Sendable {
                 }
             }
         case .call(let rawName, let args):
-            let fn = rawName == "EMA2" ? "WMA" : rawName
+            let aliases = ["EMA2":"WMA","CROSSUP":"CROSS","IFN":"IF"]
+            if rawName == "CROSSDOWN", args.count == 2 { return try eval(.call("CROSS",[args[1],args[0]]),env,n) }
+            let fn = aliases[rawName] ?? rawName
             let arity: [String:Int] = [
                 "MA":2,"EMA":2,"SMA":3,"WMA":2,"HMA":2,"DEMA":2,"TEMA":2,"DMA":2,"WILDER":2,
                 "HHV":2,"LLV":2,"SUM":2,"STD":2,
                 "REF":2,"COUNT":2,"IF":3,"CROSS":2,"BARSLAST":1,"ABS":1,"MAX":2,"MIN":2,
-                "VALUEWHEN":2,"FILTER":2,"HHVBARS":2,"LLVBARS":2,"EXIST":2,"EVERY":2,"NOT":1,"BARSCOUNT":1
+                "RANGE":3,"VALUEWHEN":2,"FILTER":2,"HHVBARS":2,"LLVBARS":2,"EXIST":2,"EVERY":2,"NOT":1,"BARSCOUNT":1
             ]
             guard let expected = arity[fn] else { throw FormulaFailure("暂不支持函数：\(fn)") }
             guard args.count == expected else { throw FormulaFailure("\(fn) 需要 \(expected) 个参数") }
             let x = try eval(args[0],env,n)
+            if fn == "RANGE" {
+                let low = try eval(args[1],env,n), high = try eval(args[2],env,n)
+                return x.indices.map { i in
+                    guard let v = x[i], let a = low[i], let b = high[i] else { return nil }
+                    return v > a && v < b ? 1 : 0
+                }
+            }
             if fn == "ABS" { return x.map { $0.map(abs) } }
             if fn == "NOT" { return x.map { $0.map { $0 == 0 ? 1.0 : 0.0 } } }
             if fn == "BARSCOUNT" {
@@ -374,6 +419,11 @@ struct FormulaProgram: Sendable {
                     previous = finite(previous.map { $0 + a*(v-$0) } ?? v)
                     return previous
                 }
+            }
+            if (fn == "HHV" || fn == "LLV"), case .constant = args[1] {} else if fn == "HHV" || fn == "LLV" {
+                let periods = try eval(args[1],env,n)
+                // Sparse table: O(n log n) construction, O(1) per variable window.
+                return Self.dynamicExtreme(x,periods:periods,highest:fn == "HHV")
             }
             let p = try period(args[1],zero: fn == "REF")
             if fn == "HMA" {
@@ -488,12 +538,19 @@ private struct FormulaParser {
     private var token: FormulaToken { tokens[index] }
 
     init(_ source: String) throws {
-        guard source.utf8.count <= 8192 else { throw FormulaFailure("公式过长，上限8192字节") }
+        guard source.utf8.count <= 32768 else { throw FormulaFailure("公式过长，上限32768字节") }
         let chars = Array(source)
         var result: [FormulaToken] = [], i = 0
         while i < chars.count {
             let c = chars[i]
             if c.isWhitespace { i += 1; continue }
+            if c == "/", i+1 < chars.count, chars[i+1] == "/" {
+                i += 2; while i < chars.count, !chars[i].isNewline { i += 1 }; continue
+            }
+            if c == "{" {
+                i += 1; while i < chars.count, chars[i] != "}" { i += 1 }
+                guard i < chars.count else { throw FormulaFailure("注释未闭合") }; i += 1; continue
+            }
             if c == "'" || c == "\"" {
                 let quote = c
                 i += 1
@@ -519,13 +576,18 @@ private struct FormulaParser {
                 result.append(.number(value))
             } else {
                 let pair = i+1 < chars.count ? String(chars[i...i+1]) : ""
-                if [":=",">=","<=","<>","!=","=="].contains(pair) {
+                if pair == "&&" || pair == "||" { result.append(.symbol(pair == "&&" ? "AND" : "OR")); i += 2
+                } else if c == ":" {
+                    var j = i+1; while j < chars.count, chars[j].isWhitespace { j += 1 }
+                    if j < chars.count, chars[j] == "=" { result.append(.symbol(":=")); i = j+1 }
+                    else { result.append(.symbol(":")); i += 1 }
+                } else if [">=","<=","<>","!=","=="].contains(pair) {
                     result.append(.symbol(pair)); i += 2
                 } else if "+-*/(),;:><=".contains(c) {
                     result.append(.symbol(String(c))); i += 1
                 } else { throw FormulaFailure("不支持的字符：\(c)") }
             }
-            guard result.count <= 512 else { throw FormulaFailure("公式表达式过于复杂") }
+            guard result.count <= 4096 else { throw FormulaFailure("公式表达式过于复杂") }
         }
         tokens = result + [.end]
     }
@@ -548,7 +610,7 @@ private struct FormulaParser {
         while token != .end {
             guard case .name(let name) = take() else { throw FormulaFailure("每条公式必须以变量名开头") }
             let drawing = ["STICKLINE","DRAWICON","DRAWTEXT","DRAWLINE"].contains(name) && token == .symbol("(")
-            let visible: Bool
+            var visible: Bool
             let expr: FormulaExpr
             if drawing {
                 // Rewind the function name so the ordinary expression parser
@@ -564,12 +626,16 @@ private struct FormulaParser {
                 expr = try expression()
             }
             var color: String?, width = 1.5, histogram = false
+            var fontSize: Double? = nil
             while accept(",") {
-                guard visible, case .name(let style) = take() else { throw FormulaFailure("绘图属性格式不正确") }
+                guard case .name(let style) = take() else { throw FormulaFailure("绘图属性格式不正确") }
                 let colors = ["COLORRED":"FF5B5B","COLORGREEN":"23C6C8","COLORBLUE":"4C8DFF",
                               "COLORYELLOW":"F5A623","COLORWHITE":"FFFFFF","COLORMAGENTA":"D77DFF",
                               "COLORCYAN":"23C6C8","COLORBLACK":"000000"]
                 if let value = colors[style] { color = value }
+                else if style.hasPrefix("COLOR"), style.count == 11, UInt32(style.dropFirst(5),radix:16) != nil { color = String(style.dropFirst(5)) }
+                else if style == "NODRAW" { visible = false }
+                else if style.hasPrefix("FONTSIZE"), let size = Double(style.dropFirst(8)), (6...40).contains(size) { fontSize = size }
                 else if style.hasPrefix("LINETHICK"), let value = Double(style.dropFirst(9)),
                         (1...5).contains(value) { width = value }
                 else if style == "COLORSTICK" || style == "STICK" { histogram = true }
@@ -577,9 +643,9 @@ private struct FormulaParser {
             }
             if token != .end { try expect(";") }
             if drawing && histogram { throw FormulaFailure("绘图函数不能再加柱状图属性") }
-            statements.append(.init(name:name,expr:expr,visible:visible,color:color,width:width,histogram:histogram,drawing:drawing))
-            guard statements.count <= 24, statements.filter(\.visible).count <= 8 else {
-                throw FormulaFailure("最多24条语句、8条绘图输出")
+            statements.append(.init(name:name,expr:expr,visible:visible,color:color,width:width,histogram:histogram,drawing:drawing,fontSize:fontSize))
+            guard statements.count <= 96, statements.filter(\.visible).count <= 48 else {
+                throw FormulaFailure("最多96条语句、48条绘图输出")
             }
         }
         guard statements.contains(where: \.visible) else { throw FormulaFailure("至少需要一条绘图输出") }

@@ -210,6 +210,26 @@ struct FormulaEngineSelfTest {
         } catch is FormulaFailure {}
         let references = try FormulaProgram("快线:EMA(C,2); 慢线:EMA(快线,3);").evaluate(bars)
         precondition(references.count == 2 && references[1].name == "慢线")
+        let compatible = try FormulaProgram("""
+        SHORT: = 2; // period
+        A:EMA(C,SHORT),COLORFF8D1E;
+        N:=BARSLAST(C=2)+1;
+        B:HHV(H,N);
+        D:LLV(L,N);
+        X:CROSSUP(C,3)&&RANGE(C,2,5);
+        Y:IFN(C>3,1,0);
+        HIDDEN:C,NODRAW;
+        { ignored comment }
+        DRAWTEXT(C>3,H,'☼'),FONTSIZE18,COLOR00FF00;
+        STICKLINE(C>3,0,C,1,0),COLOR0000CC;
+        """).evaluate(bars)
+        precondition(compatible.count == 7 && compatible[0].color == "FF8D1E")
+        near(compatible[1].values[5],7); near(compatible[2].values[5],1)
+        near(compatible[3].values[3],1); near(compatible[4].values[5],1)
+        precondition(compatible[5].fontSize == 18 && compatible[6].color == "0000CC")
+        let layers = (0..<20).map { _ in "STICKLINE(C>0,0,C,1,0),COLORFF0000;" }.joined()
+        let layered = try FormulaProgram(layers).evaluate(bars)
+        precondition(layered.count == 20)
         print("Formula engine: causal state, dynamic references, confirmed segments and previous fixtures passed")
     }
 }
