@@ -322,20 +322,13 @@ private struct InstrumentDetailPage: View {
         .toolbar(.hidden, for: .navigationBar)
         .task(id: chartSymbol + (isActive ? "/active" : "/preview")) {
             guard isActive else { return }
-            // Contract metadata, not displayed price magnitude, determines
-            // precision. The main-contract snapshot does not include priceTick,
-            // so request it from the existing listed-contract endpoint.
             let symbol = chartSymbol
             currentPriceTick = selectedContract?.priceTick
             currentVolumeMultiple = selectedContract?.volumeMultiple
-            if (currentPriceTick ?? 0) <= 0 || (currentVolumeMultiple ?? 0) <= 0 {
-                if let listed = try? await MarketDataService.listedContracts(for: instrument.id) {
-                    guard !Task.isCancelled, chartSymbol == symbol else { return }
-                    if let contract = listed.first(where: { $0.code == symbol }) {
-                        if let tick = contract.priceTick,tick > 0 { currentPriceTick = tick }
-                        if let multiple = contract.volumeMultiple,multiple > 0 { currentVolumeMultiple = multiple }
-                    }
-                }
+            if let contract = try? await MarketDataService.contractQuote(symbol: symbol) {
+                guard !Task.isCancelled, chartSymbol == symbol else { return }
+                if let tick = contract.priceTick, tick > 0 { currentPriceTick = tick }
+                if let multiple = contract.volumeMultiple, multiple > 0 { currentVolumeMultiple = multiple }
             }
         }
         .task(id: chartKey + (scenePhase == .active ? "/foreground" : "/paused") + (isActive ? "/live" : "/preview")) {
