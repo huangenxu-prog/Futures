@@ -93,6 +93,7 @@ struct FormulaSegment: Sendable, Equatable {
 
 enum FormulaDrawing: Sendable {
     case stick(starts: [Double?], width: Double, hollow: Bool)
+    case numbers([Double?], precision: Int)
     case signal(text: String)
     case segments([FormulaSegment])
 }
@@ -186,10 +187,22 @@ struct FormulaProgram: Sendable {
 
     private static func draw(_ statement: FormulaStatement, _ env: [String:[Double?]], _ n: Int) throws -> FormulaOutput {
         guard case .call(let name, let args) = statement.expr else { throw FormulaFailure("无效绘图语句") }
-        let required = name == "STICKLINE" || name == "DRAWLINE" ? 5 : 3
+        let required = name == "DRAWNUMBER" ? 4 : (name == "STICKLINE" || name == "DRAWLINE" ? 5 : 3)
         guard args.count == required else { throw FormulaFailure("\(name) 需要 \(required) 个参数") }
         let condition = try eval(args[0],env,n)
         let first = try eval(args[1],env,n)
+        if name == "DRAWNUMBER" {
+            guard case .constant(let precision) = args[3], (0...6).contains(precision), precision.rounded() == precision else {
+                throw FormulaFailure("DRAWNUMBER 支持 0～6 位小数")
+            }
+            let numbers = try eval(args[2],env,n)
+            let positions = first.indices.map { i -> Double? in
+                guard let active = condition[i], active != 0, numbers[i] != nil else { return nil }
+                return first[i]
+            }
+            return FormulaOutput(name:name,values:positions,color:statement.color,width:statement.width,
+                                 histogram:false,drawing:.numbers(numbers,precision:Int(precision)))
+        }
         if name == "DRAWLINE" {
             let endCondition = try eval(args[2],env,n)
             let endValue = try eval(args[3],env,n)
@@ -352,7 +365,7 @@ struct FormulaProgram: Sendable {
                 "MA":2,"EMA":2,"SMA":3,"WMA":2,"HMA":2,"DEMA":2,"TEMA":2,"DMA":2,"WILDER":2,
                 "HHV":2,"LLV":2,"SUM":2,"STD":2,
                 "#WHEMA":2,"#WHSMA":3,"#WHSUM":2,"#WHCOUNT":2,"#WHMA":2,"#WHEVERY":2,
-                "#WHHHV":2,"#WHLLV":2,"#TDXSUM":2,"BETWEEN":3,"BARSSINCE":1,
+                "#WHHV":2,"#WHLV":2,"#WHHHV":2,"#WHLLV":2,"#TDXSUM":2,"BETWEEN":3,"BARSSINCE":1,
                 "STDP":2,"VAR":2,"VARP":2,"#SAMPLESTD":2,"BARSLASTCOUNT":1,
                 "REF":2,"COUNT":2,"IF":3,"CROSS":2,"BARSLAST":1,"ABS":1,"MAX":2,"MIN":2,
                 "SQRT":1,"POW":2,"EXP":1,"LN":1,"LOG":1,"SIGN":1,
@@ -411,14 +424,17 @@ struct FormulaProgram: Sendable {
                     return previous
                 }
             }
-            if fn == "#WHHHV" || fn == "#WHLLV" {
+            if ["#WHHHV","#WHLLV","#WHHV","#WHLV"].contains(fn) {
+                let previous = fn == "#WHHV" || fn == "#WHLV"
                 let lengths = try eval(args[1],env,n)
                 if case .constant = args[1] { _ = try period(args[1],zero:true) }
                 let available = lengths.enumerated().map { i, length -> Double? in
                     guard let length, length >= 0, length.rounded() == length else { return nil }
-                    return length == 0 ? Double(i+1) : min(length,Double(i+1))
+                    let available = Double(previous ? i : i+1)
+                    return length == 0 ? available : min(length,available)
                 }
-                return dynamicExtreme(x,periods:available,highest:fn == "#WHHHV")
+                let input: [Double?] = previous && !x.isEmpty ? [nil] + x.dropLast() : x
+                return dynamicExtreme(input,periods:available,highest:fn == "#WHHHV" || fn == "#WHHV")
             }
             if ["#WHSUM","#WHCOUNT","#WHMA","#WHEVERY","#TDXSUM"].contains(fn) {
                 let lengths = try eval(args[1],env,n)
@@ -695,7 +711,22 @@ private struct FormulaParser {
     init(_ source: String, platform: FormulaPlatform) throws {
         self.platform = platform
         guard source.utf8.count <= 32768 else { throw FormulaFailure("公式过长，上限32768字节") }
-        let chars = Array(source)
+        var chars = Array(source)
+        if platform != .native {
+            // Normalize syntax only, preserving text labels and the stored source verbatim.
+            let punctuation: [Character:Character] = ["（":"(","）":")","，":",","；":";","：":":","＝":"=","－":"-","−":"-"]
+            var quote: Character?, brace = false, line = false
+            for i in chars.indices {
+                let c = chars[i]
+                if line { if c.isNewline { line = false }; continue }
+                if brace { if c == "}" { brace = false }; continue }
+                if let active = quote { if c == active { quote = nil }; continue }
+                if c == "/" && i+1 < chars.count && chars[i+1] == "/" { line = true }
+                else if c == "{" { brace = true }
+                else if c == "'" || c == "\"" { quote = c }
+                else if let replacement = punctuation[c] { chars[i] = replacement }
+            }
+        }
         var result: [FormulaToken] = [], i = 0
         while i < chars.count {
             let c = chars[i]
@@ -766,7 +797,7 @@ private struct FormulaParser {
         while token != .end {
             guard case .name(let name) = take() else { throw FormulaFailure("每条公式必须以变量名开头") }
             let drawingNames = ["STICKLINE","DRAWICON","DRAWTEXT","DRAWLINE"]
-            let drawing = (drawingNames.contains(name) || (platform == .wenhua && name == "STICK")) && token == .symbol("(")
+            let drawing = (drawingNames.contains(name) || (platform == .wenhua && ["STICK","DRAWNUMBER"].contains(name))) && token == .symbol("(")
             var outputName = name
             var color: String?
             var visible: Bool
@@ -780,13 +811,14 @@ private struct FormulaParser {
                 if platform != .native && (fn == "DRAWICON" || fn == "DRAWLINE") {
                     throw FormulaFailure("当前平台尚未适配 " + fn)
                 }
-                if platform == .wenhua && (fn == "STICK" || fn == "STICKLINE") {
+                if platform == .wenhua && fn == "DRAWNUMBER" {
+                    guard args.count == 5 else { throw FormulaFailure("文华 DRAWNUMBER 需要5个参数") }
+                    color = try Self.paint(args.removeLast())
+                    expr = .call(fn,args)
+                } else if platform == .wenhua && (fn == "STICK" || fn == "STICKLINE") {
                     let colorIndex = fn == "STICK" ? 4 : 3
-                    guard args.count == colorIndex + 2,
-                          case .variable(let paint) = args[colorIndex],
-                          let rgb = Self.platformColors[paint] else { throw FormulaFailure(fn + " 需要文华颜色常量和空心参数") }
-                    color = rgb
-                    args.remove(at:colorIndex)
+                    guard args.count == colorIndex + 2 else { throw FormulaFailure(fn + " 需要文华颜色常量和空心参数") }
+                    color = try Self.paint(args.remove(at:colorIndex))
                     if fn == "STICKLINE" { args.insert(.constant(10),at:3) }
                     else {
                         guard case .constant(let width) = args[3], (0...3).contains(width) else {
@@ -823,7 +855,12 @@ private struct FormulaParser {
                 if let value = (platform == .native ? colors : Self.platformColors)[style] { color = value }
                 else if style.hasPrefix("COLOR"), style.count == 11, UInt32(style.dropFirst(5),radix:16) != nil {
                     let hex = String(style.dropFirst(5))
-                    color = platform == .tongdaxin ? String(hex.suffix(2)) + String(hex.dropFirst(2).prefix(2)) + String(hex.prefix(2)) : hex
+                    guard platform != .wenhua else { throw FormulaFailure("文华自定义颜色请使用 RGB(R,G,B)") }
+                    color = (platform == .tongdaxin || platform == .hexin) ? String(hex.suffix(2)) + String(hex.dropFirst(2).prefix(2)) + String(hex.prefix(2)) : hex
+                }
+                else if platform == .wenhua && style == "RGB" {
+                    index -= 1
+                    color = try Self.paint(atom(depth:0))
                 }
                 else if style == "NODRAW" { visible = false }
                 else if style.hasPrefix("FONTSIZE"), let size = Double(style.dropFirst(8)), (6...40).contains(size) { fontSize = size }
@@ -849,6 +886,19 @@ private struct FormulaParser {
         return statements
     }
 
+    private static func paint(_ expr: FormulaExpr) throws -> String {
+        if case .variable(let name) = expr, let color = platformColors[name] { return color }
+        guard case .call("RGB",let args) = expr, args.count == 3 else {
+            throw FormulaFailure("颜色需要命名色或 RGB(R,G,B)")
+        }
+        return try args.map { arg in
+            guard case .constant(let value) = arg, (0...255).contains(value), value.rounded() == value else {
+                throw FormulaFailure("RGB 分量必须是 0～255 的整数常量")
+            }
+            return String(format:"%02X",Int(value))
+        }.joined()
+    }
+
     private static let commonFunctions: Set<String> = [
         "MA","EMA","SMA","HHV","LLV","SUM","REF","COUNT","IF","CROSS","BARSLAST",
         "ABS","MAX","MIN","FILTER","NOT","EXIST","EVERY","VALUEWHEN","DRAWTEXT","STICKLINE"
@@ -858,7 +908,7 @@ private struct FormulaParser {
                     "BARSCOUNT","HHVBARS","LLVBARS","IFN","IFF","BETWEEN","SQRT","POW","EXP",
                     "LN","LOG","SIGN","FLOOR","CEILING","INTPART","SIN","COS","TAN"],
         .wenhua:["EMA2","WMA","DMA","STD","STDP","VAR","VARP","BARSLASTCOUNT","BARSSINCE",
-                 "IFELSE","CROSSUP","CROSSDOWN","BETWEEN","STICK","SQRT","POW","ABS"],
+                 "IFELSE","CROSSUP","CROSSDOWN","BETWEEN","STICK","HV","LV","SQRT","POW","RGB","DRAWNUMBER"],
         .hexin:["CROSSUP","CROSSDOWN","SQRT","POW","RANGE"]
     ]
 
@@ -918,6 +968,12 @@ private struct FormulaParser {
                     throw FormulaFailure(platform.title + " 暂不支持函数：" + name)
                 }
                 if platform == .wenhua {
+                    if ["HV","LV"].contains(name) {
+                        let extreme = name == "HV" ? "#WHHV" : "#WHLV"
+                        // Exclude the current price. The period belongs to the current bar.
+                        guard args.count == 2 else { throw FormulaFailure(name + " 需要2个参数") }
+                        return .call(extreme,args)
+                    }
                     if ["EMA","SMA","SUM","COUNT","HHV","LLV","MA","EVERY"].contains(name) {
                         return .call("#WH"+name,args)
                     }

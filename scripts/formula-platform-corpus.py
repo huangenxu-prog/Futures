@@ -85,4 +85,7 @@ add(tdx,"WR","WR:100*(HHV(H,10)-C)/(HHV(H,10)-LLV(L,10));",
     [100*(max(h[i-9:i+1])-c[i])/(max(h[i-9:i+1])-min(l[i-9:i+1])) if i>=9 else None for i in bars])
 add(tdx,"数学边界","A:INTPART(-3.5);B:CEILING(-3.5);D:FLOOR(-3.5);E:POW(SQRT(C),2);F:LOG(100);",
     [-3]*80,[-3]*80,[-4]*80,c,[2]*80)
+add(wh,"前窗高低","前高：HV（H，5）；前低：LV（L，5）；",
+    [max(h[max(0,i-5):i]) if i else None for i in bars],
+    [min(l[max(0,i-5):i]) if i else None for i in bars])
 subprocess.run([sys.argv[1],"--platform-corpus"],input=json.dumps(fixtures).encode(),check=True)

@@ -295,7 +295,14 @@ struct FormulaEngineSelfTest {
         guard case .stick(_,2,true)? = tdx[0].drawing else { fatalError("wrong TDX width") }
         precondition(tdx[0].color == "FF0000")
         let macd = try FormulaProgram("X:C,COLORSTICK;Y:C,COLORFF8D1F;",platform:.hexin).evaluate(bars)
-        precondition(macd[0].histogram && macd[1].color == "FF8D1F")
+        precondition(macd[0].histogram && macd[1].color == "1F8DFF")
+        let numeric = try FormulaProgram("DRAWNUMBER(C>O,L,H-C,2,RGB(12,34,56));",platform:.wenhua).evaluate(bars)
+        guard case .numbers(let labels,2)? = numeric[0].drawing else { fatalError("missing numeric label") }
+        precondition(numeric[0].color == "0C2238")
+        for i in bars.indices {
+            precondition(labels[i] == bars[i].high-bars[i].close)
+            precondition(numeric[0].values[i] == (bars[i].close > bars[i].open ? bars[i].low : nil))
+        }
         let rejected: [(FormulaPlatform,String)] = [
             (.hexin,"X:STD(C,2);"),(.hexin,"X:IFN(C,1,2);"),(.tongdaxin,"A:BACKSET(C,3);"),
             (.tongdaxin,"X:C,UNKNOWNSTYLE;"),(.wenhua,"CROSS(C,O),BK;"),(.wenhua,"A:HHVBARS(C,4);"),

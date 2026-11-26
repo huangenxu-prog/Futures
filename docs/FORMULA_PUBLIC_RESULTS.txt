@@ -1,0 +1,98 @@
+view7_2.html 385de0b6c0085e84a185803a0cd1973760447679afc378c9c730abec7c042522
+view7_4.html be78a769e2db96895645a80ee40c5b0ac83f1f0abde5ace1e3dd5bbda3f20ae4
+view7_6.html 053cbba4a23c8f534d8e57b29792af03b0a24c00a744dc71cf6651f48ae4084b
+94 unique worked example blocks: 22 evaluated; 72 rejected
+2b246ba7166b5034 PASS
+bf703d71ab489c84 至少需要一条绘图输出
+c89c247ae5d0f4a1 PASS
+b7ffc2a285ce65c2 PASS
+9a9a21d9c5f46abb 未知变量：DATE
+46d4ca02e194cac3 PASS
+16c1d12f90923899 文华财经 暂不支持函数：CONDBARS
+e2424e85d7fa06c4 至少需要一条绘图输出
+280ebd1b333e8d1c 至少需要一条绘图输出
+64d42efb79218842 PASS
+5b756e2e99d58c1e PASS
+7c1b431d80c26c9b 至少需要一条绘图输出
+1ca06634e9684f9b PASS
+48d0ffa9a30bd98d 未知变量：DATE
+df7f54a1abe6ebfc 文华财经 暂不支持函数：HHVBARS
+0fd111cce5960af2 文华财经 暂不支持函数：HHVBARS
+c16f2b86a87310a6 PASS
+7542c97e5a9b89a1 至少需要一条绘图输出
+56929fc0e511ac03 PASS
+cace6c93ad6fbea3 未知变量：DATE
+b360f728968b85e2 文华财经 暂不支持函数：LLVBARS
+e3c4e35d5c0049e5 文华财经 暂不支持函数：LLVBARS
+67006891471ec358 至少需要一条绘图输出
+eb5677a620cd6b4b 未知变量：DATE
+8b3f066d7538b1c2 不支持的字符：\
+33972aa38dba53a0 文华财经 暂不支持函数：SAR
+6602a36395ef90fd 至少需要一条绘图输出
+c2fd8de1010704c4 文华财经 暂不支持函数：SMMA
+9fe97736e3d0f27d PASS
+eec906c37978ac1c 未知变量：DATE
+b222deff5a55132e 文华财经 暂不支持函数：SUMBARS
+9bdc6886fc641deb 文华财经 暂不支持函数：TRMA
+d312a73c983aa7b9 文华财经 暂不支持函数：TRMA
+bdc28ba0a1d7b220 文华财经 暂不支持函数：TSMA
+eccdca73aaa086e0 未知变量：MA5
+8e51cb96af0589e2 PASS
+f6ce9fb30cd10c9a 暂不支持绘图属性：BK
+89a04ef63c13ce33 暂不支持绘图属性：SK
+53269e97cb1161e4 文华财经 暂不支持函数：DIVERGENCE
+1d3dbc139f1f1c5c PASS
+cb96551d67358baa 暂不支持绘图属性：BK
+73998b7611395819 PASS
+731b010695f4b782 未知变量：DATE
+53d7cca1f3a21ac4 PASS
+5274fed8bbdaff8c PASS
+eb84983d8439c9de 暂不支持绘图属性：BPK
+e7f1c45c44e4ccf3 暂不支持绘图属性：SK
+7e55d5226f67de66 暂不支持绘图属性：CLOSEOUT
+3dcbb59a8b82963a 暂不支持绘图属性：CLOSEOUT
+d44582639e1b6be3 未知变量：ISLASTBAR
+8101c76ca96adea6 暂不支持绘图属性：CLOSEOUT
+d2bb18eed5ea6dbe 暂不支持绘图属性：BK
+21a01624d91c2492 文华财经 暂不支持函数：LAST
+89ab1f7a2293886b 文华财经 暂不支持函数：LAST
+5f0aacb084b0964d 缺少符号 )，位置 11
+a4838bd70fc864db 文华财经 暂不支持函数：LOOP2
+811e3af7ad0ff2a1 文华财经 暂不支持函数：LONGCROSS
+260101f95ec6e5f6 未知变量：DATE
+9f10d2bb472d040d 未知变量：DATE
+64141be7414ca4f6 文华财经 暂不支持函数：BACKGROUNDSTYLE
+53fa527bd16afdcf PASS
+b8ac34295f530dac 暂不支持绘图属性：CROSSDOT
+a629c6a180e84225 暂不支持绘图属性：CIRCLEDOT
+2f4d7719efeed752 文华财经 暂不支持函数：DRAWCOLORLINE
+3995e8bb3186f047 文华财经 暂不支持函数：DRAWCOLUMNCHART
+da5911e4f288969c 文华财经 暂不支持函数：DRAWICON
+784362f54eb06acc 文华财经 暂不支持函数：DRAWICON
+3b5324b0ae244b3d 文华财经 暂不支持函数：DRAWLINE
+d555b77e15d24f26 文华财经 暂不支持函数：DRAWLINE
+49272831848bbb9a PASS
+73d20d916a4c8caa PASS
+df8db1c626b09209 文华财经 暂不支持函数：DRAWSL
+a4e0afef3b440228 文华财经 暂不支持函数：DRAWSL
+1acb05f41dd89f1b 文华财经 暂不支持函数：DRAWKLINE
+4839709599ec7d57 文华财经 暂不支持函数：DRAWKLINE
+46f3aeaf7e377d3f PASS
+99ab3b7f19ff26d7 未知变量：DATE
+eb3422b5f39c55a2 文华财经 暂不支持函数：FILLRGN
+ae5597c588ab914f 文华财经 暂不支持函数：FILLRGN
+9d2e16edf81fcdd5 暂不支持绘图属性：ICON
+b32d34ee8c7732a4 文华财经 暂不支持函数：KTEXT
+7c3da14489c68a85 文华财经 暂不支持函数：KTEXT
+682d6845ab37558e PASS
+d18e5a97fe258516 至少需要一条绘图输出
+3477ee3b3c17bbbb 文华财经 暂不支持函数：PLAYSOUND
+0df84246fcb5ccac 文华财经 暂不支持函数：PARTLINE
+f1a916f26550496c 暂不支持绘图属性：POINTDOT
+de9c82cd8382893e PASS
+b97d56589fe24f03 PASS
+196c188d67c65ec2 暂不支持绘图属性：SETSTYLECOLOR
+d56032fd0438a132 暂不支持绘图属性：SOUND
+3e2575a2e3619302 文华财经 暂不支持函数：VERTLINE
+40e37e63874c152a 文华财经 暂不支持函数：VERTLINE
+adfcf4f4714878f4 暂不支持绘图属性：WORD
