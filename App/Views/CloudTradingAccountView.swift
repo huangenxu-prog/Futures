@@ -354,16 +354,7 @@ struct TradingCenterView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var session = CloudTradeSession.shared
     @AppStorage("qihui.trade.endpoint.v1") private var address = "https://8.153.96.190"
-    @State private var key = ""
-    @State private var keychainMessage: String?
-    @State private var username = ""
-    @State private var password = ""
-    @State private var real = false
-    @State private var liveAddress = ""
-    @State private var liveKey = ""
-    @State private var liveUsername = ""
-    @State private var livePassword = ""
-    @State private var local = false
+    @State private var showConnectionSettings = false
     @State private var unlock = false
     @State private var cancelID: String?
     @State private var orderDetail: CloudSnapshot.Order?
@@ -515,13 +506,7 @@ struct TradingCenterView: View {
                 }
             }
             .onAppear {
-                if key.isEmpty { key = TradeKeychain.load(address) }
-                if username.isEmpty { username = TradeKeychain.load(address, kind: "username") }
                 openInitialIfReady()
-            }
-            .onChange(of: address) { _, newAddress in
-                key = TradeKeychain.load(newAddress); keychainMessage = nil
-                username = TradeKeychain.load(newAddress, kind: "username"); password = ""
             }
             .onChange(of: session.signedIn) { _, signedIn in
                 if signedIn {
@@ -529,153 +514,45 @@ struct TradingCenterView: View {
                 } else {
                     pendingAction = nil; openingDraft = nil; showQuickConfirmation = false; orderDetail = nil; cancelID = nil; closingSide = nil; closeConfirm = false
                     recentTradeQuotes.removeAll(); expandedHolding = nil
-                    key = TradeKeychain.load(address)
                 }
             }
-            .sheet(isPresented: $local) {
-                LocalPaperTradingCenterView(favoriteIDs: favoriteIDs, mainCodes: mainCodes, initialContract: initialContract)
-            }
+            .sheet(isPresented: $showConnectionSettings) { TradeConnectionSettingsView() }
             .task(id: "\(address)-\(scenePhase)") {
                 guard scenePhase == .active else { return }
                 while !Task.isCancelled {
                     if session.signedIn { await session.refresh() }
-                    else if !real { await session.recover(address: address) }
+                    else if !showConnectionSettings { await session.recover(address: address) }
                     do { try await Task.sleep(for: .seconds(3)) } catch { return }
                 }
             }
         }.tint(MarketPalette.accent)
     }
     private var loginPanel: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Picker("账户类型", selection: $real) {
-                    Text("模拟交易").tag(false)
-                    Text("实盘只读").tag(true)
+        VStack(spacing: 16) {
+            Image(systemName: "person.crop.circle").font(.system(size: 42))
+                .foregroundStyle(MarketPalette.muted)
+            Text(session.busy ? "正在连接账户" : "交易账户未连接").font(.headline)
+            if session.busy {
+                ProgressView()
+            } else {
+                Button("连接模拟账户") {
+                    session.allowManualLogin()
+                    Task { await session.recover(address: address) }
                 }
-                .pickerStyle(.segmented)
-                .disabled(session.busy)
-
-                if real {
-                    loginGroup("期货账户") {
-                        LabeledContent("期货公司", value: "银河期货")
-                            .font(.subheadline).padding(12)
-                        Divider()
-                        loginField("person", placeholder: "快期用户名", value: $liveUsername)
-                        Divider()
-                        loginField("lock", placeholder: "快期密码", value: $livePassword, secure: true)
-                    }
-                    loginGroup("实盘网关") {
-                        loginField("link", placeholder: "独立 HTTPS 实盘网关", value: $liveAddress, url: true)
-                        Divider()
-                        loginField("key", placeholder: "网关访问密钥", value: $liveKey, secure: true)
-                    }
-                    Text("仅查询资金、持仓、委托和成交，不支持下单及撤单。")
-                        .font(.caption).foregroundStyle(MarketPalette.muted)
-                    loginButton("登录实盘只读账户", enabled: !session.busy && !liveAddress.isEmpty && !liveKey.isEmpty && !liveUsername.isEmpty && !livePassword.isEmpty && liveAddress != address) {
-                        session.allowManualLogin()
-                        Task {
-                            await session.login(address: liveAddress, key: liveKey, username: liveUsername, password: livePassword, mode: "live_readonly")
-                            livePassword = ""; liveKey = ""
-                        }
-                    }
-                } else {
-                    loginGroup("快期账户") {
-                        loginField("person", placeholder: "手机号 / 用户名", value: $username)
-                        Divider()
-                        loginField("lock", placeholder: "快期账户密码", value: $password, secure: true)
-                    }
-                    loginGroup("交易网关") {
-                        loginField("link", placeholder: "HTTPS 网关地址", value: $address, url: true)
-                        Divider()
-                        loginField("key", placeholder: "网关访问密钥", value: $key, secure: true)
-                    }
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("登录成功后自动恢复账户")
-                            .font(.caption).foregroundStyle(MarketPalette.muted)
-                        Spacer(minLength: 4)
-                        Button("清除密钥", role: .destructive) {
-                            if TradeKeychain.remove(address) {
-                                key = ""; keychainMessage = nil
-                                _ = TradeKeychain.remove(address, kind: "password")
-                                _ = TradeKeychain.remove(address, kind: "session")
-                            } else { keychainMessage = "无法清除设备钥匙串密钥" }
-                        }.font(.caption).disabled(session.busy)
-                    }
-                    if let keychainMessage {
-                        Text(keychainMessage).font(.caption).foregroundStyle(.red)
-                    }
-                    loginButton("登录模拟账户", enabled: !session.busy && !username.isEmpty && !password.isEmpty && !key.isEmpty) {
-                        let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let secret = password
-                        let access = key
-                        session.allowManualLogin()
-                        Task {
-                            await session.login(address: address, key: access, username: user, password: secret)
-                            if session.signedIn { password = "" }
-                        }
-                    }
-                }
-                if let message = session.error {
-                    Text(message).font(.caption).foregroundStyle(.red)
-                }
-                Divider().padding(.top, 4)
-                Button { local = true } label: {
-                    HStack {
-                        Image(systemName: "externaldrive")
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("本地模拟").font(.subheadline.weight(.medium))
-                            Text("独立账本，不与快期同步").font(.caption).foregroundStyle(MarketPalette.muted)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(MarketPalette.muted)
-                    }.padding(12)
-                }
-                .buttonStyle(.plain)
-                .disabled(session.busy)
-                .background(MarketPalette.surface, in: RoundedRectangle(cornerRadius: 10))
+                .buttonStyle(.borderedProminent)
             }
-            .padding(16)
+            if let message = session.error {
+                Text(message).font(.caption).foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
+            Button("交易设置") { showConnectionSettings = true }
+                .buttonStyle(.bordered).disabled(session.busy)
+            Text("首次配置或更换账户，请进入交易设置。")
+                .font(.caption).foregroundStyle(MarketPalette.muted)
         }
-        .scrollDismissesKeyboard(.interactively)
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(MarketPalette.background)
-    }
-
-    private func loginGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.caption.weight(.medium)).foregroundStyle(MarketPalette.muted)
-            VStack(spacing: 0) { content() }
-                .background(MarketPalette.surface, in: RoundedRectangle(cornerRadius: 10))
-        }
-    }
-
-    private func loginField(_ icon: String, placeholder: String, value: Binding<String>, secure: Bool = false, url: Bool = false) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon).font(.subheadline).foregroundStyle(MarketPalette.muted).frame(width: 20)
-            Group {
-                if secure { SecureField(placeholder, text: value) }
-                else { TextField(placeholder, text: value).keyboardType(url ? .URL : .default) }
-            }
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .font(.subheadline)
-        }
-        .padding(.horizontal, 12)
-        .frame(minHeight: 48)
-    }
-
-    private func loginButton(_ title: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                if session.busy { ProgressView().tint(.white) }
-                Text(title).font(.subheadline.weight(.semibold))
-            }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 48)
-            .background(MarketPalette.accent.opacity(enabled ? 1 : 0.28), in: RoundedRectangle(cornerRadius: 9))
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
     }
 
     private var signedInPanel: some View {
@@ -1577,36 +1454,96 @@ struct TradeConnectionSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var session = CloudTradeSession.shared
     @AppStorage("qihui.trade.endpoint.v1") private var address = "https://8.153.96.190"
-    @State private var storedKey = false
+    @State private var draftAddress = ""
+    @State private var username = ""
+    @State private var password = ""
+    @State private var key = ""
+    @State private var real = false
+    @State private var liveAddress = ""
+    @State private var liveUsername = ""
+    @State private var livePassword = ""
+    @State private var liveKey = ""
     @State private var message: String?
     var body: some View {
         NavigationStack {
             Form {
                 Section("账户状态") {
-                    LabeledContent("交易模式", value: "快期云端模拟")
+                    LabeledContent("交易模式", value: session.isLive && session.signedIn ? "实盘只读" : "快期云端模拟")
                     LabeledContent("登录状态", value: session.signedIn ? "已登录" : "未登录")
                     if session.signedIn {
-                        Button("退出账户", role: .destructive) { Task { await session.logout() } }.disabled(session.busy)
+                        Button("退出账户", role: .destructive) {
+                            Task { await session.logout(); loadSaved() }
+                        }.disabled(session.busy)
                     }
                 }
-                Section("交易网关") {
-                    TextField("HTTPS 网关地址", text: $address)
-                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .disabled(session.signedIn || session.busy)
-                    LabeledContent("访问密钥", value: storedKey ? "本机已保存" : "未保存")
-                    Button("清除已保存密钥", role: .destructive) {
-                        if TradeKeychain.remove(address) { storedKey = false; message = nil; _ = TradeKeychain.remove(address, kind: "password"); _ = TradeKeychain.remove(address, kind: "session") }
-                        else { message = "清除失败" }
-                    }.disabled(!storedKey || session.signedIn || session.busy)
-                    Text("登录与下单请使用首页的交易入口。").font(.caption).foregroundStyle(.secondary)
-                    if let message { Text(message).font(.caption).foregroundStyle(.red) }
+                Section {
+                    Picker("账户类型", selection: $real) {
+                        Text("模拟交易").tag(false)
+                        Text("实盘只读").tag(true)
+                    }.pickerStyle(.segmented)
+                }.disabled(session.signedIn || session.busy)
+                if real {
+                    Section("银河期货 · 实盘只读") {
+                        TextField("独立 HTTPS 实盘网关", text: $liveAddress).keyboardType(.URL)
+                        TextField("快期用户名", text: $liveUsername)
+                        SecureField("快期密码", text: $livePassword)
+                        SecureField("实盘网关访问密钥", text: $liveKey)
+                        Text("仅查询账户，不支持下单及撤单；实盘密码及密钥不持久化。").font(.caption)
+                        Button("连接实盘只读账户") {
+                            session.allowManualLogin()
+                            Task {
+                                await session.login(address: liveAddress, key: liveKey, username: liveUsername, password: livePassword, mode: "live_readonly")
+                                livePassword = ""; liveKey = ""
+                            }
+                        }.disabled(liveAddress.isEmpty || liveAddress == address || liveUsername.isEmpty || livePassword.isEmpty || liveKey.isEmpty)
+                    }.disabled(session.signedIn || session.busy)
+                } else {
+                    Section("快期账户") {
+                        TextField("手机号 / 用户名", text: $username)
+                        SecureField("快期账户密码", text: $password)
+                    }.disabled(session.signedIn || session.busy)
+                    Section("交易网关") {
+                        TextField("HTTPS 网关地址", text: $draftAddress).keyboardType(.URL)
+                        SecureField("网关访问密钥", text: $key)
+                        Text("模拟账户登录成功后，密码、密钥及会话保存在本机钥匙串，交易入口自动恢复。").font(.caption)
+                        Button("保存并连接") {
+                            let target = draftAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
+                            session.allowManualLogin()
+                            Task {
+                                await session.login(address: target, key: key, username: user, password: password)
+                                if session.signedIn {
+                                    address = target
+                                    message = "账户已连接"
+                                    password = ""; key = ""
+                                }
+                            }
+                        }.disabled(draftAddress.isEmpty || username.isEmpty || password.isEmpty || key.isEmpty)
+                        Button("清除已保存登录信息", role: .destructive) {
+                            let results = ["gateway", "username", "password", "session"].map { TradeKeychain.remove(address, kind: $0) }
+                            message = results.allSatisfy { $0 } ? "已清除登录信息" : "部分登录信息清除失败"
+                            loadSaved()
+                        }
+                    }.disabled(session.signedIn || session.busy)
                 }
+                if session.busy { ProgressView("正在连接") }
+                if let error = session.error { Text(error).foregroundStyle(.red).font(.caption) }
+                if let message { Text(message).font(.caption) }
             }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
             .navigationTitle("交易设置")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
-            .onAppear { storedKey = !TradeKeychain.load(address).isEmpty }
-            .onChange(of: address) { _, value in storedKey = !TradeKeychain.load(value).isEmpty }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() }.disabled(session.busy) } }
+            .onAppear { loadSaved() }
+            .onDisappear { password = ""; key = ""; livePassword = ""; liveKey = "" }
         }.tint(MarketPalette.accent)
+        .interactiveDismissDisabled(session.busy)
+    }
+    private func loadSaved() {
+        draftAddress = address
+        username = TradeKeychain.load(address, kind: "username")
+        password = TradeKeychain.load(address, kind: "password")
+        key = TradeKeychain.load(address)
     }
 }
