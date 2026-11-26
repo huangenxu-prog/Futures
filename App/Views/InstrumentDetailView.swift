@@ -11,6 +11,9 @@ struct InstrumentDetailView: View {
     @State private var activeID: String
     @State private var scrolling = false
     @State private var userHasScrolled = false
+    @State private var initialPageFrame: CGRect?
+    @State private var initialAlignmentAttempts = 0
+    @Namespace private var pagerViewport
 
     init(instrument: FuturesInstrument, selectedContract: MarketDataService.ContractQuote? = nil, sequence: [FuturesInstrument] = []) {
         initial = instrument
@@ -44,16 +47,27 @@ struct InstrumentDetailView: View {
                                 .containerRelativeFrame(.vertical)
                                 .frame(maxWidth: .infinity)
                                 .clipped()
+                                .background {
+                                    if item.id == initial.id && !userHasScrolled {
+                                        GeometryReader { geometry in
+                                            Color.clear.preference(key: InitialPageFrameKey.self,
+                                                value: geometry.frame(in: .named(pagerViewport)))
+                                        }
+                                    }
+                                }
                                 .id(item.id)
                             }
                         }.scrollTargetLayout()
                     }
+                    .coordinateSpace(name: pagerViewport)
                     .scrollIndicators(.hidden)
                     .scrollTargetBehavior(.paging)
                     .scrollPosition(id: $visibleID, anchor: .top)
                     .onScrollPhaseChange { _, phase in
                         scrolling = phase != .idle
-                        if phase == .interacting { userHasScrolled = true }
+                        if phase == .tracking || phase == .interacting {
+                            userHasScrolled = true
+                        }
                         if phase == .idle, userHasScrolled, let id = visibleID, id != activeID {
                             activeID = id
                         }
@@ -69,7 +83,31 @@ struct InstrumentDetailView: View {
                         guard !userHasScrolled, metrics.height > 1 else { return }
                         placeInitialPage(proxy)
                     }
+                    .onPreferenceChange(InitialPageFrameKey.self) { frame in
+                        guard !userHasScrolled else { return }
+                        initialPageFrame = frame
+                    }
                     .onAppear { placeInitialPage(proxy) }
+                    .task {
+                        // Initial navigation can settle after onAppear and the
+                        // first scroll geometry callback. Inspect the actual
+                        // target frame after layout, not an inferred page index.
+                        // Bounded retries never participate in user paging.
+                        for delay in [80, 160, 260, 400, 600] {
+                            do { try await Task.sleep(for: .milliseconds(delay)) }
+                            catch { return }
+                            guard !Task.isCancelled, !userHasScrolled else { return }
+                            guard let frame = initialPageFrame,
+                                  frame.height > 1, frame.minY.isFinite,
+                                  abs(frame.minY) > 1,
+                                  initialAlignmentAttempts < 5 else { continue }
+                            initialAlignmentAttempts += 1
+                            #if DEBUG
+                            print("[pager] initial alignment correction \(initial.id) top=\(frame.minY) attempt=\(initialAlignmentAttempts)")
+                            #endif
+                            placeInitialPage(proxy)
+                        }
+                    }
                     #if DEBUG
                     .onScrollGeometryChange(for: PagerTrace.self) { geometry in
                         PagerTrace(offset: geometry.contentOffset.y.rounded(),
@@ -105,6 +143,13 @@ struct InstrumentDetailView: View {
                              period: $period, isActive: active)
             .allowsHitTesting(active)
             .accessibilityHidden(!active)
+    }
+}
+
+private struct InitialPageFrameKey: PreferenceKey {
+    static let defaultValue: CGRect? = nil
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
+        if let next = nextValue() { value = next }
     }
 }
 
