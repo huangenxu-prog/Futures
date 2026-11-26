@@ -182,3 +182,75 @@ struct CandleAppearanceFields: View {
         }.frame(maxWidth: .infinity)
     }
 }
+
+
+/// Quote colors are intentionally independent of candle/indicator colors.
+enum QuoteAppearance {
+    static let lightUpKey = "qihui.quote.light-up-rgb.v1"
+    static let lightDownKey = "qihui.quote.light-down-rgb.v1"
+    static let darkUpKey = "qihui.quote.dark-up-rgb.v1"
+    static let darkDownKey = "qihui.quote.dark-down-rgb.v1"
+
+    // Use the existing detail-header colors as the shared defaults.
+    static let lightUp = 0xD43B4A
+    static let lightDown = 0x0F9166
+    static let darkUp = 0xFF5B5B
+    static let darkDown = 0x23C6C8
+
+    static func color(_ rgb: Int, fallback: Int) -> Color {
+        CandleAppearance.color(rgb, fallback: CandleAppearance.color(fallback, fallback: .primary))
+    }
+}
+
+struct QuoteAppearanceStyle: DynamicProperty {
+    @Environment(\.colorScheme) private var scheme
+    @AppStorage(QuoteAppearance.lightUpKey) private var lightUp = CandleAppearance.automatic
+    @AppStorage(QuoteAppearance.lightDownKey) private var lightDown = CandleAppearance.automatic
+    @AppStorage(QuoteAppearance.darkUpKey) private var darkUp = CandleAppearance.automatic
+    @AppStorage(QuoteAppearance.darkDownKey) private var darkDown = CandleAppearance.automatic
+
+    func movement(_ change: Double?, neutral: Color = MarketPalette.muted) -> Color {
+        guard let change, change.isFinite, change != 0 else { return neutral }
+        if scheme == .dark {
+            return change > 0
+                ? QuoteAppearance.color(darkUp, fallback: QuoteAppearance.darkUp)
+                : QuoteAppearance.color(darkDown, fallback: QuoteAppearance.darkDown)
+        }
+        return change > 0
+            ? QuoteAppearance.color(lightUp, fallback: QuoteAppearance.lightUp)
+            : QuoteAppearance.color(lightDown, fallback: QuoteAppearance.lightDown)
+    }
+}
+
+struct QuoteAppearanceFields: View {
+    @AppStorage(QuoteAppearance.lightUpKey) private var lightUp = CandleAppearance.automatic
+    @AppStorage(QuoteAppearance.lightDownKey) private var lightDown = CandleAppearance.automatic
+    @AppStorage(QuoteAppearance.darkUpKey) private var darkUp = CandleAppearance.automatic
+    @AppStorage(QuoteAppearance.darkDownKey) private var darkDown = CandleAppearance.automatic
+
+    var body: some View {
+        Group {
+            Section("行情配色 · 深色") {
+                ColorPicker("上涨／资金流入", selection: binding($darkUp, fallback: QuoteAppearance.darkUp), supportsOpacity: false)
+                ColorPicker("下跌／资金流出", selection: binding($darkDown, fallback: QuoteAppearance.darkDown), supportsOpacity: false)
+            }
+            Section("行情配色 · 浅色") {
+                ColorPicker("上涨／资金流入", selection: binding($lightUp, fallback: QuoteAppearance.lightUp), supportsOpacity: false)
+                ColorPicker("下跌／资金流出", selection: binding($lightDown, fallback: QuoteAppearance.lightDown), supportsOpacity: false)
+                Button("恢复行情默认配色") {
+                    lightUp = CandleAppearance.automatic
+                    lightDown = CandleAppearance.automatic
+                    darkUp = CandleAppearance.automatic
+                    darkDown = CandleAppearance.automatic
+                }
+            } footer: {
+                Text("首页与合约详情报价、资金流向统一配色。深浅主题分别保存，不影响K线和指标。")
+            }
+        }
+    }
+
+    private func binding(_ value: Binding<Int>, fallback: Int) -> Binding<Color> {
+        Binding(get: { QuoteAppearance.color(value.wrappedValue, fallback: fallback) },
+                set: { if let rgb = CandleAppearance.rgb($0) { value.wrappedValue = rgb } })
+    }
+}

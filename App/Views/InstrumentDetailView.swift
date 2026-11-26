@@ -275,7 +275,8 @@ private struct InstrumentDetailPage: View {
 
     @AppStorage("qihui.change.basis.v1") private var changeBasis = "settlement"
     private var displayedChange: Double? { selectedContract == nil ? quote?.change(basis: changeBasis) : selectedContract?.change(basis: changeBasis) }
-    private var changeColor: Color { MarketPalette.movement(displayedChange) }
+    private var quoteAppearance = QuoteAppearanceStyle()
+    private var changeColor: Color { quoteAppearance.movement(displayedChange) }
     private var changeText: String { (selectedContract == nil ? quote?.changePercent(basis: changeBasis) : selectedContract?.changePercent(basis: changeBasis)) ?? "--" }
     private var currentLast: Double? {
         (displayedKey == chartKey ? rawBars.last?.close : nil) ?? (selectedContract == nil ? quote?.last : selectedContract?.last)
@@ -650,7 +651,7 @@ private struct InstrumentDetailPage: View {
                         smallQuote("成交", CompactMarketQuantity.format(selectedContract == nil ? current?.volume : exact?.volume ?? selectedContract?.volume), MarketPalette.ink)
                         smallQuote("持仓", CompactMarketQuantity.format(selectedContract == nil ? current?.interest : exact?.interest ?? selectedContract?.interest), MarketPalette.ink)
                         smallQuote("增仓", change?.formatted() ?? "--", MarketPalette.ink)
-                        smallQuote("资金流", fundsText(flow), MarketPalette.movement(flow))
+                        smallQuote("资金流", fundsText(flow), quoteAppearance.movement(flow))
                         smallQuote("沉淀", fundsText(funds), MarketPalette.ink)
                         smallQuote("今开", (selectedContract == nil ? current?.opening : exact?.opening ?? selectedContract?.opening)?.formatted() ?? "--", MarketPalette.ink)
                         smallQuote("昨结", (selectedContract == nil ? current?.settlement : exact?.settlement ?? selectedContract?.settlement)?.formatted() ?? "--", MarketPalette.ink)

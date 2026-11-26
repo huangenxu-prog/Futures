@@ -91,6 +91,7 @@ struct LightMarketView: View {
     @State private var editing = false
     @AppStorage("qihui.appearance.mode.v1") private var appearanceMode = AppAppearanceMode.dark.rawValue
     @Environment(\.colorScheme) private var colorScheme
+    private var quoteAppearance = QuoteAppearanceStyle()
     private struct DetailSelection: Hashable {
         let instrument: FuturesInstrument
         let sequence: [FuturesInstrument]
@@ -511,7 +512,7 @@ struct LightMarketView: View {
                 ForEach(0..<3) { index in
                     Text(dataValue(index, q))
                         .font(.system(size: index == 0 ? 14 : 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(index == 2 ? HomeMarketPalette.ink : HomeMarketPalette.movement(q?.change(basis: changeBasis)))
+                        .foregroundStyle(index == 2 ? HomeMarketPalette.ink : quoteAppearance.movement(q?.change(basis: changeBasis), neutral: HomeMarketPalette.muted))
                         .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }

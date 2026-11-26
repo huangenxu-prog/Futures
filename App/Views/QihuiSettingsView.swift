@@ -33,6 +33,7 @@ struct QihuiSettingsView: View {
                     }.pickerStyle(.segmented)
 
                 }
+                QuoteAppearanceFields()
                 Section("图表与策略") {
                     Button { strategy = true } label: {
                         HStack { Text("策略回测"); Spacer(); Image(systemName: "chevron.right") }
