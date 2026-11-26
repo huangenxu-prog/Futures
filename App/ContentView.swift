@@ -60,10 +60,9 @@ struct ContentView: View {
             }
         }
         .task(id: scenePhase) {
-            guard scenePhase == .active else {
-                contracts = contracts.mapValues(\.identity)
-                return
-            }
+            // Keep the last display snapshot during inactive/background transitions.
+            // Cancellation stops networking; it must not erase visible prices.
+            guard scenePhase == .active else { return }
             // The persistent server-side feed sends its most recent quote
             // snapshot immediately on SSE connection. Do not delay that fast
             // path with a separate cold HTTP/TqSdk query first.
@@ -71,6 +70,7 @@ struct ContentView: View {
             while !Task.isCancelled {
                 do {
                     try await MarketDataService.streamQuotes { live in
+                        guard !Task.isCancelled, scenePhase == .active else { return }
                         retryDelay = 10
                         applyContracts(live)
                     }
@@ -78,10 +78,10 @@ struct ContentView: View {
                     return
                 } catch {
                     // Older gateway/offline tunnel: preserve working 10s polling fallback.
-                    if let fallback = try? await MarketDataService.mainContracts() {
+                    guard !Task.isCancelled, scenePhase == .active else { return }
+                    if let fallback = try? await MarketDataService.mainContracts(),
+                       !Task.isCancelled, scenePhase == .active {
                         applyContracts(fallback)
-                    } else {
-                        contracts = contracts.mapValues(\.identity)
                     }
                     do { try await Task.sleep(for: .seconds(retryDelay + Double.random(in: 0...0.5))) } catch { return }
                     retryDelay = min(30, retryDelay * 2)
@@ -91,16 +91,27 @@ struct ContentView: View {
     }
     @MainActor
     private func applyContracts(_ incoming: [String: MarketDataService.MainContract]) {
+        // Preserve valid display quotes across partial snapshots. A new main
+        // contract is authoritative; timestamps only compare the same contract.
+        let merged = contracts.merging(incoming) { old, new in
+            guard old.code == new.code else { return new }
+            if old.last != nil && new.last == nil { return old }
+            if let oldTime = old.time, let newTime = new.time, newTime < oldTime { return old }
+            if old.time != nil && new.time == nil { return old }
+            return new
+        }
         let oldIDs = contracts.mapValues { $0.code + "/" + $0.month }
-        let newIDs = incoming.mapValues { $0.code + "/" + $0.month }
+        let newIDs = merged.mapValues { $0.code + "/" + $0.month }
         if oldIDs != newIDs {
-            let identities = incoming.mapValues(\.identity)
+            let identities = merged.mapValues(\.identity)
             if let data = try? JSONEncoder().encode(identities) {
                 UserDefaults.standard.set(data, forKey: Self.identityKey)
             }
         }
-        contracts = incoming
-        NotificationCenter.default.post(name: .qihuiLiveQuotes, object: incoming)
+        contracts = merged
+        // Only actual received rows may drive live chart updates.
+        let accepted = incoming.filter { merged[$0.key] == $0.value }
+        NotificationCenter.default.post(name: .qihuiLiveQuotes, object: accepted)
     }
 
 }

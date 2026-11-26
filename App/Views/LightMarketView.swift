@@ -82,6 +82,7 @@ struct LightMarketView: View {
         case rankings = "行情排行"
     }
 
+    @Environment(\.scenePhase) private var marketScenePhase
     @Environment(\.mainContracts) private var contracts
     @Environment(\.futuresCatalog) private var catalog
     @EnvironmentObject private var favorites: Favorites
@@ -118,8 +119,9 @@ struct LightMarketView: View {
     }
 
     private func quote(for id: String) -> MarketDataService.MainContract? {
-        if let live = contracts[id], live.last != nil { return live }
-        return onDemandQuotes[id] ?? contracts[id]
+        guard let live = contracts[id] else { return onDemandQuotes[id] }
+        guard live.last == nil, let extra = onDemandQuotes[id], extra.code == live.code else { return live }
+        return extra
     }
 
     private var quoteRequestKey: String {
@@ -301,27 +303,28 @@ struct LightMarketView: View {
                 InstrumentDetailView(instrument: selection.instrument, sequence: selection.sequence)
                     .id(selection.instrument.id)
                     .environment(\.mainContracts, contracts.merging(onDemandQuotes) {
-                        live, extra in live.last == nil ? extra : live
+                        live, extra in live.last == nil && live.code == extra.code ? extra : live
                     })
             }
             .fullScreenCover(isPresented:$showingTradingCenter) {
-                TradingCenterView(favoriteIDs:favorites.ids,mainCodes:contracts.merging(onDemandQuotes) { live,extra in live.last == nil ? extra : live }.mapValues(\.code))
+                TradingCenterView(favoriteIDs:favorites.ids,mainCodes:contracts.merging(onDemandQuotes) { live,extra in live.last == nil && live.code == extra.code ? extra : live }.mapValues(\.code))
             }
             .sheet(isPresented:$showingStrategyCenter) {
                 QihuiSettingsView(instruments:catalog, favoriteIDs:favorites.ids,
-                                   mainCodes:contracts.merging(onDemandQuotes) { live,extra in live.last == nil ? extra : live }.mapValues(\.code))
+                                   mainCodes:contracts.merging(onDemandQuotes) { live,extra in live.last == nil && live.code == extra.code ? extra : live }.mapValues(\.code))
             }
-            .task(id: quoteRequestKey) {
+            .task(id: quoteRequestKey + "|" + String(describing: marketScenePhase)) {
+                guard marketScenePhase == .active else { return }
                 while !Task.isCancelled {
                     await refreshVisibleQuotes()
                     do { try await Task.sleep(for: .seconds(30)) } catch { return }
                 }
             }
-            .task(id: favoriteWarmKey) {
+            .task(id: favoriteWarmKey + "|" + String(describing: marketScenePhase)) {
                 // Start the most useful K-line history warmup as soon as the
                 // shared quote feed reveals the main contract identity.
                 // It must not wait for sequential on-demand quote batches.
-                guard !favoriteWarmKey.isEmpty else { return }
+                guard marketScenePhase == .active, !favoriteWarmKey.isEmpty else { return }
                 while !Task.isCancelled {
                     await warmFavoritesIfNeeded()
                     do { try await Task.sleep(for: .seconds(900)) } catch { return }
