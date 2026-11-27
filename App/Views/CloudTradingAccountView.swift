@@ -1347,6 +1347,7 @@ struct TradingCenterView: View {
 
     private func frozenOrders(_ orders: [CloudSnapshot.Order]) -> some View {
         VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 0) {
             frozenRecordTable {
                 VStack(spacing: 0) {
                     recordBand(height: recordHeaderHeight) {
@@ -1376,7 +1377,6 @@ struct TradingCenterView: View {
                                 recordCell("成交均价", width: 72)
                             }
                             recordCell("时间", width: 76)
-                            if tab == "挂单" { recordCell("操作", width: 42) }
                         }.foregroundStyle(.secondary)
                     }
                     ForEach(orders) { o in
@@ -1398,15 +1398,38 @@ struct TradingCenterView: View {
                                     }.frame(height: recordRowHeight).contentShape(Rectangle())
                                 }.buttonStyle(.plain)
                                     .accessibilityHint("查看委托详情及原始回报")
-                                if tab == "挂单" {
-                                    Button("撤单", role: .destructive) { cancelID = o.id }
-                                        .font(.system(size: 13)).buttonStyle(.borderless).frame(width: 42)
-                                        .disabled(session.busy || session.isLive || o.status != "ALIVE")
-                                }
                             }
                         }
                     }
                 }
+            }
+            if tab == "挂单" {
+                VStack(spacing: 0) {
+                    recordBand(height: recordHeaderHeight) {
+                        Text("操作").font(.system(size: 13)).foregroundStyle(.secondary)
+                            .frame(width: 52)
+                    }
+                    ForEach(orders) { o in
+                        recordBand(height: recordRowHeight) {
+                            Button("撤单", role: .destructive) { cancelID = o.id }
+                                .font(.system(size: 13))
+                                .buttonStyle(.plain)
+                                .foregroundStyle(MarketPalette.up)
+                                .frame(width: 52, height: recordRowHeight)
+                                .contentShape(Rectangle())
+                                .disabled(session.busy || session.isLive || o.status != "ALIVE")
+                                .opacity(session.busy || session.isLive || o.status != "ALIVE" ? 0.4 : 1)
+                                .accessibilityLabel("撤单 " + contractName(o.symbol))
+                        }
+                    }
+                }
+                .frame(width: 52)
+                .background(MarketPalette.background)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(MarketPalette.divider).frame(width: 0.5)
+                }
+                .zIndex(1)
+            }
             }
             if orders.isEmpty { Text(tab == "挂单" ? "暂无挂单" : "暂无委托或未取得数据").font(.caption).foregroundStyle(.secondary) }
         }
