@@ -641,27 +641,26 @@ struct TradingCenterView: View {
         }
     }
     private var accountHeader: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 12) {
-                accountMetric("账户权益", money(session.snapshot?.account.balance, suffix: false), large: true)
-                accountMetric("持仓盈亏", money(session.snapshot?.account.float_profit, suffix: false),
-                              tint: MarketPalette.movement(session.snapshot?.account.float_profit), large: true)
-            }
-            HStack(alignment: .top, spacing: 12) {
+        HStack(spacing: 8) {
+            VStack(spacing: 5) {
+                accountMetric("账户权益", money(session.snapshot?.account.balance, suffix: false))
                 accountMetric("可用资金", money(session.snapshot?.account.available, suffix: false))
+            }
+            Divider().frame(height: 34)
+            VStack(spacing: 5) {
+                accountMetric("持仓盈亏", money(session.snapshot?.account.float_profit, suffix: false),
+                              tint: MarketPalette.movement(session.snapshot?.account.float_profit))
                 accountMetric("保证金占比", usage)
             }
-        }
-        .padding(10)
-        .background(MarketPalette.surface, in: RoundedRectangle(cornerRadius: 10))
-        .padding(.vertical, 6)
+        }.padding(.vertical, 8)
     }
-    private func accountMetric(_ label: String, _ value: String, tint: Color = MarketPalette.ink, large: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.caption).foregroundStyle(MarketPalette.muted)
-            Text(value).font(.system(size: large ? 25 : 17, weight: .semibold))
-                .monospacedDigit().foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.55)
-        }.frame(maxWidth: .infinity, alignment: .leading)
+    private func accountMetric(_ label: String, _ value: String, tint: Color = MarketPalette.ink) -> some View {
+        HStack(spacing: 4) {
+            Text(label).font(.system(size: 11)).foregroundStyle(MarketPalette.muted).fixedSize()
+            Spacer(minLength: 0)
+            Text(value).font(.system(size: 14, weight: .medium)).monospacedDigit()
+                .foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.65)
+        }.frame(maxWidth: .infinity)
     }
     private var usage: String {
         guard let a = session.snapshot?.account, let b = a.balance, let m = a.margin,
@@ -727,15 +726,11 @@ struct TradingCenterView: View {
         return true
     }
     @ViewBuilder private var openingLimitNotice: some View {
-        if let minimum = openingMinimum, minimum > 1 {
-            Text("最小开仓 \(minimum)手")
-                .font(.caption).foregroundStyle(selectedQuantity < minimum ? Color.yellow : MarketPalette.muted)
+        if let minimum = openingMinimum, minimum > 1, selectedQuantity < minimum {
+            Text("最小开仓 \(minimum)手").font(.caption).foregroundStyle(Color.yellow)
         }
         if let maximum = openingMaximum, maximum > 0, selectedQuantity > maximum {
             Text("单笔最多开仓 \(maximum)手").font(.caption).foregroundStyle(Color.yellow)
-        }
-        if let limit = dailyOpeningLimit, limit > 0 {
-            Text("日内开仓限额 \(limit)手（非剩余额度）").font(.caption2).foregroundStyle(MarketPalette.muted)
         }
     }
     private func validOrder(_ action: String) -> Bool {
@@ -768,61 +763,106 @@ struct TradingCenterView: View {
         }
     }
     private var priceInput: some View {
-        HStack(spacing: 4) {
-            Button { stepPrice(-1) } label: { Image(systemName: "minus").frame(width: quickOnly ? 44 : 30, height: quickOnly ? 44 : 30) }
+        HStack(spacing: 2) {
+            Button { stepPrice(-1) } label: { Image(systemName: "minus").frame(width: 30, height: 44) }
                 .buttonStyle(.plain).disabled(selected?.tick == nil)
             if priceMode == .limit {
                 TextField("限价", text: $selectedPrice).keyboardType(.decimalPad).multilineTextAlignment(.center).monospacedDigit()
             } else {
-                Text(priceMode.rawValue).font(.subheadline.weight(.medium)).frame(maxWidth: .infinity)
+                Text(priceMode.rawValue).font(.subheadline.weight(.medium)).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity)
             }
-            Button { stepPrice(1) } label: { Image(systemName: "plus").frame(width: quickOnly ? 44 : 30, height: quickOnly ? 44 : 30) }
+            Button { stepPrice(1) } label: { Image(systemName: "plus").frame(width: 30, height: 44) }
                 .buttonStyle(.plain).disabled(selected?.tick == nil)
-        }.padding(3).overlay(RoundedRectangle(cornerRadius: quickOnly ? 8 : 5).stroke(MarketPalette.divider))
+        }.frame(height: 44).overlay(RoundedRectangle(cornerRadius: 6).stroke(MarketPalette.divider))
+    }
+    private var quantityInput: some View {
+        HStack(spacing: 2) {
+            Button { if selectedQuantity > 1 { selectedQuantity -= 1 } else { selectedQuantity = 1 } } label: {
+                Image(systemName: "minus").frame(width: 30, height: 44)
+            }.buttonStyle(.plain).accessibilityLabel("减少手数")
+            TextField("手数", value: $selectedQuantity, format: .number.grouping(.never))
+                .keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit()
+            Button { if selectedQuantity < Int.max { selectedQuantity += 1 } } label: {
+                Image(systemName: "plus").frame(width: 30, height: 44)
+            }.buttonStyle(.plain).accessibilityLabel("增加手数")
+        }.frame(height: 44).overlay(RoundedRectangle(cornerRadius: 6).stroke(MarketPalette.divider))
+    }
+    private var fundingIsFresh: Bool {
+        guard !quoteError, let stamp = quoteStamp, selectedQuantity > 0 else { return false }
+        return Date().timeIntervalSince(stamp) < 60
+    }
+    private var ticketMargin: String {
+        guard fundingIsFresh, let c = selected else { return "--" }
+        // Option seller margin is unavailable; never imply zero for both sides.
+        if c.isOption { return "买0 / 卖--" }
+        guard let q = detailedQuote, q.code == c.symbol, let value = q.referenceMargin,
+              value.isFinite, value > 0 else { return "--" }
+        return money(value * Double(selectedQuantity))
+    }
+    private var ticketFeeOrPremium: String {
+        guard fundingIsFresh, let c = selected else { return "--" }
+        if c.isOption {
+            guard let multiplier = c.multiplier, multiplier.isFinite, multiplier > 0,
+                  let price = effectivePrice(buy: true), price.isFinite, price > 0 else { return "--" }
+            return money(price * multiplier * Double(selectedQuantity))
+        }
+        guard let q = detailedQuote, q.code == c.symbol, let fee = q.referenceCommission,
+              fee.isFinite, fee > 0 else { return "--" }
+        return money(fee) + "/手"
+    }
+    private func ticketInfo(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 3) {
+            Text(label).foregroundStyle(MarketPalette.muted).fixedSize()
+            Spacer(minLength: 0)
+            Text(value).foregroundStyle(MarketPalette.ink).lineLimit(1).minimumScaleFactor(0.65)
+        }.font(.system(size: 12)).monospacedDigit()
+    }
+    private var sharedTradeControls: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                VStack(spacing: 12) {
+                    HStack(spacing: 5) {
+                        Text("价格").font(.caption).foregroundStyle(MarketPalette.muted).fixedSize()
+                        priceInput
+                    }
+                    HStack(spacing: 5) {
+                        Text("手数").font(.caption).foregroundStyle(MarketPalette.muted).fixedSize()
+                        quantityInput
+                    }
+                }.frame(maxWidth: .infinity)
+                Divider().frame(height: 100)
+                VStack(spacing: 6) {
+                    quoteLine("卖一", selected?.ask, volume: optionQuote?.askVolume ?? detailedQuote?.askVolume)
+                    quoteLine("买一", selected?.bid, volume: optionQuote?.bidVolume ?? detailedQuote?.bidVolume)
+                    Divider()
+                    ticketInfo("保证金", ticketMargin)
+                    ticketInfo(selected?.isOption == true ? "权利金" : "手续费", ticketFeeOrPremium)
+                }.frame(width: 126)
+            }.padding(8).overlay(RoundedRectangle(cornerRadius: 8).stroke(MarketPalette.divider))
+            priceModePicker
+            openingLimitNotice
+            if quoteError { Text("报价获取失败").font(.caption).foregroundStyle(Color.yellow) }
+            HStack(spacing: 8) {
+                tradeButton("开多", color: MarketPalette.up, title: selected?.isOption == true ? "买开" : "买多")
+                if !quickOnly || selected?.isOption != true {
+                    tradeButton("开空", color: MarketPalette.down, title: selected?.isOption == true ? "卖开" : "卖空")
+                }
+                if !quickOnly || selected?.isOption == true { unifiedCloseButton }
+            }
+        }
     }
     private var quickOrderPanel: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 8) {
             HStack {
                 Text(selected.map { contractName($0.symbol) } ?? initialContract.map { contractName($0.symbol) } ?? "--")
-                    .font(.headline)
+                    .font(.headline).lineLimit(1).minimumScaleFactor(0.7)
                 Spacer()
-                Text(selected?.symbol ?? initialContract?.symbol ?? "").font(.caption2).foregroundStyle(.secondary)
+                Text(priceText(selected?.last)).font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(quoteColor(selected?.last)).monospacedDigit()
+                Text(quoteChangeText).font(.caption2).foregroundStyle(MarketPalette.movement(quoteChange))
             }
-            HStack(spacing: 6) {
-                priceButton("买一", selected?.bid)
-                Rectangle().fill(MarketPalette.divider).frame(width: 1, height: 22)
-                priceButton("最新", selected?.last)
-                Rectangle().fill(MarketPalette.divider).frame(width: 1, height: 22)
-                priceButton("卖一", selected?.ask)
-            }
-            priceModePicker
-            priceInput
-            HStack(spacing: 16) {
-                Text("手数").font(.subheadline.weight(.medium)).frame(width: 64, alignment: .leading)
-                HStack(spacing: 4) {
-                    Button { if selectedQuantity > 1 { selectedQuantity -= 1 } else { selectedQuantity = 1 } } label: {
-                        Image(systemName: "minus").font(.title3.weight(.medium)).frame(width: 48, height: 44)
-                    }.foregroundStyle(MarketPalette.accent).accessibilityLabel("减少手数")
-                    TextField("手数", value: $selectedQuantity, format: .number.grouping(.never))
-                        .keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit().font(.title3.weight(.medium))
-                        .frame(maxWidth: .infinity)
-                    Button { if selectedQuantity < Int.max { selectedQuantity += 1 } } label: {
-                        Image(systemName: "plus").font(.title3.weight(.medium)).frame(width: 48, height: 44)
-                    }.foregroundStyle(MarketPalette.accent).accessibilityLabel("增加手数")
-                }
-                .padding(3)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(MarketPalette.divider))
-            }.buttonStyle(.borderless)
-            HStack(spacing: 8) {
-                tradeButton("开多", color: MarketPalette.up)
-                if selected?.option != nil { unifiedCloseButton } else { tradeButton("开空", color: MarketPalette.down) }
-            }
-            if let amount = orderReferenceAmount { Text(amount).font(.caption).foregroundStyle(MarketPalette.muted) }
-            orderFundingDetails
-            openingLimitNotice
+            sharedTradeControls
             if let quickConfirmationError { Text(quickConfirmationError).font(.caption).foregroundStyle(.red) }
-            Text(quoteError ? "报价获取失败，请核对价格" : (quoteStamp == nil ? "等待报价" : "参考报价 · " + (quoteStamp?.formatted(date: .omitted, time: .standard) ?? "")))
-                .font(.caption).foregroundStyle(MarketPalette.muted)
         }.padding(.vertical, 8)
     }
     private func quoteColor(_ value: Double?) -> Color {
@@ -865,98 +905,8 @@ struct TradingCenterView: View {
                         .foregroundStyle(MarketPalette.movement(quoteChange))
                 }.monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
             }
-            HStack(spacing: 12) {
-                quoteLine("买一", selected?.bid, volume: optionQuote?.bidVolume ?? detailedQuote?.bidVolume)
-                quoteLine("卖一", selected?.ask, volume: optionQuote?.askVolume ?? detailedQuote?.askVolume)
-            }
-            priceModePicker
-            HStack(spacing: 6) {
-                Text("手数").font(.caption).foregroundStyle(MarketPalette.muted).frame(width: 27, alignment: .leading)
-                HStack(spacing: 0) {
-                    Button { selectedQuantity = max(1, selectedQuantity - 1) } label: {
-                        Image(systemName: "minus").frame(width: 30, height: 34)
-                    }.buttonStyle(.plain)
-                    TextField("手数", value: $selectedQuantity, format: .number.grouping(.never))
-                        .keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit()
-                    Button { if selectedQuantity < Int.max { selectedQuantity += 1 } } label: {
-                        Image(systemName: "plus").frame(width: 30, height: 34)
-                    }.buttonStyle(.plain)
-                }.frame(maxWidth: .infinity)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(MarketPalette.divider))
-                Text("价格").font(.caption).foregroundStyle(MarketPalette.muted)
-                priceInput.frame(maxWidth: .infinity)
-            }
-            HStack {
-                Text(quoteError ? "报价失败" : (quoteStamp == nil ? (selected?.last == nil ? "等待报价" : "参考行情 · 确认中") : "参考报价"))
-                Spacer()
-                if let amount = orderReferenceAmount { Text(amount) }
-            }.font(.caption2).foregroundStyle(MarketPalette.muted)
-            orderFundingDetails
-            openingLimitNotice
-            HStack(spacing: 8) {
-                tradeButton("开多", color: MarketPalette.up, title: selected?.isOption == true ? "买开" : "买多")
-                tradeButton("开空", color: MarketPalette.down, title: selected?.isOption == true ? "卖开" : "卖空")
-                unifiedCloseButton
-            }
+            sharedTradeControls
         }.padding(.vertical, 6)
-    }
-
-    private var referenceFundingLines: [String] {
-        guard let c = selected, !quoteError, let stamp = quoteStamp,
-              Date().timeIntervalSince(stamp) < 60, selectedQuantity > 0 else { return [] }
-        let quantity = Double(selectedQuantity)
-        let available = session.snapshot?.account.available
-        func capacity(_ cost: Double) -> String? {
-            guard let available, available.isFinite, cost.isFinite, cost > 0 else { return nil }
-            let count = floor(max(0, available) / cost)
-            guard count.isFinite else { return nil }
-            return count.formatted(.number.precision(.fractionLength(0)))
-        }
-        if c.isOption {
-            guard let price = effectivePrice(buy: true), price.isFinite, price > 0,
-                  let multiplier = c.multiplier, multiplier.isFinite, multiplier > 0 else { return [] }
-            let premium = price * multiplier
-            guard premium.isFinite, (premium * quantity).isFinite else { return [] }
-            var lines = ["买开保证金 0 · 权利金 " + money(premium * quantity)]
-            if let count = capacity(premium) { lines.append("买开可开上限 " + count + "手（未计手续费）") }
-            return lines
-        }
-        guard let q = detailedQuote, q.code == c.symbol else { return [] }
-        var lines: [String] = []
-        let margin = q.referenceMargin.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
-        let fee = q.referenceCommission.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
-        if let margin, (margin * quantity).isFinite {
-            lines.append("参考保证金/手 " + money(margin, suffix: false) + " · 合计 " + money(margin * quantity))
-            if let count = capacity(margin) {
-                lines.append("参考最大可开 " + count + "手（未计手续费）")
-            }
-        }
-        if let fee, (fee * quantity).isFinite {
-            lines.append("参考手续费/手 " + money(fee, suffix: false) + " · 合计 " + money(fee * quantity))
-        }
-        return lines
-    }
-    @ViewBuilder private var orderFundingDetails: some View {
-        let lines = referenceFundingLines
-        if !lines.isEmpty {
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(lines, id: \.self) { line in
-                    Text(line).font(.caption2).foregroundStyle(MarketPalette.muted)
-                }
-            }.frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private var orderReferenceAmount: String? {
-        guard let c = selected, let multiplier = c.multiplier, multiplier.isFinite, multiplier > 0,
-              selectedQuantity > 0, let buy = effectivePrice(buy: true), let sell = effectivePrice(buy: false),
-              buy.isFinite, sell.isFinite, buy > 0, sell > 0 else { return nil }
-        let b = buy * multiplier * Double(selectedQuantity)
-        let s = sell * multiplier * Double(selectedQuantity)
-        guard b.isFinite, s.isFinite else { return nil }
-        let label = c.isOption ? "权利金" : "名义金额"
-        if b == s { return label + " " + money(b) }
-        return label + " 买 " + money(b, suffix: false) + " / 卖 " + money(s)
     }
 
     private var closeCandidates: [Bool] {
@@ -1237,34 +1187,31 @@ struct TradingCenterView: View {
                     positionSummary(held)
                 }
             } else if tab == "成交" {
-                HStack(spacing: 3) {
-                    recordCell("合约")
-                    recordCell("开平", width: 34)
-                    recordCell("成交价", width: 53)
-                    recordCell("手数", width: 28)
-                    recordCell("时间", width: 63)
-                }.foregroundStyle(.secondary)
-                Divider()
-                ForEach((session.snapshot?.fills ?? []).sorted { $0.time_ns > $1.time_ns }) { f in
-                    HStack(spacing: 3) {
-                        recordCell(contractName(f.symbol))
-                        recordCell(recordAction(f.direction, f.offset), width: 34)
-                            .foregroundStyle(f.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
-                        recordCell(f.price?.formatted() ?? "--", width: 53)
-                        recordCell(String(f.quantity), width: 28)
-                        recordCell(recordTime(f.time_ns), width: 63)
-                    }.padding(.vertical, 10)
-                    if let profit = f.calculated_close_profit, profit.isFinite, f.offset != "OPEN" {
-                        HStack {
-                            Spacer()
-                            Text("平仓盈亏（计算）")
-                                .foregroundStyle(MarketPalette.muted)
-                            Text(money(profit, suffix: false))
-                                .foregroundStyle(MarketPalette.movement(profit))
-                                .monospacedDigit()
-                        }.font(.caption2).padding(.bottom, 6)
-                    }
-                    Divider()
+                ScrollView(.horizontal, showsIndicators: true) {
+                    VStack(spacing: 0) {
+                        HStack(spacing: 5) {
+                            recordCell("合约", width: 115)
+                            recordCell("开平", width: 38)
+                            recordCell("成交价", width: 60)
+                            recordCell("手数", width: 32)
+                            recordCell("时间", width: 68)
+                            recordCell("平仓盈亏", width: 88)
+                        }.foregroundStyle(.secondary)
+                        Divider()
+                        ForEach((session.snapshot?.fills ?? []).sorted { $0.time_ns > $1.time_ns }) { f in
+                            HStack(spacing: 5) {
+                                recordCell(contractName(f.symbol), width: 115)
+                                recordCell(recordAction(f.direction, f.offset), width: 38)
+                                    .foregroundStyle(f.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
+                                recordCell(f.price?.formatted() ?? "--", width: 60)
+                                recordCell(String(f.quantity), width: 32)
+                                recordCell(recordTime(f.time_ns), width: 68)
+                                recordCell(money(f.calculated_close_profit, suffix: false), width: 88)
+                                    .foregroundStyle(MarketPalette.movement(f.calculated_close_profit))
+                            }.padding(.vertical, 10)
+                            Divider()
+                        }
+                    }.fixedSize(horizontal: true, vertical: false)
                 }
                 if session.snapshot?.fills?.isEmpty != false { Text("暂无成交或未取得数据").font(.caption).foregroundStyle(.secondary) }
             } else {
@@ -1572,11 +1519,9 @@ struct TradingCenterView: View {
         let expanded = expandedHolding == rowID
         return VStack(spacing: 0) {
         Button {
-            if expanded { expandedHolding = nil; selectedQuantity = 1 } else {
-                selectHolding(p.symbol)
-                expandedHolding = rowID
-                selectedQuantity = frozen.map { max(0, qty - $0) } ?? 1
-            }
+            selectHolding(p.symbol)
+            expandedHolding = rowID
+            selectedQuantity = frozen.map { max(1, qty - $0) } ?? 1
         } label: {
             HStack(spacing: 4) {
                 HStack(spacing: 3) {
@@ -1588,26 +1533,6 @@ struct TradingCenterView: View {
                 Text(money(profit, suffix: false)).foregroundStyle(MarketPalette.movement(profit)).frame(width: 65, alignment: .trailing)
             }.font(.system(size: 14)).monospacedDigit().foregroundStyle(MarketPalette.ink).lineLimit(1).minimumScaleFactor(0.65)
         }.buttonStyle(.borderless).padding(.vertical, 8)
-        if expanded {
-            let margin = long ? p.margin_long : p.margin_short
-            let value = long ? p.market_value_long : p.market_value_short
-            if margin != nil || value != nil {
-                HStack {
-                    if let margin { Text("保证金 " + money(margin)) }
-                    Spacer()
-                    if let value { Text("市值 " + money(value)) }
-                }.font(.caption2).foregroundStyle(MarketPalette.muted).padding(.bottom, 5)
-            }
-            HStack(spacing: 10) {
-                Spacer()
-                if let q = detailedQuote, q.code == p.symbol, let product = product(p.symbol) {
-                    Button("查看K线") { chartProduct = product; chartQuote = q; showHoldingChart = true }
-                        .buttonStyle(.bordered)
-                }
-                Button("平仓") { beginClose(p, long: long) }
-                    .buttonStyle(.bordered).disabled(!session.canTrade || frozen == nil || qty <= (frozen ?? qty))
-            }.font(.caption).padding(.bottom, 8)
-        }
         Divider()
         }.background(expanded ? MarketPalette.raised : Color.clear)
     }
