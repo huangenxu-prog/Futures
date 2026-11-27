@@ -807,26 +807,26 @@ struct TradingCenterView: View {
     }
     private var priceInput: some View {
         HStack(spacing: 2) {
-            Button { stepPrice(-1) } label: { Image(systemName: "minus").frame(width: 30, height: 44) }
+            Button { stepPrice(-1) } label: { Image(systemName: "minus").font(.system(size: 14)).frame(width: 30, height: 44) }
                 .buttonStyle(.plain).disabled(selected?.tick == nil)
             if priceMode == .limit {
-                TextField("限价", text: $selectedPrice).keyboardType(.decimalPad).multilineTextAlignment(.center).monospacedDigit()
+                TextField("限价", text: $selectedPrice).keyboardType(.decimalPad).multilineTextAlignment(.center).font(.system(size: 14)).monospacedDigit()
             } else {
-                Text(priceMode.rawValue).font(.subheadline.weight(.medium)).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity)
+                Text(priceMode.rawValue).font(.system(size: 14)).lineLimit(1).frame(maxWidth: .infinity)
             }
-            Button { stepPrice(1) } label: { Image(systemName: "plus").frame(width: 30, height: 44) }
+            Button { stepPrice(1) } label: { Image(systemName: "plus").font(.system(size: 14)).frame(width: 30, height: 44) }
                 .buttonStyle(.plain).disabled(selected?.tick == nil)
         }.frame(height: 44).overlay(RoundedRectangle(cornerRadius: 6).stroke(MarketPalette.divider))
     }
     private var quantityInput: some View {
         HStack(spacing: 2) {
             Button { if selectedQuantity > 1 { selectedQuantity -= 1 } else { selectedQuantity = 1 } } label: {
-                Image(systemName: "minus").frame(width: 30, height: 44)
+                Image(systemName: "minus").font(.system(size: 14)).frame(width: 30, height: 44)
             }.buttonStyle(.plain).accessibilityLabel("减少手数")
             TextField("手数", value: $selectedQuantity, format: .number.grouping(.never))
-                .keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit()
+                .keyboardType(.numberPad).multilineTextAlignment(.center).font(.system(size: 14)).monospacedDigit()
             Button { if selectedQuantity < Int.max { selectedQuantity += 1 } } label: {
-                Image(systemName: "plus").frame(width: 30, height: 44)
+                Image(systemName: "plus").font(.system(size: 14)).frame(width: 30, height: 44)
             }.buttonStyle(.plain).accessibilityLabel("增加手数")
         }.frame(height: 44).overlay(RoundedRectangle(cornerRadius: 6).stroke(MarketPalette.divider))
     }
@@ -855,9 +855,9 @@ struct TradingCenterView: View {
     }
     private func ticketInfo(_ label: String, _ value: String) -> some View {
         HStack(spacing: 3) {
-            Text(label).foregroundStyle(MarketPalette.muted).fixedSize()
+            Text(label).font(.system(size: 14)).foregroundStyle(MarketPalette.muted).fixedSize()
             Spacer(minLength: 0)
-            Text(value).foregroundStyle(MarketPalette.ink).lineLimit(1).minimumScaleFactor(0.65)
+            Text(value).font(.system(size: 14)).foregroundStyle(MarketPalette.ink).lineLimit(1)
         }.font(.system(size: 14)).monospacedDigit()
     }
     private var sharedTradeControls: some View {
@@ -865,11 +865,11 @@ struct TradingCenterView: View {
             HStack(spacing: 8) {
                 VStack(spacing: 12) {
                     HStack(spacing: 5) {
-                        Text("价格").font(.caption).foregroundStyle(MarketPalette.muted).fixedSize()
+                        Text("价格").font(.system(size: 14)).foregroundStyle(MarketPalette.muted).fixedSize()
                         priceInput
                     }
                     HStack(spacing: 5) {
-                        Text("手数").font(.caption).foregroundStyle(MarketPalette.muted).fixedSize()
+                        Text("手数").font(.system(size: 14)).foregroundStyle(MarketPalette.muted).fixedSize()
                         quantityInput
                     }
                 }.frame(maxWidth: .infinity)
@@ -880,7 +880,7 @@ struct TradingCenterView: View {
                     Divider()
                     ticketInfo("保证金", ticketMargin)
                     ticketInfo(selected?.isOption == true ? "权利金" : "手续费", ticketFeeOrPremium)
-                }.frame(width: 126)
+                }.frame(width: 150)
             }.padding(8).overlay(RoundedRectangle(cornerRadius: 8).stroke(MarketPalette.divider))
             priceModePicker
             openingLimitNotice
@@ -1012,11 +1012,11 @@ struct TradingCenterView: View {
             if let value, value.isFinite, value > 0 { priceMode = .limit; selectedPrice = priceText(value) }
         } label: {
             HStack(spacing: 3) {
-                Text(title).foregroundStyle(.secondary)
+                Text(title).font(.system(size: 14)).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
-                Text(value.map { $0.formatted() } ?? "--").foregroundStyle(quoteColor(value))
-                if let volume { Text(volume.formatted()).foregroundStyle(.secondary) }
-            }.font(.system(size: 14)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+                Text(value.map { $0.formatted() } ?? "--").font(.system(size: 14)).foregroundStyle(quoteColor(value))
+                if let volume { Text(volume.formatted()).font(.system(size: 14)).foregroundStyle(.secondary) }
+            }.font(.system(size: 14)).monospacedDigit().lineLimit(1)
         }.buttonStyle(.plain).disabled(value == nil)
     }
     private func priceButton(_ title: String, _ value: Double?) -> some View {
