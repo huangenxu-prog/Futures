@@ -1282,7 +1282,7 @@ struct TradingCenterView: View {
                 VStack(spacing: 0) {
                     recordBand(height: recordHeaderHeight) {
                         HStack(spacing: 4) {
-                            Text("手数 / 可平").frame(width: 72)
+                            Text("手数/可平").lineLimit(1).fixedSize(horizontal: true, vertical: false).frame(width: 72)
                             Text("开仓均价").frame(width: 70, alignment: .trailing)
                             Text("浮盈").frame(width: 75, alignment: .trailing)
                             Text("保证金").frame(width: 85, alignment: .trailing)
