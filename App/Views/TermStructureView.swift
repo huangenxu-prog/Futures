@@ -205,14 +205,21 @@ struct TermStructureView: View {
             guard let low = prices.min(), let high = prices.max(), !data.isEmpty else { return }
             let span = max(high-low, max(abs(high)*0.02,1))
             let bottom = low-span*0.12, top = high+span*0.12
-            let left:CGFloat = 44, right = max(left+1,size.width-10), h = max(1,size.height-30)
+            let ticks = (0...4).map { bottom + (top-bottom)*Double($0)/4 }
+            let labelWidths = ticks.map { price in
+                ctx.resolve(Text(number(price)).font(.system(size:10)).monospacedDigit())
+                    .measure(in: CGSize(width: size.width, height: 24)).width
+            }
+            let left: CGFloat = max(44, (labelWidths.max() ?? 0) + 12)
+            let right = max(left+1,size.width-18)
+            let h = max(1,size.height-36)
             func x(_ i:Int)->CGFloat { left + (right-left)*CGFloat(i)/CGFloat(max(1,data.count-1)) }
-            func y(_ p:Double)->CGFloat { 5 + CGFloat((top-p)/max(1,top-bottom))*h }
+            func y(_ p:Double)->CGFloat { 10 + CGFloat((top-p)/max(1,top-bottom))*h }
             for i in 0...4 {
                 let p = bottom+(top-bottom)*Double(i)/4
                 var grid=Path(); grid.move(to:CGPoint(x:left,y:y(p)));grid.addLine(to:CGPoint(x:right,y:y(p)))
                 ctx.stroke(grid,with:.color(MarketPalette.divider),lineWidth:0.6)
-                ctx.draw(Text(number(p)).font(.system(size:10)).foregroundStyle(MarketPalette.muted),at:CGPoint(x:left-4,y:y(p)),anchor:.trailing)
+                ctx.draw(Text(number(p)).font(.system(size:10)).monospacedDigit().foregroundStyle(MarketPalette.muted),at:CGPoint(x:left-6,y:y(p)),anchor:.trailing)
             }
             var line=Path()
             var started=false
@@ -222,7 +229,7 @@ struct TermStructureView: View {
                     ctx.draw(Text(row.month).font(.system(size:9)).foregroundStyle(MarketPalette.muted),at:CGPoint(x:xx,y:size.height-10))
                 }
                 if row.id == symbol {
-                    var marker=Path();marker.move(to:CGPoint(x:xx,y:3));marker.addLine(to:CGPoint(x:xx,y:h+5))
+                    var marker=Path();marker.move(to:CGPoint(x:xx,y:10));marker.addLine(to:CGPoint(x:xx,y:h+10))
                     ctx.stroke(marker,with:.color(MarketPalette.muted),style:StrokeStyle(lineWidth:1,dash:[3,3]))
                 }
                 guard let p=row.price else { started=false;continue }
