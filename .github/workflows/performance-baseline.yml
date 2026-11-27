@@ -1,0 +1,31 @@
+name: Performance baseline
+on:
+  workflow_dispatch:
+  push:
+    branches: [quality/performance-audit]
+    paths:
+      - 'benchmarks/**'
+      - '.github/workflows/performance-baseline.yml'
+jobs:
+  baseline:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record environment
+        run: |
+          swift --version
+          sw_vers
+          sysctl -n hw.model hw.memsize hw.ncpu
+      - name: Compile existing production modules
+        run: |
+          swiftc -O App/Models/FormulaEngine.swift App/Models/FormulaComposition.swift App/Models/MovingAverageConfiguration.swift App/Models/FuturesIndicatorMath.swift App/Models/MarketBar.swift App/Models/DirectChartFeed.swift App/Models/KlineStartupMerge.swift App/Models/SSELineBuffer.swift benchmarks/PerformanceBaseline.swift -o /tmp/performance-baseline
+      - name: Measure baseline
+        shell: bash
+        run: |
+          set -o pipefail
+          /tmp/performance-baseline | tee performance-baseline.txt
+          cat performance-baseline.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: performance-baseline
+          path: performance-baseline.txt
