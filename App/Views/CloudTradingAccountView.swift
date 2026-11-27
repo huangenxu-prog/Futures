@@ -696,12 +696,21 @@ struct TradingCenterView: View {
             }
             HStack(spacing: 8) {
                 accountMetric("风险", usage)
-                accountMetric("手续费", money(session.snapshot?.account.commission, suffix: false))
-                Button("银期转账") {}.font(.system(size: 12, weight: .medium))
+                    .frame(maxWidth: .infinity)
+                Color.clear.frame(width: 1)
+                HStack(spacing: 8) {
+                    Text("手续费").font(.system(size: 11))
+                        .foregroundStyle(MarketPalette.muted).fixedSize()
+                    Text(money(session.snapshot?.account.commission, suffix: false))
+                        .font(.system(size: 14, weight: .medium)).monospacedDigit()
+                        .foregroundStyle(MarketPalette.ink).lineLimit(1).minimumScaleFactor(0.65)
+                    Spacer(minLength: 0)
+                    Button("银期转账") {}.font(.system(size: 12, weight: .medium))
                     .foregroundStyle(MarketPalette.accent)
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(MarketPalette.accent.opacity(0.65)) }
                     .disabled(true).accessibilityHint("暂未开放")
+                }.frame(maxWidth: .infinity)
             }
         }.padding(.vertical, 8)
     }
