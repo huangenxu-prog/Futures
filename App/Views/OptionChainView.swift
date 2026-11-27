@@ -9,11 +9,6 @@ private func optionDays(_ value: Double?) -> String {
     return String(max(0, Int(ceil((value - Date().timeIntervalSince1970) / 86400)))) + "天"
 }
 
-private struct OptionColumnOffsetKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
 struct OptionChainView: View {
     let code: String
     let underlyingLast: Double?
@@ -42,6 +37,7 @@ struct OptionChainView: View {
     @State private var sort = 0
     @State private var descending = false
     @State private var columnOffset: CGFloat = 0
+    @State private var columnPosition = ScrollPosition(x: 0)
     private let headings = ["最新价","涨幅%","持仓量","成交量","日增仓","买一","卖一","买一量","卖一量","今开","最高","最低","昨结"]
     private var spot: Double? { last ?? (activeCode == code ? underlyingLast : nil) }
     private var name: String { underlyingName + monthLabel(activeCode) }
@@ -62,7 +58,8 @@ struct OptionChainView: View {
     private func switchMonth(_ symbol: String) {
         guard symbol != activeCode else { return }
         loadID = UUID(); rows = []; last = nil; error = nil; loading = false
-        initialPosition = false; anchor = nil; activeCode = symbol
+        initialPosition = false; anchor = nil; columnOffset = 0
+        columnPosition.scrollTo(x: 0); activeCode = symbol
     }
     private var nearest: Double? {
         guard let spot else { return nil }
@@ -108,17 +105,21 @@ struct OptionChainView: View {
                             Button("行权价") { changeSort(0) }
                                 .font(.caption.weight(.semibold)).frame(width: 54, height: 32)
                                 .background(MarketPalette.raised)
-                            HStack(spacing: 0) {
-                                ForEach(headings.indices, id: \.self) { j in
-                                    Button(headings[j] + (sort == j+1 ? (descending ? "↓" : "↑") : "")) { changeSort(j+1) }
-                                        .font(.caption).foregroundStyle(MarketPalette.muted).frame(width: columnWidth, height: 32)
+                            Color.clear
+                                .frame(width: max(0, geometry.size.width - 54), height: 32)
+                                .overlay(alignment: .leading) {
+                                    HStack(spacing: 0) {
+                                        ForEach(headings.indices, id: \.self) { j in
+                                            Button(headings[j] + (sort == j+1 ? (descending ? "↓" : "↑") : "")) { changeSort(j+1) }
+                                                .font(.caption).foregroundStyle(MarketPalette.muted)
+                                                .frame(width: columnWidth, height: 32)
+                                        }
+                                    }
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .offset(x: -columnOffset)
                                 }
-                            }
-                            .fixedSize(horizontal: true, vertical: false)
-                            .offset(x: columnOffset)
-                            .frame(width: max(0, geometry.size.width - 54), alignment: .leading)
-                            .clipped()
-                            .contentShape(Rectangle())
+                                .clipped()
+                                .contentShape(Rectangle())
                         }
                         .frame(width: geometry.size.width, alignment: .leading)
                         .background(MarketPalette.background)
@@ -152,15 +153,14 @@ struct OptionChainView: View {
                                             Divider().frame(height: 1)
                                         }
                                     }
-                                    .background {
-                                        GeometryReader { contentGeometry in
-                                            Color.clear.preference(key: OptionColumnOffsetKey.self,
-                                                value: contentGeometry.frame(in: .named("optionColumns")).minX)
-                                        }
-                                    }
+                                    .fixedSize(horizontal: true, vertical: false)
                                 }
-                                .coordinateSpace(name: "optionColumns")
-                                .onPreferenceChange(OptionColumnOffsetKey.self) { columnOffset = $0 }
+                                .scrollPosition($columnPosition)
+                                .onScrollGeometryChange(for: CGFloat.self) { metrics in
+                                    metrics.contentOffset.x + metrics.contentInsets.leading
+                                } action: { _, offset in
+                                    columnOffset = offset
+                                }
                                 .frame(width: max(0, geometry.size.width - 54)).clipped()
                             }.frame(width: geometry.size.width, alignment: .leading)
                         }.refreshable { await load() }
@@ -171,6 +171,8 @@ struct OptionChainView: View {
                             if count > 0 && !initialPosition, let nearest { initialPosition = true; anchor = nearest; proxy.scrollTo(nearest, anchor: .center) }
                         }
                         .onChange(of: side) { _, _ in
+                            columnOffset = 0
+                            columnPosition.scrollTo(x: 0)
                             if let target = anchor ?? nearest { proxy.scrollTo(target, anchor: .center) }
                         }
                     }
