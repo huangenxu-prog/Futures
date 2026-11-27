@@ -1,0 +1,12 @@
+[Unit]
+Description=Qihui Option Metadata Prefetch
+[Service]
+Type=oneshot
+WorkingDirectory=/root/tq_test
+ExecStart=/usr/bin/flock -n -E 0 /run/qihui-prefetch.lock /root/tq_test/.venv/bin/python -u /root/tq_test/server/prefetch_options.py
+Nice=10
+CPUWeight=10
+IOWeight=10
+MemoryHigh=900M
+MemoryMax=1200M
+TimeoutStartSec=120
