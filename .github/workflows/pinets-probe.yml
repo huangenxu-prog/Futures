@@ -10,6 +10,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
       - name: Fetch pinned upstream release
         run: |
           curl --fail --location --retry 3 -o pinets.js https://github.com/LuxAlgo/PineTS/releases/download/v0.14.0/pinets.min.browser.js
@@ -147,3 +148,7 @@ jobs:
           SWIFT
           swiftc probe.swift -framework JavaScriptCore -o probe
           ./probe
+      - name: Exercise actual Swift app runtime
+        run: |
+          swiftc App/Models/PineRuntime.swift scripts/PineRuntimeSelfTest.swift -framework JavaScriptCore -o runtime-test
+          ./runtime-test pinets.js
