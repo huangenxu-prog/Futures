@@ -66,73 +66,110 @@ struct TermStructureView: View {
         return (signed && v > 0 ? "+" : "") + v.formatted(.number.precision(.fractionLength(0...2)))
     }
     var body: some View {
-        let data = rows
-        let base = data.first(where: { $0.id == symbol })?.price
-        let width: CGFloat = 68
         NavigationStack {
             GeometryReader { geo in
-                let col = max(55, (geo.size.width - width - 16) / 5)
-                VStack(spacing: 8) {
-                    HStack(spacing: 4) {
-                        ForEach(labels.indices, id: \.self) { i in
-                            Button(labels[i]) { period = i }
-                                .font(.system(size: 11, weight: .medium)).lineLimit(1)
-                                .frame(maxWidth: .infinity).frame(height: 30)
-                                .foregroundStyle(period == i ? MarketPalette.accent : MarketPalette.muted)
-                                .background(period == i ? MarketPalette.accent.opacity(0.12) : MarketPalette.raised)
-                                .clipShape(RoundedRectangle(cornerRadius: 5))
-                        }
-                    }.buttonStyle(.plain).padding(.horizontal, 8)
-                    if loading { ProgressView().controlSize(.small) }
-                    if let error { Text(error).font(.caption2).foregroundStyle(MarketPalette.muted) }
-                    if period != 0, let date = historicalDay {
-                        Text(calendar.dateComponents([.year,.month,.day], from: date).year.map { _ in String(format: "%04d-%02d-%02d", calendar.component(.year,from:date),calendar.component(.month,from:date),calendar.component(.day,from:date)) } ?? "")
-                            .font(.caption2).foregroundStyle(MarketPalette.muted)
-                    }
-                    chart(data).frame(height: 190).padding(.horizontal, 8)
-                    ScrollView(.vertical) {
-                        HStack(alignment: .top, spacing: 0) {
-                            VStack(spacing: 0) {
-                                cell("合约", width: width, color: MarketPalette.muted, leading: true).background(MarketPalette.raised)
-                                ForEach(data) { row in
-                                    cell(row.label, width:width, leading:true)
-                                        .background(row.id == symbol ? MarketPalette.raised : MarketPalette.background)
-                                    Divider().frame(height: 1)
-                                }
-                            }.frame(width: width).background(MarketPalette.background).zIndex(1)
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                VStack(spacing: 0) {
-                                    HStack(spacing:0) {
-                                        ForEach(["最新","价差","涨跌幅","成交量","持仓量"], id: \.self) {
-                                            cell($0,width:col,color:MarketPalette.muted)
-                                        }
-                                    }.background(MarketPalette.raised)
-                                    ForEach(data) { row in
-                                        let spread = base.flatMap { b in row.price.map { $0-b } }
-                                        HStack(spacing:0) {
-                                            cell(number(row.price),width:col,color:MarketPalette.movement(row.ratio))
-                                            cell(number(spread,signed:true),width:col,color:MarketPalette.movement(spread))
-                                            cell(row.ratio.map { String(format:"%+.2f%%",$0*100) } ?? "--",width:col,color:MarketPalette.movement(row.ratio))
-                                            cell(CompactMarketQuantity.format(row.volume),width:col)
-                                            cell(CompactMarketQuantity.format(row.interest),width:col)
-                                        }.background(row.id == symbol ? MarketPalette.raised : MarketPalette.background)
-                                        Divider().frame(height: 1)
-                                    }
-                                }.fixedSize(horizontal:true,vertical:false)
-                            }.clipped()
-                        }.padding(.horizontal,8)
-                    }
-                }
+                structureContent(columnWidth: max(55, (geo.size.width - 84) / 5))
             }
             .background(MarketPalette.background)
-            .navigationTitle(name + (contracts.first(where: { $0.code == symbol })?.month ?? " " + String(symbol.split(separator: ".").last ?? "")))
+            .navigationTitle(pageTitle)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement:.cancellationAction) { Button { dismiss() } label: { Image(systemName:"chevron.left") }.accessibilityLabel("返回") } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { dismiss() } label: { Image(systemName: "chevron.left") }
+                        .accessibilityLabel("返回")
+                }
+            }
             .task(id: "\(period)-\(scenePhase)") {
                 guard scenePhase == .active else { return }
                 await load(period)
             }
         }.tint(MarketPalette.accent)
+    }
+    private var pageTitle: String {
+        let month = contracts.first(where: { $0.code == symbol })?.month
+        return name + (month ?? " " + String(symbol.split(separator: ".").last ?? ""))
+    }
+    private func dateLabel(_ date: Date) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+    private var datePickerBar: some View {
+        HStack(spacing: 4) {
+            ForEach(labels.indices, id: \.self) { i in
+                Button(labels[i]) { period = i }
+                    .font(.system(size: 11, weight: .medium)).lineLimit(1)
+                    .frame(maxWidth: .infinity).frame(height: 30)
+                    .foregroundStyle(period == i ? MarketPalette.accent : MarketPalette.muted)
+                    .background(period == i ? MarketPalette.accent.opacity(0.12) : MarketPalette.raised)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+        }.buttonStyle(.plain).padding(.horizontal, 8)
+    }
+    private func structureContent(columnWidth: CGFloat) -> some View {
+        let data = rows
+        let base = data.first(where: { $0.id == symbol })?.price
+        return VStack(spacing: 8) {
+            datePickerBar
+            if loading { ProgressView().controlSize(.small) }
+            if let error { Text(error).font(.caption2).foregroundStyle(MarketPalette.muted) }
+            if period != 0, let date = historicalDay {
+                Text(dateLabel(date)).font(.caption2).foregroundStyle(MarketPalette.muted)
+            }
+            chart(data).frame(height: 190).padding(.horizontal, 8)
+            structureTable(data, base: base, col: columnWidth)
+        }
+    }
+    private func structureTable(_ data: [Row], base: Double?, col: CGFloat) -> some View {
+        ScrollView(.vertical) {
+            HStack(alignment: .top, spacing: 0) {
+                contractColumn(data)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    dataColumn(data, base: base, col: col)
+                }.clipped()
+            }.padding(.horizontal, 8)
+        }
+    }
+    private func rowBackground(_ row: Row) -> Color {
+        row.id == symbol ? MarketPalette.raised : MarketPalette.background
+    }
+    private func contractColumn(_ data: [Row]) -> some View {
+        VStack(spacing: 0) {
+            cell("合约", width: 68, color: MarketPalette.muted, leading: true)
+                .background(MarketPalette.raised)
+            ForEach(data) { row in
+                VStack(spacing: 0) {
+                    cell(row.label, width: 68, leading: true).background(rowBackground(row))
+                    Divider().frame(height: 1)
+                }
+            }
+        }.frame(width: 68).background(MarketPalette.background).zIndex(1)
+    }
+    private func dataColumn(_ data: [Row], base: Double?, col: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                ForEach(["最新", "价差", "涨跌幅", "成交量", "持仓量"], id: \.self) { title in
+                    cell(title, width: col, color: MarketPalette.muted)
+                }
+            }.background(MarketPalette.raised)
+            ForEach(data) { row in
+                VStack(spacing: 0) {
+                    quoteRow(row, base: base, col: col)
+                    Divider().frame(height: 1)
+                }
+            }
+        }.fixedSize(horizontal: true, vertical: false)
+    }
+    private func quoteRow(_ row: Row, base: Double?, col: CGFloat) -> some View {
+        let spread: Double? = base.flatMap { b in row.price.map { $0 - b } }
+        let percent = row.ratio.map { String(format: "%+.2f%%", $0 * 100) } ?? "--"
+        let movement = MarketPalette.movement(row.ratio)
+        return HStack(spacing: 0) {
+            cell(number(row.price), width: col, color: movement)
+            cell(number(spread, signed: true), width: col, color: MarketPalette.movement(spread))
+            cell(percent, width: col, color: movement)
+            cell(CompactMarketQuantity.format(row.volume), width: col)
+            cell(CompactMarketQuantity.format(row.interest), width: col)
+        }.background(rowBackground(row))
     }
     private func cell(_ value:String,width:CGFloat,color:Color = MarketPalette.ink,leading:Bool = false) -> some View {
         Text(value).font(.system(size:13)).monospacedDigit().lineLimit(1)
