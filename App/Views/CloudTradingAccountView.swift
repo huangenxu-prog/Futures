@@ -1234,7 +1234,7 @@ struct TradingCenterView: View {
             selected = PaperContract(symbol: c.symbol, name: c.name, tick: c.tick, multiplier: c.multiplier, last: nil, bid: nil, ask: nil, option: c.option)
         }
     }
-    private let frozenContractWidth: CGFloat = 120
+    private let frozenContractWidth: CGFloat = 100
     private let recordHeaderHeight: CGFloat = 28
     private let recordRowHeight: CGFloat = 34
 
@@ -1248,19 +1248,26 @@ struct TradingCenterView: View {
             }
     }
 
-    private func frozenRecordTable<Left: View, Right: View>(
-        @ViewBuilder left: () -> Left, @ViewBuilder right: () -> Right
-    ) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            left()
-                .frame(width: frozenContractWidth, alignment: .leading)
-                .background(MarketPalette.background)
-                .zIndex(1)
-            ScrollView(.horizontal, showsIndicators: true) {
-                right().fixedSize(horizontal: true, vertical: false)
+    private struct RecordLayout {
+        let widths: [CGFloat]
+        let gap: CGFloat = 3
+        init(width: CGFloat, weights: [CGFloat]) {
+            let available = max(0, width - 3 * CGFloat(weights.count - 1))
+            let total = weights.reduce(0, +)
+            widths = weights.map { available * $0 / total }
+        }
+    }
+    private func recordGrid(_ layout: RecordLayout, _ cells: [String],
+                            colors: [Color?] = [], header: Bool = false,
+                            bold: Bool = false) -> some View {
+        HStack(spacing: layout.gap) {
+            ForEach(cells.indices, id: \.self) { i in
+                Text(cells[i])
+                    .font(.system(size: 13, weight: bold ? .semibold : .regular))
+                    .monospacedDigit().lineLimit(1).truncationMode(.tail)
+                    .foregroundStyle(header ? MarketPalette.muted : (i < colors.count ? colors[i] ?? MarketPalette.ink : MarketPalette.ink))
+                    .frame(width: layout.widths[i], alignment: i == 0 ? .leading : .center)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .clipped()
         }
     }
 
@@ -1278,21 +1285,22 @@ struct TradingCenterView: View {
                 }
             }
             Divider()
-            ScrollView {
-                VStack(spacing: 0) {
-                    if let snapshot = session.snapshot {
-                        if tab == "持仓" {
-                            frozenPositions(snapshot.positions)
-                        } else if tab == "成交" {
-                            frozenFills((snapshot.fills ?? []).sorted { $0.time_ns > $1.time_ns })
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        if let snapshot = session.snapshot {
+                            if tab == "持仓" {
+                                compactPositions(snapshot.positions, width: geometry.size.width)
+                            } else if tab == "成交" {
+                                compactFills((snapshot.fills ?? []).sorted { $0.time_ns > $1.time_ns }, width: geometry.size.width)
+                            } else {
+                                compactOrders((snapshot.orders ?? []).filter { tab != "挂单" || $0.status == "ALIVE" }.sorted {
+                                    ($0.time_ns ?? 0) == ($1.time_ns ?? 0) ? $0.id > $1.id : ($0.time_ns ?? 0) > ($1.time_ns ?? 0)
+                                }, width: geometry.size.width)
+                            }
                         } else {
-                            frozenOrders((snapshot.orders ?? []).filter { tab != "挂单" || $0.status == "ALIVE" }.sorted {
-                                ($0.time_ns ?? 0) == ($1.time_ns ?? 0) ? $0.id > $1.id : ($0.time_ns ?? 0) > ($1.time_ns ?? 0)
-                            })
+                            Text("账户数据暂不可用").font(.caption).foregroundStyle(.secondary)
                         }
-                    } else {
-                        Text("账户数据暂不可用").font(.caption).foregroundStyle(.secondary)
-                        if tab == "持仓" { positionSummaryUnavailable }
                     }
                 }
             }
@@ -1300,105 +1308,96 @@ struct TradingCenterView: View {
         }.padding(.top, 5).frame(maxHeight: .infinity, alignment: .top)
     }
 
-    private func frozenPositions(_ positions: [CloudSnapshot.Position]) -> some View {
+    private func compactPositions(_ positions: [CloudSnapshot.Position], width: CGFloat) -> some View {
+        let layout = RecordLayout(width: width, weights: [112, 66, 80, 88])
         let held = positions.filter { $0.long > 0 || $0.short > 0 }
         return VStack(spacing: 0) {
-            frozenRecordTable {
-                VStack(spacing: 0) {
-                    recordBand(height: recordHeaderHeight) {
-                        recordCell("合约 / 多空", width: frozenContractWidth).foregroundStyle(.secondary)
-                    }
-                    ForEach(held) { p in
-                        if p.long > 0 { frozenPositionName(p, long: true) }
-                        if p.short > 0 { frozenPositionName(p, long: false) }
-                    }
-                    recordBand(height: recordRowHeight) {
-                        Text("合计").font(.system(size: 13, weight: .semibold))
-                            .frame(width: frozenContractWidth, alignment: .leading)
-                    }
-                }
-            } right: {
-                VStack(spacing: 0) {
-                    recordBand(height: recordHeaderHeight) {
-                        HStack(spacing: 5) {
-                            Text("手数/可平").lineLimit(1).fixedSize(horizontal: true, vertical: false).frame(width: 72)
-                            Text("开仓均价").frame(width: 70, alignment: .trailing)
-                            Text("浮盈").frame(width: 75, alignment: .trailing)
-                            Text("保证金").frame(width: 85, alignment: .trailing)
-                            Text("市值").frame(width: 85, alignment: .trailing)
-                        }.font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    ForEach(held) { p in
-                        if p.long > 0 { positionRow(p, long: true) }
-                        if p.short > 0 { positionRow(p, long: false) }
-                    }
-                    positionSummary(held)
-                }
+            recordBand(height: recordHeaderHeight) {
+                recordGrid(layout, ["合约 / 多空", "手数/可平", "开仓均价", "浮盈"], header: true)
             }
+            ForEach(held) { p in
+                if p.long > 0 { compactPositionRow(p, long: true, layout: layout) }
+                if p.short > 0 { compactPositionRow(p, long: false, layout: layout) }
+            }
+            compactPositionTotal(held, layout: layout)
             if held.isEmpty { Text("暂无持仓").font(.caption).foregroundStyle(.secondary) }
         }
     }
-
-    private func frozenFills(_ fills: [CloudSnapshot.Fill]) -> some View {
-        let closes = fills.filter { $0.offset != "OPEN" }
-        let profits = closes.compactMap { $0.calculated_close_profit }.filter { $0.isFinite }
+    private func compactPositionRow(_ p: CloudSnapshot.Position, long: Bool, layout: RecordLayout) -> some View {
+        let qty = long ? p.long : p.short
+        let frozen = long ? p.frozen_long : p.frozen_short
+        let average = long ? p.open_price_long : p.open_price_short
+        let profit = (long ? p.float_profit_long : p.float_profit_short) ?? ((p.long == 0 || p.short == 0) ? p.float_profit : nil)
+        let selectedRow = expandedHolding == p.symbol + (long ? "/long" : "/short")
+        return recordBand(height: recordRowHeight, selected: selectedRow) {
+            Button { selectPosition(p, long: long) } label: {
+                HStack(spacing: layout.gap) {
+                    HStack(spacing: 3) {
+                        Text(contractName(p.symbol)).font(.system(size: 13, weight: .medium))
+                            .lineLimit(1).truncationMode(.tail)
+                        Text(long ? "多" : "空").font(.system(size: 13))
+                            .foregroundStyle(long ? MarketPalette.up : MarketPalette.down).fixedSize()
+                    }.frame(width: layout.widths[0], alignment: .leading)
+                    Text(String(qty) + "/" + (frozen.map { String(max(0, qty-$0)) } ?? "--"))
+                        .frame(width: layout.widths[1])
+                    Text(average.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "--")
+                        .frame(width: layout.widths[2])
+                    Text(money(profit, suffix: false)).foregroundStyle(MarketPalette.movement(profit))
+                        .frame(width: layout.widths[3])
+                }.font(.system(size: 13)).monospacedDigit().lineLimit(1)
+                    .foregroundStyle(MarketPalette.ink).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel(contractName(p.symbol) + (long ? " 多" : " 空"))
+        }
+    }
+    private func compactPositionTotal(_ positions: [CloudSnapshot.Position], layout: RecordLayout) -> some View {
+        let lots = positions.reduce(0) { $0 + $1.long + $1.short }
+        var closable = 0
+        var completeClosable = true
+        var profit = 0.0
+        var completeProfit = true
+        for p in positions {
+            for long in [true, false] {
+                let qty = long ? p.long : p.short
+                guard qty > 0 else { continue }
+                if let frozen = long ? p.frozen_long : p.frozen_short {
+                    closable += max(0, qty - frozen)
+                } else { completeClosable = false }
+                let sideProfit = (long ? p.float_profit_long : p.float_profit_short)
+                    ?? ((p.long == 0 || p.short == 0) ? p.float_profit : nil)
+                if let sideProfit, sideProfit.isFinite { profit += sideProfit } else { completeProfit = false }
+            }
+        }
+        let total: Double? = completeProfit && profit.isFinite ? profit : nil
+        let quantity = String(lots) + "/" + (completeClosable ? String(closable) : "--")
+        return recordBand(height: recordRowHeight) {
+            recordGrid(layout, ["合计", quantity, "", money(total, suffix: false)],
+                       colors: [nil, nil, nil, MarketPalette.movement(total)], bold: true)
+        }
+    }
+    private func compactFills(_ fills: [CloudSnapshot.Fill], width: CGFloat) -> some View {
+        let layout = RecordLayout(width: width, weights: [93, 32, 53, 28, 79, 65])
+        let profits = fills.filter { $0.offset != "OPEN" }.compactMap { $0.calculated_close_profit }.filter { $0.isFinite }
         let total: Double? = profits.isEmpty ? nil : profits.reduce(0, +)
         return VStack(spacing: 0) {
-            frozenRecordTable {
-                VStack(spacing: 0) {
-                    recordBand(height: recordHeaderHeight) {
-                        recordCell("合约", width: frozenContractWidth).foregroundStyle(.secondary)
-                    }
-                    ForEach(fills) { f in
-                        recordBand(height: recordRowHeight) {
-                            recordCell(contractName(f.symbol), width: frozenContractWidth)
-                        }
-                    }
-                    if !fills.isEmpty {
-                        recordBand(height: recordRowHeight) {
-                            recordCell("合计", width: frozenContractWidth).fontWeight(.semibold)
-                        }
-                    }
-                }
-            } right: {
-                VStack(spacing: 0) {
-                    recordBand(height: recordHeaderHeight) {
-                        HStack(spacing: 5) {
-                            recordCell("开平", width: 40, alignment: .center)
-                            recordCell("成交价", width: 54, alignment: .center)
-                            recordCell("手数", width: 34, alignment: .center)
-                            recordCell("平仓盈亏", width: 80, alignment: .center)
-                            recordCell("时间", width: 80, alignment: .center).padding(.leading, 14)
-                        }.foregroundStyle(.secondary)
-                    }
-                    ForEach(fills) { f in
-                        recordBand(height: recordRowHeight) {
-                            HStack(spacing: 5) {
-                                recordCell(recordAction(f.direction, f.offset), width: 40, alignment: .center)
-                                    .foregroundStyle(f.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
-                                recordCell(f.price?.formatted() ?? "", width: 54, alignment: .center)
-                                recordCell(String(f.quantity), width: 34, alignment: .center)
-                                recordCell(f.offset != "OPEN" && f.calculated_close_profit?.isFinite == true ? money(f.calculated_close_profit, suffix: false) : "", width: 80, alignment: .center)
-                                    .foregroundStyle(MarketPalette.movement(f.calculated_close_profit))
-                                recordCell(recordTime(f.time_ns), width: 80, alignment: .center).padding(.leading, 14)
-                            }
-                        }
-                    }
-                    if !fills.isEmpty {
-                        recordBand(height: recordRowHeight) {
-                            HStack(spacing: 5) {
-                                Color.clear.frame(width: 40)
-                                Color.clear.frame(width: 54)
-                                recordCell(String(fills.reduce(0) { $0 + $1.quantity }), width: 34, alignment: .center).fontWeight(.semibold)
-                                recordCell(total.map { money($0, suffix: false) } ?? "", width: 80, alignment: .center)
-                                    .foregroundStyle(MarketPalette.movement(total)).fontWeight(.semibold)
-                                Color.clear.frame(width: 80).padding(.leading, 14)
-                            }
-                        }
-                    }
+            recordBand(height: recordHeaderHeight) {
+                recordGrid(layout, ["合约", "开平", "成交价", "手数", "平仓盈亏", "时间"], header: true)
+            }
+            ForEach(fills) { f in
+                recordBand(height: recordRowHeight) {
+                    recordGrid(layout, [contractName(f.symbol), recordAction(f.direction, f.offset),
+                        f.price?.formatted() ?? "", String(f.quantity),
+                        f.offset != "OPEN" && f.calculated_close_profit?.isFinite == true ? money(f.calculated_close_profit, suffix: false) : "",
+                        recordTime(f.time_ns)], colors: [nil, f.direction == "BUY" ? MarketPalette.up : MarketPalette.down,
+                        nil, nil, MarketPalette.movement(f.calculated_close_profit), nil])
                 }
             }
-            if fills.isEmpty { Text("暂无成交或未取得数据").font(.caption).foregroundStyle(.secondary) }
+            if !fills.isEmpty {
+                recordBand(height: recordRowHeight) {
+                    recordGrid(layout, ["合计", "", "", String(fills.reduce(0) { $0 + $1.quantity }),
+                        total.map { money($0, suffix: false) } ?? "", ""],
+                        colors: [nil, nil, nil, nil, MarketPalette.movement(total), nil], bold: true)
+                }
+            } else { Text("暂无成交或未取得数据").font(.caption).foregroundStyle(.secondary) }
         }
     }
 
@@ -1408,75 +1407,46 @@ struct TradingCenterView: View {
         return message.isEmpty ? nil : message
     }
 
-    private func frozenOrders(_ orders: [CloudSnapshot.Order]) -> some View {
-        VStack(spacing: 0) {
-            frozenRecordTable {
-                VStack(spacing: 0) {
-                    recordBand(height: recordHeaderHeight) {
-                        recordCell("合约", width: frozenContractWidth).foregroundStyle(.secondary)
-                    }
-                    ForEach(orders) { o in
-                        recordBand(height: recordRowHeight) {
-                            recordCell(contractName(o.symbol), width: frozenContractWidth)
-                        }
-                        if rejectionReason(o) != nil { recordBand(height: 23) { Color.clear.frame(width: frozenContractWidth) } }
-                    }
+    private func compactOrders(_ orders: [CloudSnapshot.Order], width: CGFloat) -> some View {
+        let pending = tab == "挂单"
+        let layout = RecordLayout(width: width, weights: pending ? [88, 30, 32, 52, 27, 32, 65] : [92, 32, 32, 56, 30, 46, 46])
+        let headings = pending ? ["合约", "状态", "开平", "委托价", "手数", "操作", "时间"] :
+            ["合约", "状态", "开平", "委托价", "手数", "已成交", "剩余量"]
+        return VStack(spacing: 0) {
+            recordBand(height: recordHeaderHeight) { recordGrid(layout, headings, header: true) }
+            ForEach(orders) { o in
+                recordBand(height: recordRowHeight) {
+                    compactOrderRow(o, layout: layout, pending: pending)
                 }
-            } right: {
-                VStack(spacing: 0) {
-                    recordBand(height: recordHeaderHeight) {
-                        HStack(spacing: 5) {
-                            recordCell("状态", width: 34, alignment: .center)
-                            recordCell("开平", width: 40, alignment: .center)
-                            recordCell("委托价", width: 54, alignment: .center)
-                            recordCell("手数", width: 34, alignment: .center)
-                            if tab != "挂单" {
-                                recordCell("已成交", width: 48, alignment: .center)
-                                recordCell("已撤单", width: 48, alignment: .center)
-                                recordCell("成交均价", width: 72, alignment: .center)
-                            }
-                            if tab == "挂单" { recordCell("操作", width: 34, alignment: .center) }
-                            recordCell("时间", width: 80, alignment: .center).padding(.leading, 14)
-                        }.foregroundStyle(.secondary)
-                    }
-                    ForEach(orders) { o in
-                        recordBand(height: recordRowHeight) {
-                            HStack(spacing: 5) {
-                                    HStack(spacing: 5) {
-                                        recordCell(o.stateText, width: 34, alignment: .center)
-                                        recordCell(recordAction(o.direction, o.offset), width: 40, alignment: .center)
-                                            .foregroundStyle(o.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
-                                        recordCell(o.price?.formatted() ?? "", width: 54, alignment: .center)
-                                        recordCell(String(o.quantity), width: 34, alignment: .center)
-                                        if tab != "挂单" {
-                                            recordCell(String(max(0, o.quantity - o.remaining)), width: 48, alignment: .center)
-                                            recordCell(canceledQuantity(o) == "--" ? "" : canceledQuantity(o), width: 48, alignment: .center)
-                                            recordCell(o.trade_price?.formatted(.number.precision(.fractionLength(2))) ?? "", width: 72, alignment: .center)
-                                        }
-                                        if tab == "挂单" {
-                                            Button("撤单", role: .destructive) { cancelID = o.id }
-                                                .font(.system(size: 13)).lineLimit(1).buttonStyle(.plain)
-                                                .foregroundStyle(MarketPalette.up)
-                                                .frame(width: 34, height: recordRowHeight)
-                                                .contentShape(Rectangle())
-                                                .disabled(session.busy || session.isLive || o.status != "ALIVE")
-                                                .opacity(session.busy || session.isLive || o.status != "ALIVE" ? 0.4 : 1)
-                                                .accessibilityLabel("撤单 " + contractName(o.symbol))
-                                        }
-                                        recordCell(recordTime(o.time_ns), width: 80, alignment: .center).padding(.leading, 14)
-                                    }.frame(height: recordRowHeight)
-                            }
-                        }
-                        if let reason = rejectionReason(o) {
-                            recordBand(height: 23) {
-                                Text(reason).font(.system(size: 13)).foregroundStyle(MarketPalette.up)
-                                    .lineLimit(1).frame(width: 300, alignment: .leading)
-                            }.accessibilityLabel(reason)
-                        }
-                    }
+                if let reason = rejectionReason(o) {
+                    recordBand(height: 23) {
+                        Text(reason).font(.system(size: 13)).foregroundStyle(MarketPalette.up)
+                            .lineLimit(1).truncationMode(.tail).frame(width: width, alignment: .leading)
+                    }.accessibilityLabel(reason)
                 }
             }
-            if orders.isEmpty { Text(tab == "挂单" ? "暂无挂单" : "暂无委托或未取得数据").font(.caption).foregroundStyle(.secondary) }
+            if orders.isEmpty { Text(pending ? "暂无挂单" : "暂无委托或未取得数据").font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+    private func compactOrderRow(_ o: CloudSnapshot.Order, layout: RecordLayout, pending: Bool) -> some View {
+        let common = [contractName(o.symbol), o.stateText, recordAction(o.direction, o.offset),
+                      o.price?.formatted() ?? "", String(o.quantity)]
+        let values = common + (pending ? ["撤单", recordTime(o.time_ns)] : [String(max(0, o.quantity - o.remaining)), String(max(0, o.remaining))])
+        return HStack(spacing: layout.gap) {
+            ForEach(values.indices, id: \.self) { i in
+                if pending && i == 5 {
+                    Button("撤单", role: .destructive) { cancelID = o.id }
+                        .font(.system(size: 13)).lineLimit(1).buttonStyle(.plain)
+                        .foregroundStyle(MarketPalette.up)
+                        .frame(width: layout.widths[i], height: recordRowHeight)
+                        .contentShape(Rectangle())
+                        .disabled(session.busy || session.isLive || o.status != "ALIVE")
+                        .accessibilityLabel("撤单 " + contractName(o.symbol))
+                } else {
+                    recordCell(values[i], width: layout.widths[i], alignment: i == 0 ? .leading : .center)
+                        .foregroundStyle(i == 2 ? (o.direction == "BUY" ? MarketPalette.up : MarketPalette.down) : MarketPalette.ink)
+                }
+            }
         }
     }
 
