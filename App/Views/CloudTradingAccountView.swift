@@ -444,6 +444,7 @@ struct TradingCenterView: View {
     @State private var priceMode: PriceMode = .opponent
     @State private var openingDraft: OpeningDraft?
     @State private var selectedPrice = ""
+    @FocusState private var priceInputFocused: Bool
     @State private var selectedQuantityText = "1"
     private var selectedQuantity: Int {
         get { Int(selectedQuantityText) ?? 0 }
@@ -839,8 +840,17 @@ struct TradingCenterView: View {
                 .buttonStyle(.plain).disabled(selected?.tick == nil)
             if priceMode == .limit {
                 TextField("限价", text: $selectedPrice).keyboardType(.decimalPad).multilineTextAlignment(.center).font(.system(size: 13)).monospacedDigit()
+                    .focused($priceInputFocused)
             } else {
-                Text(priceMode.rawValue).font(.system(size: 13)).lineLimit(1).frame(maxWidth: .infinity)
+                Button {
+                    selectedPrice = selected?.last.map { priceText($0) } ?? ""
+                    priceMode = .limit
+                    priceInputFocused = true
+                } label: {
+                    Text(priceMode.rawValue).font(.system(size: 13)).lineLimit(1)
+                        .frame(maxWidth: .infinity).frame(height: 44).contentShape(Rectangle())
+                }.buttonStyle(.plain).disabled(selected == nil)
+                    .accessibilityLabel("编辑委托价格")
             }
             Button { stepPrice(1) } label: { Image(systemName: "plus").font(.system(size: 13)).frame(width: 30, height: 44) }
                 .buttonStyle(.plain).disabled(selected?.tick == nil)
@@ -1213,7 +1223,7 @@ struct TradingCenterView: View {
                 selected = PaperContract(symbol: next.symbol, name: next.name, tick: next.tick, multiplier: next.multiplier, last: current.last, bid: current.bid, ask: current.ask, option: next.option)
             } else { selected = next; detailedQuote = details }
             quoteStamp = received; quoteError = false
-            if selectedPrice.isEmpty, let last = next.last, last > 0 { selectedPrice = String(last) }
+            if priceMode != .limit, selectedPrice.isEmpty, let last = next.last, last > 0 { selectedPrice = String(last) }
             // Close confirmation price is user controlled; never replace it on a quote update.
         } catch {
             guard !Task.isCancelled, selectionRequest == request, selected?.symbol == c.symbol else { return }
