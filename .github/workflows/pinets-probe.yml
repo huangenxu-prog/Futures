@@ -27,10 +27,11 @@ jobs:
           let source = try String(contentsOfFile: "pinets.js", encoding: .utf8)
           context.evaluateScript(source)
           if let failure { fatalError(failure) }
-          context.evaluateScript("""
+          context.evaluateScript(#"""
           var probeResult = null;
           var probeError = null;
           (async function() {
+            var stage = "initializing";
             try {
               const bars = Array.from({length: 200}, (_, i) => ({
                 open: 100+i, high: 101+i, low: 99+i, close: 100+i,
@@ -39,22 +40,25 @@ jobs:
               }));
               const results = {};
               const scripts = [
-                ['EMA', '// @version=6'.replace('// ', '//') + '\\nindicator("EMA", overlay=true)\\nplot(ta.ema(close, 20), "EMA")'],
-                ['MACD', '//@version=6\\nindicator("MACD")\\n[m,s,h] = ta.macd(close,12,26,9)\\nplot(m,"MACD")\\nplot(s,"Signal")\\nplot(h,"Hist",style=plot.style_histogram)'],
-                ['RSI', '//@version=5\\nindicator("RSI")\\nplot(ta.rsi(close,14),"RSI")']
+                ['EMA', '// @version=6'.replace('// ', '//') + '\nindicator("EMA", overlay=true)\nplot(ta.ema(close, 20), "EMA")'],
+                ['MACD', '//@version=6\nindicator("MACD")\n[m,s,h] = ta.macd(close,12,26,9)\nplot(m,"MACD")\nplot(s,"Signal")\nplot(h,"Hist",style=plot.style_histogram)'],
+                ['RSI', '//@version=5\nindicator("RSI")\nplot(ta.rsi(close,14),"RSI")']
               ];
               for (const [name, script] of scripts) {
+                stage = name + ": constructor";
                 const pine = new PineTS(bars);
+                stage = name + ": run";
                 const {plots} = await pine.run(script);
+                stage = name + ": plots";
                 results[name] = {};
                 for (const [key, series] of Object.entries(plots)) {
                   results[name][key] = {count:series.data.length, last:series.data[series.data.length-1].value};
                 }
               }
               probeResult = JSON.stringify(results);
-            } catch(e) { probeError = String(e.stack || e); }
+            } catch(e) { probeError = String(stage) + ": " + String(e) + "\n" + String(e.stack || ""); }
           })();
-          """)
+          """#)
           let deadline = Date().addingTimeInterval(30)
           while Date() < deadline {
               if let failure { fatalError(failure) }
