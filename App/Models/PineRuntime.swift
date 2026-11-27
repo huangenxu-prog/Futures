@@ -25,6 +25,14 @@ enum PineRuntimeError: LocalizedError {
 }
 
 enum PineRuntime {
+    static func evaluateBundled(source: String, bars: [PineRuntimeBar]) async throws -> [PineRuntimePlot] {
+        guard let url = Bundle.main.url(forResource: "pinets", withExtension: "js") else {
+            throw PineRuntimeError.failed("缺少 PineTS 本地运行资源")
+        }
+        let bundleSource = try String(contentsOf: url, encoding: .utf8)
+        return try await evaluate(source: source, bars: bars, bundleSource: bundleSource)
+    }
+
     // Execute on a dedicated background thread. The context must not be shared
     // across concurrent evaluations. No native capabilities are exposed to JS.
     static func evaluate(source: String, bars: [PineRuntimeBar], bundleSource: String) async throws -> [PineRuntimePlot] {
