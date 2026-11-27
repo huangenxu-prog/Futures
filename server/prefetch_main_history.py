@@ -34,13 +34,63 @@ PERIOD_ORDER = {value: i for i, value in enumerate(KLINE_PERIOD_ORDER)}
 # products. Live charts have their own real-time K-line stream.
 FRESH_SECONDS = {
     900: 6 * 3600, 300: 6 * 3600,
-    1800: 12 * 3600, 3600: 12 * 3600,
+    1800: 12 * 3600, 3600: 12 * 3600, 7200: 12 * 3600,
     60: 12 * 3600, 86400: 24 * 3600,
 }
 MAX_SERIES_PER_RUN = 24
 MAX_RUNTIME_SECONDS = 7 * 60
 MIN_FREE_BYTES = 160 * 1024 * 1024
-MIN_AVAILABLE_MEMORY_KIB = 300 * 1024
+MIN_AVAILABLE_MEMORY_KIB = 1024 * 1024
+
+
+FAILURE_FILE = ROOT / "cache" / "main-prefetch-failures.json"
+FAILURE_COOLDOWN = 6 * 3600
+FAILURE_LIMIT = 2
+
+def load_failures():
+    try:
+        data = json.loads(FAILURE_FILE.read_text())
+        now = time.time()
+        return {k:v for k,v in data.items() if isinstance(v,dict) and isinstance(v.get("count"),int) and isinstance(v.get("last"),(int,float)) and 0 <= now-v["last"] < FAILURE_COOLDOWN}
+    except (OSError,ValueError,TypeError,AttributeError):
+        return {}
+
+FAILURE_STATE = load_failures()
+
+def failure_key(key):
+    return str(key[0]) + "|" + str(key[1])
+
+def cooling_down(key,now):
+    v=FAILURE_STATE.get(failure_key(key),{})
+    return v.get("count",0)>=FAILURE_LIMIT and 0<=now-v.get("last",0)<FAILURE_COOLDOWN
+
+def persist_failures():
+    FAILURE_FILE.parent.mkdir(parents=True,exist_ok=True)
+    tmp=None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w",dir=FAILURE_FILE.parent,delete=False) as f:
+            tmp=Path(f.name)
+            json.dump(FAILURE_STATE,f)
+        os.replace(tmp,FAILURE_FILE)
+    except OSError as exc:
+        print("Failure cache write error:",type(exc).__name__,flush=True)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+
+def record_failure(key):
+    k=failure_key(key)
+    old=FAILURE_STATE.get(k,{})
+    now=time.time()
+    count=old.get("count",0) if 0<=now-old.get("last",0)<FAILURE_COOLDOWN else 0
+    FAILURE_STATE[k]=dict(count=count+1,last=now)
+    persist_failures()
+    if count+1>=FAILURE_LIMIT:
+        print("COOLDOWN 6H:",key,flush=True)
+
+def clear_failure(key):
+    if FAILURE_STATE.pop(failure_key(key),None) is not None:
+        persist_failures()
 
 
 def memory_allows_prefetch():
@@ -88,6 +138,9 @@ def select_history_jobs(main_codes, store, now, limit=MAX_SERIES_PER_RUN):
             # Full history is not expected for recently listed contracts.
             # If a cache contains genuine bars, don't repeatedly retry to
             # reach 1200 before the freshness period has elapsed.
+            if cooling_down(key, now):
+                coverage["series_cooldown"] = coverage.get("series_cooldown", 0) + 1
+                continue
             missing = not bool(candles)
             jobs.append(((0 if missing else 1,
                           PERIOD_ORDER[period],
@@ -141,7 +194,7 @@ def fetch_history(api, key, wanted=KLINE_HISTORY_LENGTH):
 
 def run(limit):
     if not memory_allows_prefetch():
-        print("可用内存不足300MiB或无法检测，跳过本轮预热。", flush=True)
+        print("可用内存不足1GiB或无法检测，跳过本轮预热。", flush=True)
         return
     start = time.monotonic()
     os.umask(0o077)
@@ -176,12 +229,12 @@ def run(limit):
         if not jobs:
             write_status(dict(coverage, products=len(codes),
                               attempted=0, succeeded=0, failed=0,
-                              pending=0, state="idle", elapsed_seconds=0))
-            print("所有主力合约的六个周期缓存均处于本轮有效期内。", flush=True)
+                              pending=max(0, coverage["series_total"] - coverage["series_fresh"]), state="idle", elapsed_seconds=0))
+            print("当前没有需要执行的预热任务，部分合约可能处于冷却期。", flush=True)
             return
         for i, key in enumerate(jobs):
             if not memory_allows_prefetch():
-                print("可用内存不足300MiB，结束本轮预热。", flush=True)
+                print("可用内存不足1GiB，结束本轮预热。", flush=True)
                 break
             if time.monotonic() - start >= MAX_RUNTIME_SECONDS:
                 print("达到单轮运行时间预算，剩余任务留给下次。", flush=True)
@@ -200,6 +253,7 @@ def run(limit):
                 bars = fetch_history(api, key)
                 if not bars:
                     failures += 1
+                    record_failure(key)
                     print("无数据:", key, flush=True)
                     continue
                 store.write(key, bars)
@@ -209,6 +263,7 @@ def run(limit):
                     failures += 1
                     print("写入后未能读取:", key, flush=True)
                     continue
+                clear_failure(key)
                 done += 1
                 print("完成:", key[0], key[1],
                       "有效:", len(bars), "磁盘:", len(saved), flush=True)
