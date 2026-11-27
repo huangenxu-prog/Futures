@@ -107,7 +107,11 @@ jobs:
                 stage = name + ": plots";
                 results[name] = {};
                 for (const [key, series] of Object.entries(plots)) {
-                  results[name][key] = {count:series.data.length, last:series.data[series.data.length-1].value};
+                  if (key.startsWith("__")) continue;
+                  if (!Array.isArray(series.data) || !series.data.length) throw new Error("Missing series: " + key);
+                  const last = series.data[series.data.length-1].value;
+                  if (typeof last !== "number" || !Number.isFinite(last)) throw new Error("Invalid numeric plot: " + key);
+                  results[name][key] = {count:series.data.length, last};
                 }
               }
               probeResult = JSON.stringify(results);
@@ -122,7 +126,7 @@ jobs:
                   let json = result.toString()!
                   print(json)
                   let data = Data(json.utf8)
-                  let output = try JSONSerialization.jsonObject(with: data) as! [String: [String: [String: Double]]]
+                  let output = try JSONDecoder().decode([String: [String: [String: Double]]].self, from: data)
                   func check(_ group: String, _ series: String, _ expected: Double) {
                       guard let v = output[group]?[series], v["count"] == 200,
                             let last = v["last"], abs(last-expected) < 0.01 else {
