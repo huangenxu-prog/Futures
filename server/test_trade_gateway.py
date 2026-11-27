@@ -77,5 +77,15 @@ class ClosedProfitTests(unittest.TestCase):
             self.assertEqual(OrderIntentLedger(path).closed_profit("a", "fill"), 12.5)
             self.assertIsNone(ledger.closed_profit("b", "fill"))
 
+class FillCommissionTests(unittest.TestCase):
+    def test_explicit_fee_only(self):
+        from trade_gateway import fill_row
+        base = dict(order_id="o", exchange_id="CZCE", instrument_id="MA701",
+                    direction="SELL", offset="OPEN", price=3126, volume=1, trade_date_time=1)
+        self.assertIsNone(fill_row("f", Obj(**base))["commission"])
+        self.assertEqual(fill_row("f", Obj(**base, commission=0))["commission"], 0)
+        self.assertEqual(fill_row("f", Obj(**base, commission=3.17))["commission"], 3.17)
+        self.assertIsNone(fill_row("f", Obj(**base, commission=float("nan")))["commission"])
+
 if __name__ == "__main__":
     unittest.main()

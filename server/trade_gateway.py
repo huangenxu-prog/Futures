@@ -114,11 +114,13 @@ def order_row(oid, o):
             "display_state": order_state(str(o.status), int(o.volume_orign), int(o.volume_left), message, is_error, exchange_order_id)}
 
 def fill_row(tid, t):
+    fee = number(getattr(t, "commission", None))
     return {"id": tid, "order_id": str(t.order_id),
             "symbol": str(t.exchange_id) + "." + str(t.instrument_id),
             "direction": str(t.direction), "offset": str(t.offset),
             "price": number(t.price), "quantity": int(t.volume),
-            "time_ns": int(t.trade_date_time)}
+            "time_ns": int(t.trade_date_time),
+            "commission": fee if fee is not None and fee >= 0 else None}
 
 def validate_order(body):
     oid = body["id"]

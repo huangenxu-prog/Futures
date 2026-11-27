@@ -99,6 +99,7 @@ private struct CloudSnapshot: Decodable {
         let quantity: Int
         let time_ns: Int64
         let calculated_close_profit: Double?
+        let commission: Double?
     }
     let positions: [Position]
     let orders: [Order]?
@@ -1178,7 +1179,7 @@ struct TradingCenterView: View {
                             Text("浮盈").frame(width: 75, alignment: .trailing)
                             Text("保证金").frame(width: 85, alignment: .trailing)
                             Text("市值").frame(width: 85, alignment: .trailing)
-                        }.font(.system(size: 12)).foregroundStyle(.secondary)
+                        }.font(.system(size: 14)).foregroundStyle(.secondary)
                         ForEach(session.snapshot?.positions ?? []) { p in
                             if p.long > 0 { positionRow(p, long: true) }
                             if p.short > 0 { positionRow(p, long: false) }
@@ -1196,24 +1197,26 @@ struct TradingCenterView: View {
                 ScrollView(.horizontal, showsIndicators: true) {
                     VStack(spacing: 0) {
                         HStack(spacing: 5) {
-                            recordCell("合约", width: 115)
+                            recordCell("合约", width: 132)
                             recordCell("开平", width: 38)
                             recordCell("成交价", width: 60)
                             recordCell("手数", width: 32)
-                            recordCell("时间", width: 68)
+                            recordCell("时间", width: 76)
                             recordCell("平仓盈亏", width: 88)
+                            recordCell("手续费", width: 76)
                         }.foregroundStyle(.secondary)
                         Divider()
                         ForEach((session.snapshot?.fills ?? []).sorted { $0.time_ns > $1.time_ns }) { f in
                             HStack(spacing: 5) {
-                                recordCell(contractName(f.symbol), width: 115)
+                                recordCell(contractName(f.symbol), width: 132)
                                 recordCell(recordAction(f.direction, f.offset), width: 38)
                                     .foregroundStyle(f.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
                                 recordCell(f.price?.formatted() ?? "--", width: 60)
                                 recordCell(String(f.quantity), width: 32)
-                                recordCell(recordTime(f.time_ns), width: 68)
+                                recordCell(recordTime(f.time_ns), width: 76)
                                 recordCell(money(f.calculated_close_profit, suffix: false), width: 88)
                                     .foregroundStyle(MarketPalette.movement(f.calculated_close_profit))
+                                recordCell(money(f.commission, suffix: false), width: 76)
                             }.padding(.vertical, 10)
                             Divider()
                         }
@@ -1227,15 +1230,17 @@ struct TradingCenterView: View {
                 ScrollView(.horizontal, showsIndicators: true) {
                     VStack(spacing: 0) {
                         HStack(spacing: 5) {
-                            recordCell("合约", width: 115)
+                            recordCell("合约", width: 132)
                             recordCell("状态", width: 56)
                             recordCell("开平", width: 38)
                             recordCell("委托价", width: 60)
                             recordCell("委托量", width: 48)
-                            recordCell("已成交", width: 48)
-                            recordCell(tab == "挂单" ? "剩余量" : "已撤单", width: 48)
-                            recordCell("成交均价", width: 72)
-                            recordCell("时间", width: 68)
+                            if tab != "挂单" {
+                                recordCell("已成交", width: 48)
+                                recordCell("已撤单", width: 48)
+                                recordCell("成交均价", width: 72)
+                            }
+                            recordCell("时间", width: 76)
                             if tab == "挂单" { recordCell("操作", width: 42) }
                         }.foregroundStyle(.secondary)
                         Divider()
@@ -1243,16 +1248,18 @@ struct TradingCenterView: View {
                             HStack(spacing: 5) {
                                 Button { orderDetail = o } label: {
                                     HStack(spacing: 5) {
-                                        recordCell(contractName(o.symbol), width: 115)
+                                        recordCell(contractName(o.symbol), width: 132)
                                         recordCell(o.stateText, width: 56)
                                         recordCell(recordAction(o.direction, o.offset), width: 38)
                                             .foregroundStyle(o.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
                                         recordCell(o.price?.formatted() ?? "--", width: 60)
                                         recordCell(String(o.quantity), width: 48)
-                                        recordCell(String(max(0, o.quantity - o.remaining)), width: 48)
-                                        recordCell(tab == "挂单" ? String(o.remaining) : canceledQuantity(o), width: 48)
-                                        recordCell(o.trade_price?.formatted() ?? "--", width: 72)
-                                        recordCell(recordTime(o.time_ns), width: 68)
+                                        if tab != "挂单" {
+                                            recordCell(String(max(0, o.quantity - o.remaining)), width: 48)
+                                            recordCell(canceledQuantity(o), width: 48)
+                                            recordCell(o.trade_price?.formatted() ?? "--", width: 72)
+                                        }
+                                        recordCell(recordTime(o.time_ns), width: 76)
                                     }.contentShape(Rectangle())
                                 }.buttonStyle(.plain)
                                     .accessibilityHint("查看委托详情及原始回报")
@@ -1331,7 +1338,7 @@ struct TradingCenterView: View {
         }
     }
     private func recordCell(_ value: String, width: CGFloat? = nil) -> some View {
-        Text(value).font(.system(size: 13)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
+        Text(value).font(.system(size: 14)).monospacedDigit().lineLimit(1).truncationMode(.tail)
             .frame(width: width, alignment: .leading)
             .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
     }
@@ -1547,15 +1554,15 @@ struct TradingCenterView: View {
         } label: {
             HStack(spacing: 4) {
                 HStack(spacing: 3) {
-                    Text(contractName(p.symbol)).font(.system(size: 13, weight: .medium)).lineLimit(1).minimumScaleFactor(0.75)
-                    Text(long ? "多" : "空").font(.system(size: 12)).foregroundStyle(long ? MarketPalette.up : MarketPalette.down)
+                    Text(contractName(p.symbol)).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                    Text(long ? "多" : "空").font(.system(size: 14)).foregroundStyle(long ? MarketPalette.up : MarketPalette.down)
                 }.frame(width: 132, alignment: .leading)
                 Text(String(qty) + "/" + (frozen.map { String(max(0, qty-$0)) } ?? "--")).frame(width: 65)
                 Text(average.map { $0.formatted() } ?? "--").frame(width: 67, alignment: .trailing)
                 Text(money(profit, suffix: false)).foregroundStyle(MarketPalette.movement(profit)).frame(width: 75, alignment: .trailing)
                 Text(money(long ? p.margin_long : p.margin_short, suffix: false)).frame(width: 85, alignment: .trailing)
                 Text(money(long ? p.market_value_long : p.market_value_short, suffix: false)).frame(width: 85, alignment: .trailing)
-            }.font(.system(size: 14)).monospacedDigit().foregroundStyle(MarketPalette.ink).lineLimit(1).minimumScaleFactor(0.65)
+            }.font(.system(size: 14)).monospacedDigit().foregroundStyle(MarketPalette.ink).lineLimit(1)
         }.buttonStyle(.borderless).padding(.vertical, 8)
         Divider()
         }.background(expanded ? MarketPalette.raised : Color.clear)
