@@ -96,6 +96,36 @@ public final class TradingChartModel {
         }
     }
 
+    /// Host opt-in. Zero preserves the upstream immediate calculation behavior.
+    @ObservationIgnored public var indicatorUpdateInterval: TimeInterval = 0
+    @ObservationIgnored private var lastIndicatorCalculation: TimeInterval?
+    @ObservationIgnored private var pendingIndicatorUpdate: Task<Void, Never>?
+
+    /// Cancel a deferred update when this chart is no longer active.
+    public func cancelDeferredIndicatorUpdate() {
+        pendingIndicatorUpdate?.cancel()
+        pendingIndicatorUpdate = nil
+    }
+
+    private func updateIndicatorsForLiveMutation(_ result: ChartSeries.UpdateResult) {
+        guard !indicators.isEmpty else { return }
+        let interval = indicatorUpdateInterval
+        let elapsed = lastIndicatorCalculation.map { ProcessInfo.processInfo.systemUptime - $0 } ?? interval
+        guard result == .updatedLast, interval > 0, elapsed < interval else {
+            recomputeIndicators()
+            return
+        }
+        guard pendingIndicatorUpdate == nil else { return }
+        // One trailing update, only after an actual mutation; never poll.
+        pendingIndicatorUpdate = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(max(0, interval - elapsed))) }
+            catch { return }
+            guard !Task.isCancelled, let self else { return }
+            self.pendingIndicatorUpdate = nil
+            self.batch { self.recomputeIndicators() }
+        }
+    }
+
     /// The displayed data. Change it through ``setSeries(_:scroll:)``, ``update(price:at:volume:)`` and ``prependHistory(_:)``.
     public private(set) var series: ChartSeries
 
@@ -628,7 +658,7 @@ public final class TradingChartModel {
                 renderDirty = false
                 return
             }
-            recomputeIndicators()
+            updateIndicatorsForLiveMutation(result)
             if wasAtLiveEdge { moveToLiveEdge() }
             // A tick that changes the newest bar, which the render window does not reach, changes nothing the charts draw.
             if result == .updatedLast, let last = series.lastTime, !window.contains(last), !wasAtLiveEdge {
@@ -769,11 +799,14 @@ public final class TradingChartModel {
     }
 
     private func recomputeIndicators() {
+        cancelDeferredIndicatorUpdate()
         guard !indicators.isEmpty else {
+            lastIndicatorCalculation = nil
             if !indicatorOutputs.isEmpty { indicatorOutputs = [:] }
             if !paletteBases.isEmpty { paletteBases = [:] }
             return
         }
+        lastIndicatorCalculation = ProcessInfo.processInfo.systemUptime
         let input = IndicatorInput(series: series)
         var outputs: [String: IndicatorOutput] = [:]
         outputs.reserveCapacity(indicators.count)

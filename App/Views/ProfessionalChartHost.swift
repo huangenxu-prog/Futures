@@ -21,6 +21,7 @@ struct ProfessionalChartHost: View {
     var onVerticalSwipe: ((Int) -> Void)? = nil
     var isInteractive = true
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
     @State private var feedOwner = UUID()
     @AppStorage(CandleAppearance.hollowKey) private var hollowRising = true
     @AppStorage(CandleAppearance.upKey) private var candleUp = CandleAppearance.automatic
@@ -230,6 +231,7 @@ struct ProfessionalChartHost: View {
         .tradingChartStrings(chartStrings)
         .background(backgroundStyle.surface)
         .onAppear {
+            model.indicatorUpdateInterval = isReplay ? 0 : 5
             model.onVerticalSwipe = isReplay ? nil : onVerticalSwipe
             model.style = .candles
             model.indicators = displaySettings.indicators(darkAppearance: colorScheme == .dark)
@@ -249,11 +251,16 @@ struct ProfessionalChartHost: View {
                 attachChartFeed()
             } else {
                 if !isReplay { feed.detach(owner: feedOwner) }
+                model.cancelDeferredIndicatorUpdate()
                 historyTask?.cancel()
                 historyTask = nil
                 model.activeDrawingTool = nil
                 configureChart()
             }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { model.cancelDeferredIndicatorUpdate() }
+            else if isInteractive && !isReplay { attachChartFeed() }
         }
         .onChange(of: colorScheme) { _, scheme in
             model.indicators = displaySettings.indicators(darkAppearance: scheme == .dark)
@@ -272,6 +279,7 @@ struct ProfessionalChartHost: View {
             }
         }
         .onDisappear {
+            model.cancelDeferredIndicatorUpdate()
             feed.detach(owner: feedOwner)
             model.onEvent = nil
             model.onVerticalSwipe = nil
