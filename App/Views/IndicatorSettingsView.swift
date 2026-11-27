@@ -6,6 +6,7 @@ struct IndicatorSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focusedField: String?
     @State private var draft: ChartDisplaySettings
+    @State private var editingPine: PineFormulaDefinition?
     @State private var editingFormula: FormulaDefinition?
     @State private var composingFormula: FormulaDefinition?
     let previewBars: [FormulaBar]
@@ -169,12 +170,34 @@ struct IndicatorSettingsView: View {
                     }
                     .disabled(draft.formulas.count >= 12)
                 }
+                Section("TradingView 指标") {
+                    ForEach(draft.pineFormulas) { formula in
+                        HStack {
+                            Toggle(formula.name, isOn: Binding(get: {
+                                draft.pineFormulas.first(where: { $0.id == formula.id })?.enabled ?? false
+                            }, set: { enabled in
+                                if let i = draft.pineFormulas.firstIndex(where: { $0.id == formula.id }) {
+                                    draft.pineFormulas[i].enabled = enabled
+                                }
+                            }))
+                            Button { editingPine = formula } label: { Image(systemName: "pencil") }
+                                .buttonStyle(.borderless)
+                        }
+                    }
+                    .onDelete { draft.pineFormulas.remove(atOffsets: $0) }
+                    Button { editingPine = PineFormulaDefinition() } label: {
+                        Label("新建 TradingView 指标", systemImage: "plus.circle")
+                    }
+                    .disabled(draft.pineFormulas.count >= 12)
+                }
                 Section {
                     Button("恢复默认参数") {
                         dismissInput()
                         let formulas = draft.formulas
+                        let pineFormulas = draft.pineFormulas
                         draft = ChartDisplaySettings()
                         draft.formulas = formulas
+                        draft.pineFormulas = pineFormulas
                     }
                         .foregroundStyle(MarketPalette.accent)
                 } footer: {
@@ -212,6 +235,15 @@ struct IndicatorSettingsView: View {
                     }
                     .fontWeight(.semibold)
                     .disabled(!draft.isValid)
+                }
+            }
+        }
+        .sheet(item: $editingPine) { formula in
+            PineFormulaEditorView(draft: formula) { updated in
+                if let i = draft.pineFormulas.firstIndex(where: { $0.id == updated.id }) {
+                    draft.pineFormulas[i] = updated
+                } else if draft.pineFormulas.count < 12 {
+                    draft.pineFormulas.append(updated)
                 }
             }
         }
