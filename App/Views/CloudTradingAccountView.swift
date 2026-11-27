@@ -815,7 +815,7 @@ struct TradingCenterView: View {
             Text(label).foregroundStyle(MarketPalette.muted).fixedSize()
             Spacer(minLength: 0)
             Text(value).foregroundStyle(MarketPalette.ink).lineLimit(1).minimumScaleFactor(0.65)
-        }.font(.system(size: 12)).monospacedDigit()
+        }.font(.system(size: 14)).monospacedDigit()
     }
     private var sharedTradeControls: some View {
         VStack(spacing: 8) {
@@ -973,7 +973,7 @@ struct TradingCenterView: View {
                 Spacer(minLength: 0)
                 Text(value.map { $0.formatted() } ?? "--").foregroundStyle(quoteColor(value))
                 if let volume { Text(volume.formatted()).foregroundStyle(.secondary) }
-            }.font(.system(size: 12)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+            }.font(.system(size: 14)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
         }.buttonStyle(.plain).disabled(value == nil)
     }
     private func priceButton(_ title: String, _ value: Double?) -> some View {
