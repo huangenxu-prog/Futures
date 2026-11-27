@@ -96,6 +96,13 @@ enum MarketDataService {
         return bars.sorted { $0.time < $1.time }
     }
 
+    /// Read and decode disk history outside the UI actor.
+    static func cachedAsync(symbol: String, period: Int) async -> [MarketBar]? {
+        await Task.detached(priority: .utility) {
+            cached(symbol: symbol, period: period)
+        }.value
+    }
+
     private static func save(_ bars: [MarketBar], symbol: String, period: Int) {
         guard let url = cacheURL(symbol: symbol, period: period) else { return }
         // Preserve write ordering; encoding and atomic file replacement must

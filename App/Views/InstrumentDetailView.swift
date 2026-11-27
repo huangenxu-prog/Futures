@@ -352,11 +352,9 @@ private struct InstrumentDetailPage: View {
             let seconds = periodSeconds
             let key = chartKey
             if displayedKey != key {
-                let cached = await Task.detached(priority: .utility) {
-                    MarketDataService.cached(symbol: symbol, period: seconds)
-                }.value
+                let cached = await MarketDataService.cachedAsync(symbol: symbol, period: seconds)
                 guard !Task.isCancelled, chartKey == key else { return }
-                prepareCachedCandles(symbol: symbol, period: seconds, prepared: cached ?? [])
+                prepareCachedCandles(prepared: cached ?? [])
             }
             if !isActive {
                 // Adjacent pages own their own rendered chart, but no live stream.
@@ -384,14 +382,14 @@ private struct InstrumentDetailPage: View {
                         applyLiveCandle(event)
                         if event.bars != nil, rawBars.count < KlineStartupMerge.initialCount,
                            hydration == nil {
-                            hydration = Task { @MainActor in await loadCandles(reset: false) }
+                            hydration = Task { @MainActor in await loadCandles() }
                         }
                     }
                 } catch is CancellationError {
                     return
                 } catch {
                     if hydration == nil, rawBars.count < KlineStartupMerge.initialCount {
-                        hydration = Task { @MainActor in await loadCandles(reset: false) }
+                        hydration = Task { @MainActor in await loadCandles() }
                     }
                     do { try await Task.sleep(for: .seconds(retryDelay + Double.random(in: 0...0.5))) } catch { return }
                     retryDelay = min(30, retryDelay * 2)
@@ -420,7 +418,7 @@ private struct InstrumentDetailPage: View {
                     selectedContract = contract
                     currentPriceTick = contract.priceTick
                     currentVolumeMultiple = contract.volumeMultiple
-                    prepareCachedCandles(symbol: contract.code, period: periodSeconds)
+                    // The chart-key task reads the new contract cache off the main actor.
                 }
                 showContracts = false
             }
@@ -437,22 +435,21 @@ private struct InstrumentDetailPage: View {
         }
     }
     @MainActor
-    private func prepareCachedCandles(symbol: String, period: Int, prepared: [MarketBar]? = nil) {
+    private func prepareCachedCandles(prepared: [MarketBar]) {
         displayedKey = chartKey
         lastStreamCandleKey = nil
         mostRecentStreamBar = nil
         lastCachedCandleAt = nil
-        rawBars = prepared ?? MarketDataService.cached(symbol: symbol, period: period) ?? []
+        rawBars = prepared
         chartFeed.publish(key: chartKey, snapshot: rawBars)
         selectedCandleTime = nil
         loadError = nil
         loading = rawBars.isEmpty
     }
 
-    @MainActor private func loadCandles(reset: Bool) async {
+    @MainActor private func loadCandles() async {
         let requestedPeriod = periodSeconds
         let symbol = chartSymbol
-        if reset { prepareCachedCandles(symbol: symbol, period: requestedPeriod) }
         let requestedKey = chartKey
         loadError = nil
         loading = rawBars.isEmpty
@@ -517,11 +514,16 @@ private struct InstrumentDetailPage: View {
             return
         }
 
-        if rawBars != updated { rawBars = updated }
+        let changed = rawBars != updated
+        if changed {
+            rawBars = updated
+        }
         KlineDiagnostics.record(event, period: periodSeconds, newest: updated.last, started: applyStarted)
-        // The original TradingChart incremental API consumes each genuine
-        // tail update immediately. Only snapshots/history use reconciliation.
-        chartFeed.publish(key: chartKey, snapshot: updated, tailOnly: tailOnly)
+        // Keep stream bookkeeping even for identical authoritative snapshots,
+        // but avoid publishing the same array or invalidating the chart.
+        if changed {
+            chartFeed.publish(key: chartKey, snapshot: updated, tailOnly: tailOnly)
+        }
         lastStreamCandleKey = chartKey
         // Retain the freshest authoritative bar while the parallel history
         // request is pending; never let a late HTTP result roll it back.
@@ -533,7 +535,7 @@ private struct InstrumentDetailPage: View {
         // Throttling prevents thousands of writes per trading session.
         let now = Date()
         if lastCachedCandleAt == nil ||
-           now.timeIntervalSince(lastCachedCandleAt!) >= 30 {
+           (changed && now.timeIntervalSince(lastCachedCandleAt!) >= 30) {
             MarketDataService.cache(updated, symbol: chartSymbol, period: periodSeconds)
             lastCachedCandleAt = now
         }

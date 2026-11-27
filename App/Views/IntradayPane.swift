@@ -56,7 +56,8 @@ struct IntradayPane: View {
 
     @MainActor private func merge(_ incoming:[MarketBar], live:Bool = false) {
         let oldDay = bars.last.map { IntradaySession.day($0.time) }
-        bars = IntradaySession.merge(existing:bars,incoming:incoming,preserve:live ? [] : streamTimes)
+        let merged = IntradaySession.merge(existing:bars,incoming:incoming,preserve:live ? [] : streamTimes)
+        if merged != bars { bars = merged }
         if live {
             streamTimes.formUnion(incoming.map(\.time))
             streamTimes.formIntersection(Set(bars.map(\.time)))
@@ -69,7 +70,9 @@ struct IntradayPane: View {
     }
 
     @MainActor private func load() async {
-        merge(MarketDataService.cached(symbol:symbol,period:60) ?? [])
+        let cached = await MarketDataService.cachedAsync(symbol:symbol,period:60)
+        guard !Task.isCancelled else { return }
+        merge(cached ?? [])
         // The gateway may send a two-bar handshake. Fetch historical minutes
         // separately; then merge SSE updates by timestamp, never replace a day.
         streamTimes.removeAll()
