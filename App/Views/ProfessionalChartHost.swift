@@ -65,8 +65,16 @@ struct ProfessionalChartHost: View {
     @State private var displaySettings = ChartDisplaySettings.load()
     @State private var sessionAxis = TradingSessionAxis()
     @State private var drawingsRestored = false
-    @State private var historyDepth = 1100
+    @State private var historyDepth = 0
     @State private var historyTask: Task<Void, Never>?
+
+    private var historyBudget: Int { ChartHistoryBudget.limit(period: period).bars }
+    private var historyCutoff: Int64 {
+        ChartHistoryBudget.cutoff(period: period, now: Int64(Date().timeIntervalSince1970))
+    }
+    private var remainingHistory: Int {
+        ChartHistoryBudget.remaining(period: period, loaded: model.series.count)
+    }
 
     private var interval: ChartInterval {
         ChartInterval(seconds: TimeInterval(period))
@@ -516,7 +524,7 @@ struct ProfessionalChartHost: View {
                             scroll: earlierCandleChanged ? .preserve : .automatic)
             model.currentPrice = incoming.last?.close
             // A shorter first live page still supports older K-line paging.
-            model.hasMoreHistory = historyDepth < 8964
+            model.hasMoreHistory = !isReplay && remainingHistory > 0 && incoming[0].time > historyCutoff
         } else if let last = incoming.last, last != previous.last {
             model.update(chartCandle(last), interval: interval)
             model.currentPrice = last.close
@@ -577,7 +585,8 @@ struct ProfessionalChartHost: View {
               let first = model.series.firstTime else { return }
         model.isLoadingHistory = true
         defer { model.isLoadingHistory = false }
-        guard let before = sessionAxis.actualTime(for: first) else {
+        guard let before = sessionAxis.actualTime(for: first), before > historyCutoff, remainingHistory > 0 else {
+            model.hasMoreHistory = false
             model.isLoadingHistory = false
             return
         }
@@ -585,18 +594,25 @@ struct ProfessionalChartHost: View {
             // TqSdk's rolling serial has a bounded depth. Expand the lookback
             // only when needed; the chart keeps the user's historical anchor.
             while !Task.isCancelled {
+                let requested = min(KlineStartupMerge.historyPageCount, remainingHistory)
+                guard requested > 0 else { model.hasMoreHistory = false; return }
+                // Upstream serial depth may exceed the local visible history budget.
+                // Never change the backtest endpoint's limit.
+                let depthLimit = min(8964, max(500, historyBudget + 300))
+                historyDepth = min(depthLimit, max(historyDepth, model.series.count + requested))
                 let page = try await MarketDataService.fetchOlderPage(
                     symbol: symbol, period: period, before: before,
-                    count: KlineStartupMerge.historyPageCount, depth: historyDepth
+                    count: max(5, requested), depth: historyDepth
                 )
                 try Task.checkCancellation()
-                let older = page.bars
+                let older = Array(page.bars.filter { $0.time >= historyCutoff }.suffix(min(requested, remainingHistory)))
+                if older.isEmpty && !page.bars.isEmpty { model.hasMoreHistory = false; return }
                 if !older.isEmpty {
                     sessionAxis.register(older.map(\.time), period: period)
                     model.prependHistory(ChartSeries(candles: older.map(chartCandle),
                                                      interval: interval))
-                    historyDepth = min(8964, historyDepth + 450)
-                    if older.count < KlineStartupMerge.historyPageCount && historyDepth == 8964 {
+                    historyDepth = min(depthLimit, historyDepth + 300)
+                    if remainingHistory == 0 || older.count < page.bars.count || (older.count < requested && historyDepth == depthLimit) {
                         model.hasMoreHistory = false
                     }
                     return
@@ -607,12 +623,12 @@ struct ProfessionalChartHost: View {
                     model.hasMoreHistory = false
                     return
                 }
-                if historyDepth >= 8964 {
+                if historyDepth >= depthLimit {
                     model.hasMoreHistory = false
                     model.isLoadingHistory = false
                     return
                 }
-                historyDepth = min(8964, historyDepth + 900)
+                historyDepth = min(depthLimit, historyDepth + 300)
             }
         } catch is CancellationError {
             model.isLoadingHistory = false
