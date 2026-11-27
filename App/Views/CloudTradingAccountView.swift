@@ -1299,7 +1299,7 @@ struct TradingCenterView: View {
     private func frozenFills(_ fills: [CloudSnapshot.Fill]) -> some View {
         let closes = fills.filter { $0.offset != "OPEN" }
         let profits = closes.compactMap { $0.calculated_close_profit }.filter { $0.isFinite }
-        let total = !closes.isEmpty && profits.count == closes.count ? profits.reduce(0, +) : nil
+        let total: Double? = profits.isEmpty ? nil : profits.reduce(0, +)
         return VStack(spacing: 0) {
             frozenRecordTable {
                 VStack(spacing: 0) {
