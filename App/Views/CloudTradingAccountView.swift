@@ -155,14 +155,52 @@ private final class CloudTradeSession: ObservableObject {
     }
     func allowManualLogin() { manualLogout = false; retryAfter = .distantPast }
     private var awaitingCancelID: String?
+    private var trackedOrderID: String?
+    private var trackedFeedbackKey: String?
+    private var feedbackTask: Task<Void, Never>?
+    @Published private(set) var lastFilledOrderID: String?
+    private func showFeedback(_ message: String, transient: Bool = false) {
+        feedbackTask?.cancel()
+        actionMessage = message
+        guard transient else { return }
+        feedbackTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            guard let self, self.actionMessage == message, self.pendingOrder == nil else { return }
+            self.actionMessage = nil
+        }
+    }
     private func reconcile(_ data: CloudSnapshot) {
         if let id = awaitingCancelID, let order = data.orders?.first(where: { $0.id == id }), order.status == "FINISHED" {
             awaitingCancelID = nil
-            actionMessage = "委托状态：" + order.stateText
+            showFeedback("委托状态：" + order.stateText, transient: order.display_state == "CANCELED" || order.display_state == "PARTIAL_CANCELED" || order.display_state == "FILLED")
         }
-        if let pendingOrder, data.orders?.contains(where: { $0.id == pendingOrder }) == true {
-            clearPending()
-            actionMessage = "已收到委托记录"
+        guard let id = pendingOrder ?? trackedOrderID,
+              let order = data.orders?.first(where: { $0.id == id }) else { return }
+        if pendingOrder == id { clearPending() }
+        trackedOrderID = id
+        let filled = max(0, order.quantity - order.remaining)
+        let key = "\(id)|\(order.display_state ?? order.status)|\(filled)|\(order.message)"
+        guard trackedFeedbackKey != key else { return }
+        trackedFeedbackKey = key
+        let prefix = "委托：" + order.symbol + " "
+        switch order.display_state {
+        case "FILLED" where order.quantity > 0 && order.remaining == 0:
+            lastFilledOrderID = id
+            trackedOrderID = nil
+            showFeedback(prefix + "全部成交 \(filled)手", transient: true)
+        case "PARTIAL":
+            showFeedback(prefix + "部分成交 \(filled)/\(order.quantity)手", transient: true)
+        case "ALIVE":
+            showFeedback(prefix + "已挂单", transient: true)
+        case "REJECTED":
+            trackedOrderID = nil
+            showFeedback(prefix + "拒单" + (order.message.isEmpty ? "" : " · " + order.message))
+        case "CANCELED", "PARTIAL_CANCELED":
+            trackedOrderID = nil
+            showFeedback(prefix + order.stateText, transient: true)
+        default:
+            if order.status == "FINISHED" { trackedOrderID = nil }
+            showFeedback(prefix + order.stateText + (order.message.isEmpty ? "" : " · " + order.message))
         }
     }
     private func install(_ data: CloudSnapshot, token: String, url: URL, address: String, key: String) {
@@ -171,6 +209,7 @@ private final class CloudTradeSession: ObservableObject {
         savedPendingAddress = address
         let unresolved = isLive ? "" : TradeKeychain.load(address, kind: "pending")
         pendingOrder = unresolved.isEmpty ? nil : unresolved
+        trackedOrderID = pendingOrder; trackedFeedbackKey = nil; lastFilledOrderID = nil
         reconcile(data)
         snapshot = data; signedIn = true
         error = nil
@@ -190,26 +229,29 @@ private final class CloudTradeSession: ObservableObject {
     @Published private(set) var actionMessage: String?
     private var mutating = false
     var canTrade: Bool { signedIn && !isLive && snapshot?.simulation_orders == true && snapshot?.order_submission_enabled != false && snapshot?.maintenance != true && !busy && !mutating && pendingOrder == nil }
-    func submit(symbol: String, direction: String, offset: String, price: String, quantity: String) async {
-        guard canTrade, let url = endpoint, let token else { return }
+    @discardableResult
+    func submit(symbol: String, direction: String, offset: String, price: String, quantity: String) async -> String? {
+        guard canTrade, let url = endpoint, let token else { return nil }
         mutating = true; busy = true
         defer { mutating = false; busy = false }
         let id = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         guard !activeAddress.isEmpty, TradeKeychain.save(id, address: activeAddress, kind: "pending") else {
-            actionMessage = "无法保存委托保护记录，未发送委托"
-            return
+            showFeedback("无法保存委托保护记录，未发送委托")
+            return nil
         }
         savedPendingAddress = activeAddress
         pendingOrder = id
-        actionMessage = "正在提交模拟委托"
+        trackedOrderID = id; trackedFeedbackKey = nil; lastFilledOrderID = nil
+        showFeedback("正在提交模拟委托")
         do {
             _ = try await request(base: url, action: "order", key: accessKey, token: token,
                                   body: ["id": id, "symbol": symbol, "direction": direction, "offset": offset, "price": price, "quantity": quantity])
-            actionMessage = "指令已交给SDK，等待委托回报"
+            if pendingOrder == id { showFeedback("指令已交给SDK，等待委托回报") }
         } catch {
-            actionMessage = "提交结果未确认，请查看委托列表，勿重复下单。编号：" + id
+            if pendingOrder == id { showFeedback("提交结果未确认，请查看委托列表，勿重复下单。编号：" + id) }
         }
         await refresh()
+        return id
     }
     func cancel(_ id: String) async {
         guard signedIn, !isLive, snapshot?.simulation_orders == true, snapshot?.maintenance != true, !busy, !mutating, let url = endpoint, let token else { return }
@@ -218,15 +260,16 @@ private final class CloudTradeSession: ObservableObject {
         do {
             _ = try await request(base: url, action: "cancel", key: accessKey, token: token, body: ["id": id])
             awaitingCancelID = id
-            actionMessage = "撤单指令已交给SDK，等待回报"
+            showFeedback("撤单指令已交给SDK，等待回报")
         } catch {
-            actionMessage = "撤单结果未确认，请核对委托状态"
+            showFeedback("撤单结果未确认，请核对委托状态")
         }
         await refresh()
     }
     func acknowledgeUncertainOrder() {
         clearPending()
-        actionMessage = "已手动解除提交锁定，请先核对快期委托记录"
+        trackedOrderID = nil; trackedFeedbackKey = nil
+        showFeedback("已手动解除提交锁定，请先核对快期委托记录")
     }
     private let http: URLSession = {
         let config = URLSessionConfiguration.ephemeral
@@ -315,6 +358,7 @@ private final class CloudTradeSession: ObservableObject {
             _ = TradeKeychain.remove(activeAddress, kind: "session")
         }
         generation = UUID(); snapshot = nil; signedIn = false; latencyMS = nil
+        feedbackTask?.cancel(); actionMessage = nil; trackedOrderID = nil; trackedFeedbackKey = nil; lastFilledOrderID = nil; awaitingCancelID = nil
         token = nil; endpoint = nil; accessKey = ""; error = nil
         defer { busy = false }
         if let url, let session {
@@ -403,7 +447,7 @@ struct TradingCenterView: View {
     @State private var selectedPrice = ""
     @State private var selectedQuantity = 1
     @State private var pendingAction: String?
-    @State private var showQuickConfirmation = false
+    @State private var quickSubmittedID: String?
     @State private var quickConfirmationError: String?
     @State private var chooseCloseSide = false
     @State private var closeToday = false
@@ -442,7 +486,7 @@ struct TradingCenterView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if let side = closingSide { closingBar(side) }
                 else if let id = cancelID { cancelConfirmationBar(id) }
-                else if !quickOnly, let action = pendingAction { orderConfirmationBar(action) }
+                else if let action = pendingAction { orderConfirmationBar(action) }
             }
             .background(MarketPalette.background)
             .safeAreaInset(edge: .top, spacing: 0) {
@@ -491,18 +535,11 @@ struct TradingCenterView: View {
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showAccount = false } } }
                 }
             }
-            .alert("确认模拟委托", isPresented: $showQuickConfirmation, presenting: openingDraft) { draft in
-                Button("确认" + draft.title) {
-                    if validDraft(draft.action) && pendingAction == draft.action {
-                        submitConfirmed(draft.action)
-                    } else {
-                        pendingAction = nil; openingDraft = nil
-                        quickConfirmationError = "委托条件已变化，请重新核对报价后下单"
-                    }
-                }
-                Button("取消", role: .cancel) { pendingAction = nil; openingDraft = nil }
-            } message: { draft in
-                Text("\(contractName(draft.symbol)) \(draft.title) \(draft.quantity) 手 @ \(draft.price)")
+            .task(id: quickFilledID) {
+                guard let id = quickFilledID else { return }
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard quickFilledID == id, !session.busy, pendingAction == nil, closingSide == nil else { return }
+                dismiss()
             }
             .confirmationDialog("确认已在快期核对委托结果？", isPresented: $unlock) {
                 Button("解除锁定") { session.acknowledgeUncertainOrder() }
@@ -536,7 +573,7 @@ struct TradingCenterView: View {
                 if signedIn {
                     openInitialIfReady()
                 } else {
-                    pendingAction = nil; openingDraft = nil; showQuickConfirmation = false; orderDetail = nil; cancelID = nil; closingSide = nil; closeConfirm = false
+                    pendingAction = nil; openingDraft = nil; quickSubmittedID = nil; orderDetail = nil; cancelID = nil; closingSide = nil; closeConfirm = false
                     recentTradeQuotes.removeAll(); expandedHolding = nil
                 }
             }
@@ -550,6 +587,11 @@ struct TradingCenterView: View {
                 }
             }
         }.tint(MarketPalette.accent)
+    }
+    private var quickFilledID: String? {
+        guard quickOnly, !session.busy, let id = quickSubmittedID, session.lastFilledOrderID == id,
+              pendingAction == nil, closingSide == nil else { return nil }
+        return id
     }
     private func connectDefault() async {
         let target = defaultMode == "live_readonly" ? liveEndpoint : address
@@ -594,7 +636,7 @@ struct TradingCenterView: View {
                         } else if quickOnly { quickOrderPanel } else { orderPanel }
                         if !quickOnly { Divider(); recordsPanel }
 
-                    if let message = session.actionMessage { Text(message).font(.caption).lineLimit(2) }
+                    if let message = session.actionMessage { Text(message).font(.caption).foregroundStyle(MarketPalette.ink).lineLimit(3).padding(.vertical, 5) }
                     if session.pendingOrder != nil {
                         Button("已核对官方委托，解除锁定") { unlock = true }.disabled(session.busy).font(.caption)
                     }
@@ -755,10 +797,10 @@ struct TradingCenterView: View {
                     }
                     priceMode = mode
                 } label: {
-                    Text(mode.rawValue).font(quickOnly ? .subheadline.weight(.medium) : .caption2.weight(.medium))
-                        .frame(maxWidth: .infinity).padding(.vertical, quickOnly ? 11 : 6)
-                        .foregroundStyle(priceMode == mode ? (quickOnly ? Color.white : MarketPalette.accent) : (quickOnly ? MarketPalette.ink : MarketPalette.muted))
-                        .background(priceMode == mode ? MarketPalette.accent.opacity(quickOnly ? 1 : 0.12) : MarketPalette.raised, in: RoundedRectangle(cornerRadius: quickOnly ? 7 : 4))
+                    Text(mode.rawValue).font(.caption2.weight(.medium))
+                        .frame(maxWidth: .infinity).padding(.vertical, 6)
+                        .foregroundStyle(priceMode == mode ? MarketPalette.accent : MarketPalette.muted)
+                        .background(priceMode == mode ? MarketPalette.accent.opacity(0.12) : MarketPalette.raised, in: RoundedRectangle(cornerRadius: 4))
                 }.buttonStyle(.plain)
             }
         }
@@ -994,13 +1036,13 @@ struct TradingCenterView: View {
             openingDraft = OpeningDraft(symbol: c.symbol, action: action, title: title ?? openingTitle(action), price: priceText(price), quantity: selectedQuantity)
             quickConfirmationError = nil
             pendingAction = action
-            if quickOnly { showQuickConfirmation = true }
+            quickSubmittedID = nil
         } label: {
             VStack(spacing: 3) {
-                Text(priceText(effectivePrice(buy: action == "开多"))).font(.system(size: quickOnly ? 26 : 22, weight: .semibold).monospacedDigit())
+                Text(priceText(effectivePrice(buy: action == "开多"))).font(.system(size: 22, weight: .semibold).monospacedDigit())
                 Text(title ?? (selected?.option != nil ? (action == "开多" ? "买开" : "卖开") : action))
             }.font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: quickOnly ? 76 : 64)
+                .foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 64)
                 .background(color.opacity(validOrder(action) ? 0.85 : 0.25), in: RoundedRectangle(cornerRadius: 8))
         }.buttonStyle(.borderless).disabled(!validOrder(action))
     }
@@ -1428,7 +1470,11 @@ struct TradingCenterView: View {
         let offset = requiresSplit && closeToday ? "CLOSETODAY" : "CLOSE"
         let price = closePrice, qty = String(closeQuantity)
         closingSide = nil; closeConfirm = false; tab = "委托"
-        Task { await session.submit(symbol: c.symbol, direction: direction, offset: offset, price: price, quantity: qty) }
+        quickSubmittedID = nil
+        Task {
+            let id = await session.submit(symbol: c.symbol, direction: direction, offset: offset, price: price, quantity: qty)
+            if quickOnly { quickSubmittedID = id }
+        }
     }
     private func cancelConfirmationBar(_ id: String) -> some View {
         let order = session.snapshot?.orders?.first(where: { $0.id == id })
@@ -1475,7 +1521,10 @@ struct TradingCenterView: View {
         guard pendingAction == action, let draft = openingDraft, validDraft(action) else { return }
         let direction = action == "开多" ? "BUY" : "SELL"
         pendingAction = nil; openingDraft = nil; tab = "委托"
-        Task { await session.submit(symbol: draft.symbol, direction: direction, offset: "OPEN", price: draft.price, quantity: String(draft.quantity)) }
+        Task {
+            let id = await session.submit(symbol: draft.symbol, direction: direction, offset: "OPEN", price: draft.price, quantity: String(draft.quantity))
+            if quickOnly { quickSubmittedID = id }
+        }
     }
     private func openingTitle(_ action: String) -> String {
         selected?.option != nil ? (action == "开多" ? "买开" : "卖开") : action

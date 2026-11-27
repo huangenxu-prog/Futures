@@ -292,7 +292,7 @@ private struct OptionDetailView: View {
         .navigationTitle(name + " " + label).navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $trading) {
             QuickTradeSheet(contract: q.paperContract(underlying: underlying, name: name))
-                .presentationDetents([.height(460), .large]).presentationDragIndicator(.visible)
+                .presentationDetents([.height(390), .large]).presentationDragIndicator(.visible)
         }
         .task(id: "\(period)-\(scenePhase)") {
             guard scenePhase == .active else { return }
