@@ -793,8 +793,8 @@ struct TradingCenterView: View {
     }
     private var ticketMargin: String {
         guard fundingIsFresh, let c = selected else { return "--" }
-        // Option seller margin is unavailable; never imply zero for both sides.
-        if c.isOption { return "买0 / 卖--" }
+        // For options this field refers only to seller margin; unavailable is unknown.
+        if c.isOption { return "--" }
         guard let q = detailedQuote, q.code == c.symbol, let value = q.referenceMargin,
               value.isFinite, value > 0 else { return "--" }
         return money(value * Double(selectedQuantity))
