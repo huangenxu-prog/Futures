@@ -76,6 +76,11 @@ jobs:
       - name: Generate app icon asset
         run: swift scripts/generate-app-icon.swift
 
+      - name: Prepare pinned PineTS resource
+        run: |
+          mkdir -p App/Resources
+          curl --fail --location --retry 3 -o App/Resources/pinets.js https://github.com/LuxAlgo/PineTS/releases/download/v0.14.0/pinets.min.browser.js
+          echo '0566f4af419ec9cbed3f7dbcd8957d051c85948ea388cd6c528fa9af6e517259  App/Resources/pinets.js' | shasum -a 256 -c -
       - name: Generate Xcode project
         run: xcodegen generate
 
@@ -97,6 +102,8 @@ jobs:
         run: |
           APP_PATH="$RUNNER_TEMP/Futures.xcarchive/Products/Applications/Futures.app"
           test -d "$APP_PATH"
+          test -f "$APP_PATH/pinets.js"
+          echo "0566f4af419ec9cbed3f7dbcd8957d051c85948ea388cd6c528fa9af6e517259  $APP_PATH/pinets.js" | shasum -a 256 -c -
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/Futures.app"
           cd "$RUNNER_TEMP/ipa"
