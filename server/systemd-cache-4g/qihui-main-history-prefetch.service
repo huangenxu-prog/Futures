@@ -1,0 +1,20 @@
+[Unit]
+Description=Qihui background prefetch for all domestic main-contract K-lines
+Wants=network-online.target
+After=network-online.target qihui-gateway.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/tq_test
+Environment=PYTHONUNBUFFERED=1
+Environment=TQ_AUTH_FILE=/root/tq_test/auth.json
+Environment=QIHUI_KLINE_CACHE_DIR=/root/tq_test/cache/klines
+ExecStart=/usr/bin/flock -n -E 0 /run/qihui-prefetch.lock /root/tq_test/.venv/bin/python -u /root/tq_test/server/prefetch_main_history.py --limit 24
+TimeoutStartSec=8min
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=10
+IOWeight=10
+NoNewPrivileges=true
+PrivateTmp=true
