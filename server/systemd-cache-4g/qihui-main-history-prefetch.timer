@@ -1,0 +1,11 @@
+[Unit]
+Description=Qihui main history prefetch timer
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=10min
+AccuracySec=30s
+RandomizedDelaySec=20s
+
+[Install]
+WantedBy=timers.target
