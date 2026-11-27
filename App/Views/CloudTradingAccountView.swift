@@ -696,23 +696,26 @@ struct TradingCenterView: View {
             }
             HStack(spacing: 8) {
                 accountMetric("风险", usage)
-                    .frame(maxWidth: .infinity)
-                Color.clear.frame(width: 1)
-                HStack(spacing: 8) {
+                Color.clear.frame(width: 1, height: 1)
+                HStack(spacing: 5) {
                     Text("手续费").font(.system(size: 11))
                         .foregroundStyle(MarketPalette.muted).fixedSize()
                     Text(money(session.snapshot?.account.commission, suffix: false))
                         .font(.system(size: 14, weight: .medium)).monospacedDigit()
                         .foregroundStyle(MarketPalette.ink).lineLimit(1).minimumScaleFactor(0.65)
                     Spacer(minLength: 0)
-                    Button("银期转账") {}.font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(MarketPalette.accent)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(MarketPalette.accent.opacity(0.65)) }
-                    .disabled(true).accessibilityHint("暂未开放")
+                    Button {} label: {
+                        Text("银期转账").font(.system(size: 12, weight: .medium))
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: true)
+                            .padding(.horizontal, 5).frame(height: 22)
+                            .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(MarketPalette.accent.opacity(0.65)) }
+                    }.buttonStyle(.plain)
+                        .foregroundStyle(MarketPalette.accent)
+                        .fixedSize(horizontal: true, vertical: true)
+                        .disabled(true).accessibilityHint("暂未开放")
                 }.frame(maxWidth: .infinity)
-            }
-        }.padding(.vertical, 8)
+            }.frame(height: 24)
+        }.fixedSize(horizontal: false, vertical: true).padding(.vertical, 8)
     }
     private func accountMetric(_ label: String, _ value: String, tint: Color = MarketPalette.ink) -> some View {
         HStack(spacing: 4) {
@@ -1295,7 +1298,7 @@ struct TradingCenterView: View {
             } right: {
                 VStack(spacing: 0) {
                     recordBand(height: recordHeaderHeight) {
-                        HStack(spacing: 3) {
+                        HStack(spacing: 5) {
                             Text("手数/可平").lineLimit(1).fixedSize(horizontal: true, vertical: false).frame(width: 72)
                             Text("开仓均价").frame(width: 70, alignment: .trailing)
                             Text("浮盈").frame(width: 75, alignment: .trailing)
@@ -1338,36 +1341,36 @@ struct TradingCenterView: View {
             } right: {
                 VStack(spacing: 0) {
                     recordBand(height: recordHeaderHeight) {
-                        HStack(spacing: 3) {
+                        HStack(spacing: 5) {
                             recordCell("开平", width: 40, alignment: .center)
-                            recordCell("成交价", width: 58, alignment: .trailing)
-                            recordCell("手数", width: 32, alignment: .trailing)
-                            recordCell("平仓盈亏", width: 80, alignment: .trailing)
-                            recordCell("时间", width: 76)
+                            recordCell("成交价", width: 54, alignment: .center)
+                            recordCell("手数", width: 34, alignment: .center)
+                            recordCell("平仓盈亏", width: 80, alignment: .center)
+                            recordCell("时间", width: 80, alignment: .center)
                         }.foregroundStyle(.secondary)
                     }
                     ForEach(fills) { f in
                         recordBand(height: recordRowHeight) {
-                            HStack(spacing: 3) {
+                            HStack(spacing: 5) {
                                 recordCell(recordAction(f.direction, f.offset), width: 40, alignment: .center)
                                     .foregroundStyle(f.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
-                                recordCell(f.price?.formatted() ?? "", width: 58, alignment: .trailing)
-                                recordCell(String(f.quantity), width: 32, alignment: .trailing)
-                                recordCell(f.offset != "OPEN" && f.calculated_close_profit?.isFinite == true ? money(f.calculated_close_profit, suffix: false) : "", width: 80, alignment: .trailing)
+                                recordCell(f.price?.formatted() ?? "", width: 54, alignment: .center)
+                                recordCell(String(f.quantity), width: 34, alignment: .center)
+                                recordCell(f.offset != "OPEN" && f.calculated_close_profit?.isFinite == true ? money(f.calculated_close_profit, suffix: false) : "", width: 80, alignment: .center)
                                     .foregroundStyle(MarketPalette.movement(f.calculated_close_profit))
-                                recordCell(recordTime(f.time_ns), width: 76)
+                                recordCell(recordTime(f.time_ns), width: 80, alignment: .center)
                             }
                         }
                     }
                     if !fills.isEmpty {
                         recordBand(height: recordRowHeight) {
-                            HStack(spacing: 3) {
+                            HStack(spacing: 5) {
                                 Color.clear.frame(width: 40)
-                                Color.clear.frame(width: 58)
-                                recordCell(String(fills.reduce(0) { $0 + $1.quantity }), width: 32, alignment: .trailing).fontWeight(.semibold)
-                                recordCell(total.map { money($0, suffix: false) } ?? "", width: 80, alignment: .trailing)
+                                Color.clear.frame(width: 54)
+                                recordCell(String(fills.reduce(0) { $0 + $1.quantity }), width: 34, alignment: .center).fontWeight(.semibold)
+                                recordCell(total.map { money($0, suffix: false) } ?? "", width: 80, alignment: .center)
                                     .foregroundStyle(MarketPalette.movement(total)).fontWeight(.semibold)
-                                Color.clear.frame(width: 76)
+                                Color.clear.frame(width: 80)
                             }
                         }
                     }
@@ -1400,45 +1403,45 @@ struct TradingCenterView: View {
             } right: {
                 VStack(spacing: 0) {
                     recordBand(height: recordHeaderHeight) {
-                        HStack(spacing: 3) {
-                            recordCell("状态", width: 32, alignment: .center)
+                        HStack(spacing: 5) {
+                            recordCell("状态", width: 34, alignment: .center)
                             recordCell("开平", width: 40, alignment: .center)
-                            recordCell("委托价", width: 58, alignment: .trailing)
-                            recordCell("手数", width: 32, alignment: .trailing)
+                            recordCell("委托价", width: 54, alignment: .center)
+                            recordCell("手数", width: 34, alignment: .center)
                             if tab != "挂单" {
-                                recordCell("已成交", width: 48, alignment: .trailing)
-                                recordCell("已撤单", width: 48, alignment: .trailing)
-                                recordCell("成交均价", width: 72, alignment: .trailing)
+                                recordCell("已成交", width: 48, alignment: .center)
+                                recordCell("已撤单", width: 48, alignment: .center)
+                                recordCell("成交均价", width: 72, alignment: .center)
                             }
-                            if tab == "挂单" { recordCell("操作", width: 32, alignment: .center) }
-                            recordCell("时间", width: 76)
+                            if tab == "挂单" { recordCell("操作", width: 34, alignment: .center) }
+                            recordCell("时间", width: 80, alignment: .center)
                         }.foregroundStyle(.secondary)
                     }
                     ForEach(orders) { o in
                         recordBand(height: recordRowHeight) {
-                            HStack(spacing: 3) {
-                                    HStack(spacing: 3) {
-                                        recordCell(o.stateText, width: 32, alignment: .center)
+                            HStack(spacing: 5) {
+                                    HStack(spacing: 5) {
+                                        recordCell(o.stateText, width: 34, alignment: .center)
                                         recordCell(recordAction(o.direction, o.offset), width: 40, alignment: .center)
                                             .foregroundStyle(o.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
-                                        recordCell(o.price?.formatted() ?? "", width: 58, alignment: .trailing)
-                                        recordCell(String(o.quantity), width: 32, alignment: .trailing)
+                                        recordCell(o.price?.formatted() ?? "", width: 54, alignment: .center)
+                                        recordCell(String(o.quantity), width: 34, alignment: .center)
                                         if tab != "挂单" {
-                                            recordCell(String(max(0, o.quantity - o.remaining)), width: 48, alignment: .trailing)
-                                            recordCell(canceledQuantity(o) == "--" ? "" : canceledQuantity(o), width: 48, alignment: .trailing)
-                                            recordCell(o.trade_price?.formatted(.number.precision(.fractionLength(2))) ?? "", width: 72, alignment: .trailing)
+                                            recordCell(String(max(0, o.quantity - o.remaining)), width: 48, alignment: .center)
+                                            recordCell(canceledQuantity(o) == "--" ? "" : canceledQuantity(o), width: 48, alignment: .center)
+                                            recordCell(o.trade_price?.formatted(.number.precision(.fractionLength(2))) ?? "", width: 72, alignment: .center)
                                         }
                                         if tab == "挂单" {
                                             Button("撤单", role: .destructive) { cancelID = o.id }
                                                 .font(.system(size: 13)).lineLimit(1).buttonStyle(.plain)
                                                 .foregroundStyle(MarketPalette.up)
-                                                .frame(width: 32, height: recordRowHeight)
+                                                .frame(width: 34, height: recordRowHeight)
                                                 .contentShape(Rectangle())
                                                 .disabled(session.busy || session.isLive || o.status != "ALIVE")
                                                 .opacity(session.busy || session.isLive || o.status != "ALIVE" ? 0.4 : 1)
                                                 .accessibilityLabel("撤单 " + contractName(o.symbol))
                                         }
-                                        recordCell(recordTime(o.time_ns), width: 76)
+                                        recordCell(recordTime(o.time_ns), width: 80, alignment: .center)
                                     }.frame(height: recordRowHeight)
                             }
                         }
@@ -1691,7 +1694,7 @@ struct TradingCenterView: View {
     }
     private func positionSummaryBar(lots: Int?, closable: Int?, profit: Double?) -> some View {
         recordBand(height: recordRowHeight) {
-            HStack(spacing: 3) {
+            HStack(spacing: 5) {
                 Text((lots.map { String($0) } ?? "--") + "/" + (closable.map { String($0) } ?? "--"))
                     .lineLimit(1).frame(width: 72)
                 Color.clear.frame(width: 70)
@@ -1731,7 +1734,7 @@ struct TradingCenterView: View {
         let selectedRow = expandedHolding == p.symbol + (long ? "/long" : "/short")
         return recordBand(height: recordRowHeight, selected: selectedRow) {
             Button { selectPosition(p, long: long) } label: {
-                HStack(spacing: 3) {
+                HStack(spacing: 5) {
                     Text(String(qty) + "/" + (frozen.map { String(max(0, qty-$0)) } ?? "--")).frame(width: 72)
                     Text(average.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "--").frame(width: 70, alignment: .trailing)
                     Text(money(profit, suffix: false)).foregroundStyle(MarketPalette.movement(profit)).frame(width: 75, alignment: .trailing)
