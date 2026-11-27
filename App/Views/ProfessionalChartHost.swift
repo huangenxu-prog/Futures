@@ -442,6 +442,9 @@ struct ProfessionalChartHost: View {
             return
         }
         model.currentPrice = last.close
+        if DevicePerformanceCapture.shared.running {
+            DevicePerformanceCapture.shared.record("chart_tail bars=\(incoming.count) model_ms=\((ProcessInfo.processInfo.systemUptime-started)*1000)")
+        }
         KlineDiagnostics.chartUpdated(symbol: symbol, period: period, newest: last, started: started)
         if isReplay, model.series.candles?.last == chartCandle(last) {
             onReplayApplied?(last, (ProcessInfo.processInfo.systemUptime - started) * 1000)
@@ -453,6 +456,9 @@ struct ProfessionalChartHost: View {
         guard !incoming.isEmpty else { return }
         let modelStarted = ProcessInfo.processInfo.systemUptime
         defer {
+            if DevicePerformanceCapture.shared.running {
+                DevicePerformanceCapture.shared.record("chart_snapshot bars=\(incoming.count) model_ms=\((ProcessInfo.processInfo.systemUptime-modelStarted)*1000)")
+            }
             KlineDiagnostics.chartUpdated(symbol: symbol, period: period, newest: incoming.last, started: modelStarted)
             if isReplay, let last = incoming.last,
                let plotted = model.series.candles?.last, plotted == chartCandle(last) {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct QihuiSettingsView: View {
     var backgroundStyle = MarketBackgroundStyle()
@@ -10,6 +11,8 @@ struct QihuiSettingsView: View {
     let mainCodes: [String:String]
     private enum SettingsGroup: String { case general, quote, candle, chart, trade, server }
     @State private var expandedGroup: SettingsGroup?
+    @State private var captureRunning = DevicePerformanceCapture.shared.running
+    @State private var reportCopied = false
     @State private var marketConfigured = false
     @State private var marketKey = ""
     @State private var marketKeyError = false
@@ -44,6 +47,19 @@ struct QihuiSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("临时性能诊断") {
+                    Button(captureRunning ? "停止采样" : "开始采样") {
+                        if captureRunning { DevicePerformanceCapture.shared.stop() }
+                        else { DevicePerformanceCapture.shared.start(); reportCopied = false }
+                        captureRunning = DevicePerformanceCapture.shared.running
+                    }
+                    Button("复制诊断报告") {
+                        UIPasteboard.general.string = DevicePerformanceCapture.shared.report()
+                        reportCopied = true
+                    }.disabled(captureRunning)
+                    if reportCopied { Text("已复制报告").font(.caption) }
+                    Text("仅诊断版使用。开始后正常使用，结束时返回这里停止并复制。数据保存在内存，不上传。").font(.caption).foregroundStyle(.secondary)
+                }
                 groupHeader(.general, "常规设置", icon: "gearshape")
                 if expandedGroup == .general {
                 Section {
