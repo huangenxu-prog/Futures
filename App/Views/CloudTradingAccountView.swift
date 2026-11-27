@@ -1169,22 +1169,28 @@ struct TradingCenterView: View {
                 Text("账户数据暂不可用").font(.caption).foregroundStyle(.secondary)
                 if tab == "持仓" { positionSummaryUnavailable }
             } else if tab == "持仓" {
-                HStack(spacing: 4) {
-                    Text("合约 / 多空").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("手数 / 可平").frame(width: 65)
-                    Text("开仓均价").frame(width: 67, alignment: .trailing)
-                    Text("浮盈").frame(width: 65, alignment: .trailing)
-                }.font(.system(size: 12)).foregroundStyle(.secondary)
-                ForEach(session.snapshot?.positions ?? []) { p in
-                    if p.long > 0 { positionRow(p, long: true) }
-                    if p.short > 0 { positionRow(p, long: false) }
-                }
-                if let snapshot = session.snapshot {
-                    let held = snapshot.positions.filter { $0.long > 0 || $0.short > 0 }
-                    if held.isEmpty {
-                        Text("暂无持仓").font(.caption).foregroundStyle(.secondary)
-                    }
-                    positionSummary(held)
+                ScrollView(.horizontal, showsIndicators: true) {
+                    VStack(spacing: 0) {
+                        HStack(spacing: 4) {
+                            Text("合约 / 多空").frame(width: 132, alignment: .leading)
+                            Text("手数 / 可平").frame(width: 65)
+                            Text("开仓均价").frame(width: 67, alignment: .trailing)
+                            Text("浮盈").frame(width: 75, alignment: .trailing)
+                            Text("保证金").frame(width: 85, alignment: .trailing)
+                            Text("市值").frame(width: 85, alignment: .trailing)
+                        }.font(.system(size: 12)).foregroundStyle(.secondary)
+                        ForEach(session.snapshot?.positions ?? []) { p in
+                            if p.long > 0 { positionRow(p, long: true) }
+                            if p.short > 0 { positionRow(p, long: false) }
+                        }
+                        if let snapshot = session.snapshot {
+                            let held = snapshot.positions.filter { $0.long > 0 || $0.short > 0 }
+                            if held.isEmpty {
+                                Text("暂无持仓").font(.caption).foregroundStyle(.secondary)
+                            }
+                            positionSummary(held)
+                        }
+                    }.fixedSize(horizontal: true, vertical: false)
                 }
             } else if tab == "成交" {
                 ScrollView(.horizontal, showsIndicators: true) {
@@ -1218,40 +1224,47 @@ struct TradingCenterView: View {
                 let orders = (session.snapshot?.orders ?? []).filter { tab != "挂单" || $0.status == "ALIVE" }.sorted {
                     ($0.time_ns ?? 0) == ($1.time_ns ?? 0) ? $0.id > $1.id : ($0.time_ns ?? 0) > ($1.time_ns ?? 0)
                 }
-                HStack(spacing: 3) {
-                    recordCell("合约")
-                    recordCell("状态", width: 40)
-                    recordCell("开平", width: 30)
-                    recordCell("委托价", width: 48)
-                    recordCell("数量", width: 30)
-                    recordCell(tab == "挂单" ? "操作" : "时间", width: tab == "挂单" ? 38 : 58)
-                }.foregroundStyle(.secondary)
-                Divider()
-                ForEach(orders) { o in
-                    HStack(spacing: 3) {
-                        let canCancel = tab == "挂单" && o.status == "ALIVE" && !session.isLive
-                        Button { orderDetail = o } label: {
-                            HStack(spacing: 3) {
-                                recordCell(contractName(o.symbol))
-                                recordCell(o.stateText, width: 40)
-                                recordCell(recordAction(o.direction, o.offset), width: 30)
-                                    .foregroundStyle(o.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
-                                recordCell(o.price?.formatted() ?? "--", width: 48)
-                                recordCell(String(o.quantity - o.remaining) + "/" + String(o.quantity), width: 30)
-                                if !canCancel {
-                                    recordCell(recordTime(o.time_ns), width: tab == "挂单" ? 38 : 58)
+                ScrollView(.horizontal, showsIndicators: true) {
+                    VStack(spacing: 0) {
+                        HStack(spacing: 5) {
+                            recordCell("合约", width: 115)
+                            recordCell("状态", width: 56)
+                            recordCell("开平", width: 38)
+                            recordCell("委托价", width: 60)
+                            recordCell("委托量", width: 48)
+                            recordCell("已成交", width: 48)
+                            recordCell(tab == "挂单" ? "剩余量" : "已撤单", width: 48)
+                            recordCell("成交均价", width: 72)
+                            recordCell("时间", width: 68)
+                            if tab == "挂单" { recordCell("操作", width: 42) }
+                        }.foregroundStyle(.secondary)
+                        Divider()
+                        ForEach(orders) { o in
+                            HStack(spacing: 5) {
+                                Button { orderDetail = o } label: {
+                                    HStack(spacing: 5) {
+                                        recordCell(contractName(o.symbol), width: 115)
+                                        recordCell(o.stateText, width: 56)
+                                        recordCell(recordAction(o.direction, o.offset), width: 38)
+                                            .foregroundStyle(o.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
+                                        recordCell(o.price?.formatted() ?? "--", width: 60)
+                                        recordCell(String(o.quantity), width: 48)
+                                        recordCell(String(max(0, o.quantity - o.remaining)), width: 48)
+                                        recordCell(tab == "挂单" ? String(o.remaining) : canceledQuantity(o), width: 48)
+                                        recordCell(o.trade_price?.formatted() ?? "--", width: 72)
+                                        recordCell(recordTime(o.time_ns), width: 68)
+                                    }.contentShape(Rectangle())
+                                }.buttonStyle(.plain)
+                                    .accessibilityHint("查看委托详情及原始回报")
+                                if tab == "挂单" {
+                                    Button("撤单", role: .destructive) { cancelID = o.id }
+                                        .font(.caption2).buttonStyle(.borderless).frame(width: 42)
+                                        .disabled(session.busy || session.isLive || o.status != "ALIVE")
                                 }
-                            }
-                            .contentShape(Rectangle())
+                            }.padding(.vertical, 10)
+                            Divider()
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityHint("查看委托详情及原始回报")
-                        if canCancel {
-                            Button("撤单", role: .destructive) { cancelID = o.id }
-                                .font(.caption2).buttonStyle(.borderless).frame(width: 38).disabled(session.busy)
-                        }
-                    }.padding(.vertical, 10)
-                    Divider()
+                    }.fixedSize(horizontal: true, vertical: false)
                 }
                 if orders.isEmpty { Text(tab == "挂单" ? "暂无挂单" : "暂无委托或未取得数据").font(.caption).foregroundStyle(.secondary) }
             }
@@ -1310,6 +1323,13 @@ struct TradingCenterView: View {
         return formatter.string(from: Date(timeIntervalSince1970: Double(ns) / 1e9))
     }
 
+    private func canceledQuantity(_ order: CloudSnapshot.Order) -> String {
+        switch order.display_state {
+        case "CANCELED", "PARTIAL_CANCELED": return String(max(0, order.remaining))
+        case "FILLED", "ALIVE", "PARTIAL": return "0"
+        default: return "--"
+        }
+    }
     private func recordCell(_ value: String, width: CGFloat? = nil) -> some View {
         Text(value).font(.system(size: 13)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
             .frame(width: width, alignment: .leading)
@@ -1497,14 +1517,16 @@ struct TradingCenterView: View {
         VStack(spacing: 0) {
             Divider()
             HStack(spacing: 4) {
-                Text("合计").frame(maxWidth: .infinity, alignment: .leading)
+                Text("合计").frame(width: 132, alignment: .leading)
                 Text((lots.map { String($0) } ?? "--") + "/" + (closable.map { String($0) } ?? "--"))
                     .lineLimit(1).minimumScaleFactor(0.65).frame(width: 65)
                 Text("—").frame(width: 67, alignment: .trailing).foregroundStyle(MarketPalette.muted)
                 Text(money(profit, suffix: false))
                     .foregroundStyle(MarketPalette.movement(profit))
                     .lineLimit(1).minimumScaleFactor(0.65)
-                    .frame(width: 65, alignment: .trailing)
+                    .frame(width: 75, alignment: .trailing)
+                Color.clear.frame(width: 85)
+                Color.clear.frame(width: 85)
             }
             .font(.system(size: 14, weight: .semibold)).monospacedDigit().foregroundStyle(MarketPalette.ink)
             .padding(.vertical, 9)
@@ -1527,10 +1549,12 @@ struct TradingCenterView: View {
                 HStack(spacing: 3) {
                     Text(contractName(p.symbol)).font(.system(size: 13, weight: .medium)).lineLimit(1).minimumScaleFactor(0.75)
                     Text(long ? "多" : "空").font(.system(size: 12)).foregroundStyle(long ? MarketPalette.up : MarketPalette.down)
-                }.frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(width: 132, alignment: .leading)
                 Text(String(qty) + "/" + (frozen.map { String(max(0, qty-$0)) } ?? "--")).frame(width: 65)
                 Text(average.map { $0.formatted() } ?? "--").frame(width: 67, alignment: .trailing)
-                Text(money(profit, suffix: false)).foregroundStyle(MarketPalette.movement(profit)).frame(width: 65, alignment: .trailing)
+                Text(money(profit, suffix: false)).foregroundStyle(MarketPalette.movement(profit)).frame(width: 75, alignment: .trailing)
+                Text(money(long ? p.margin_long : p.margin_short, suffix: false)).frame(width: 85, alignment: .trailing)
+                Text(money(long ? p.market_value_long : p.market_value_short, suffix: false)).frame(width: 85, alignment: .trailing)
             }.font(.system(size: 14)).monospacedDigit().foregroundStyle(MarketPalette.ink).lineLimit(1).minimumScaleFactor(0.65)
         }.buttonStyle(.borderless).padding(.vertical, 8)
         Divider()
