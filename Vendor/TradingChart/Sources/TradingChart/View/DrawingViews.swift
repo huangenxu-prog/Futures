@@ -24,6 +24,7 @@ struct DrawingsOverlay: View {
                 drawings: editor.drawings,
                 selectedID: editor.selectedID,
                 pendingAnchors: editor.pendingAnchors,
+                activeTool: editor.activeTool,
                 registry: model.drawingTools,
                 domain: model.drawingDomain(),
                 transform: model.drawingTransform(plot: plot),

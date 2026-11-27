@@ -23,6 +23,7 @@ public struct DrawingKind: RawRepresentable, Hashable, Sendable, Codable, Expres
     public static let horizontalLine = DrawingKind(rawValue: "horizontalLine")
     /// A segment between two anchors.
     public static let trendLine = DrawingKind(rawValue: "trendLine")
+    public static let polyline: DrawingKind = "polyline"
     /// A line from the first anchor through the second one to the edge of the chart.
     public static let ray = DrawingKind(rawValue: "ray")
     public static let verticalLine: DrawingKind = "verticalLine"

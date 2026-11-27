@@ -4,7 +4,7 @@ public struct DrawingToolRegistry: Sendable {
 
     /// A registry with the built-in tools: horizontal line, trend line and ray.
     public static let standard = DrawingToolRegistry(
-        tools: [HorizontalLineTool(), TrendLineTool(), RayTool(), ExtendedDrawingTool(.verticalLine), ExtendedDrawingTool(.rectangle), ExtendedDrawingTool(.horizontalRay), ExtendedDrawingTool(.parallelChannel), ExtendedDrawingTool(.fibonacci), ExtendedDrawingTool(.priceMeasure), ExtendedDrawingTool(.timeMeasure)]
+        tools: [HorizontalLineTool(), TrendLineTool(), PolylineTool(), RayTool(), ExtendedDrawingTool(.verticalLine), ExtendedDrawingTool(.rectangle), ExtendedDrawingTool(.horizontalRay), ExtendedDrawingTool(.parallelChannel), ExtendedDrawingTool(.fibonacci), ExtendedDrawingTool(.priceMeasure), ExtendedDrawingTool(.timeMeasure)]
     )
 
     /// Creates a registry holding the given tools. A later tool replaces an earlier one of the same kind.

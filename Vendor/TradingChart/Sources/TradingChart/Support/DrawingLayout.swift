@@ -54,6 +54,7 @@ enum DrawingLayout {
         drawings: [ChartDrawing],
         selectedID: UUID?,
         pendingAnchors: [ChartAnchor],
+        activeTool: DrawingKind? = nil,
         registry: DrawingToolRegistry,
         domain: ChartDomain,
         transform: ChartTransform,
@@ -119,6 +120,14 @@ enum DrawingLayout {
                 }
             }
             if !stroke.lines.isEmpty || !stroke.handles.isEmpty || stroke.fillRect != nil || !stroke.labels.isEmpty { strokes.append(stroke) }
+        }
+        if activeTool == .polyline, let tool = registry.tool(for: .polyline) {
+            let lines = tool.primitives(for: pendingAnchors, in: domain).compactMap {
+                line(of: $0, clip: clip, transform: transform)
+            }
+            if !lines.isEmpty {
+                strokes.append(DrawingStroke(id: UUID(), lines: lines, style: DrawingStyle(), isSelected: false, handles: []))
+            }
         }
         let pending = pendingAnchors.map(transform.point(for:)).filter { reach.contains($0) }
         return DrawingFrame(strokes: strokes, pending: pending)

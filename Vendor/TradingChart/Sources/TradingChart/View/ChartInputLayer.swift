@@ -169,6 +169,7 @@ final class ChartInputView: UIView, UIGestureRecognizerDelegate {
         guard pinchAnchor == nil else { return }
         switch gesture.state {
         case .began:
+            if takesDrawingTouches, model.drawingInsertPolylineAnchor(at: gesture.location(in: self), plot: bounds) { return }
             guard model.configuration.isCrosshairEnabled else { return }
             isSelecting = true
             scrollPans.hold(.crosshair)

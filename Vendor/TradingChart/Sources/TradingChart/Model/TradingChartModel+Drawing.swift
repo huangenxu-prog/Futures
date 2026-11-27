@@ -50,6 +50,23 @@ extension TradingChartModel {
         }
     }
 
+    /// Whether the current polyline has enough points to finish.
+    public var canFinishPolyline: Bool {
+        drawingEditor.activeTool == .polyline && drawingEditor.pendingAnchors.count >= 2
+    }
+
+    public func finishPolyline() {
+        emit(drawingEditor.finishPolyline())
+    }
+
+    func drawingInsertPolylineAnchor(at point: CGPoint, plot: CGRect) -> Bool {
+        guard configuration.isDrawingEnabled, plot.contains(point) else { return false }
+        let context = drawingContext(plot: plot)
+        guard let event = drawingEditor.insertPolylineAnchor(at: point, context: context) else { return false }
+        emit(event)
+        return true
+    }
+
     /// The selected drawing. A selected drawing shows handles on its anchors and can be dragged (by an anchor or by its
     /// body) unless it is locked: a drag that starts on it moves it, any other drag scrolls the chart as usual. A tap on
     /// empty space clears the selection.

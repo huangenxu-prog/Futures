@@ -204,6 +204,13 @@ struct ProfessionalChartHost: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("回到最新K线")
                 }
+                if model.activeDrawingTool == .polyline {
+                    Button("完成") { model.finishPolyline() }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(MarketPalette.accent)
+                        .disabled(!model.canFinishPolyline)
+                        .accessibilityLabel("完成折线")
+                }
                 drawingMenu
             }
             .padding(.horizontal, 6)
@@ -356,6 +363,7 @@ struct ProfessionalChartHost: View {
             Section("画线工具") {
                 Button("水平线", systemImage: "minus") { choose(.horizontalLine) }
                 Button("趋势线", systemImage: "chart.line.uptrend.xyaxis") { choose(.trendLine) }
+                Button("折线", systemImage: "point.topleft.down.to.point.bottomright.curvepath") { choose(.polyline) }
                 Button("射线", systemImage: "arrow.up.right") { choose(.ray) }
                 Button("水平射线",systemImage:"arrow.right") { choose(.horizontalRay) }
                 Button("垂直线",systemImage:"line.diagonal") { choose(.verticalLine) }

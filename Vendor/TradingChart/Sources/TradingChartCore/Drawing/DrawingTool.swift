@@ -151,3 +151,13 @@ public struct RayTool: DrawingTool {
         return [.segment(start, ChartAnchor(time: edgeTime, price: edgePrice))]
     }
 }
+
+/// A connected sequence of two or more control points.
+public struct PolylineTool: DrawingTool {
+    public var kind: DrawingKind { .polyline }
+    public var requiredAnchorCount: Int { 2 }
+    public init() {}
+    public func primitives(for anchors: [ChartAnchor], in domain: ChartDomain) -> [DrawingPrimitive] {
+        zip(anchors, anchors.dropFirst()).map { .segment($0.0, $0.1) }
+    }
+}

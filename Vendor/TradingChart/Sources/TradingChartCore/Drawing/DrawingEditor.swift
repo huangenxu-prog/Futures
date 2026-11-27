@@ -199,8 +199,42 @@ public struct DrawingEditor: Sendable, Equatable {
             time: Self.snapped(anchor.time, to: context.interval),
             price: anchor.price
         ))
-        guard pendingAnchors.count >= tool.requiredAnchorCount else { return nil }
+        guard kind != .polyline, pendingAnchors.count >= tool.requiredAnchorCount else { return nil }
+        return commitPending(kind: kind)
+    }
 
+    /// Explicit completion keeps a multi-point drawing active until the user finishes.
+    public mutating func finishPolyline() -> DrawingEvent? {
+        guard activeTool == .polyline, pendingAnchors.count >= 2 else { return nil }
+        return commitPending(kind: .polyline)
+    }
+
+    /// Insert a point at the nearest segment of a selected, unlocked polyline.
+    /// A press on an existing node is not an insertion.
+    public mutating func insertPolylineAnchor(at point: CGPoint, context: DrawingContext) -> DrawingEvent? {
+        guard activeTool == nil, let selectedID,
+              let index = drawings.firstIndex(where: { $0.id == selectedID }),
+              drawings[index].kind == .polyline, !drawings[index].isLocked,
+              let tool = context.registry.tool(for: .polyline) else { return nil }
+        let anchors = drawings[index].anchors
+        guard anchors.count >= 2, tool.hitTest(point, anchors: anchors, domain: context.domain,
+              transform: context.transform, tolerance: context.tolerance) == .body else { return nil }
+        var closest: (index: Int, distance: CGFloat)?
+        for i in 0..<(anchors.count - 1) {
+            let a = context.transform.point(for: anchors[i]), b = context.transform.point(for: anchors[i+1])
+            let dx = b.x-a.x, dy = b.y-a.y, length = dx*dx+dy*dy
+            guard length > 0 else { continue }
+            let t = min(1, max(0, ((point.x-a.x)*dx+(point.y-a.y)*dy)/length))
+            let distance = hypot(point.x-a.x-t*dx, point.y-a.y-t*dy)
+            if distance < (closest?.distance ?? .infinity) { closest = (i+1, distance) }
+        }
+        guard let closest, closest.distance <= context.tolerance else { return nil }
+        let anchor = context.transform.anchor(at: point)
+        drawings[index].anchors.insert(ChartAnchor(time: Self.snapped(anchor.time, to: context.interval), price: anchor.price), at: closest.index)
+        return .changed(drawings[index])
+    }
+
+    private mutating func commitPending(kind: DrawingKind) -> DrawingEvent {
         let drawing = ChartDrawing(kind: kind, anchors: pendingAnchors)
         drawings.append(drawing)
         selectedID = drawing.id
