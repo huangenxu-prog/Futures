@@ -515,17 +515,43 @@ def exact_option_quote(symbol, underlying):
         QUERY_WORKER.release_api(api)
 
 
+def cached_option_codes(api, underlying):
+    import hashlib
+    import json
+    import os
+    import time
+    from pathlib import Path
+    path = Path("/root/tq_test/cache/options") / (hashlib.sha256(underlying.encode()).hexdigest() + ".json")
+    try:
+        data = json.loads(path.read_text())
+        age = time.time() - data["saved"]
+        codes = data["codes"]
+        if 0 <= age < 1800 and data["underlying"] == underlying and isinstance(codes, list) and codes and all(isinstance(c, str) and option_underlying_code(c) == underlying for c in codes):
+            return codes
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    codes = list(api.query_options(underlying, expired=False))
+    if codes:
+        try:
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(dict(underlying=underlying, saved=time.time(), codes=codes)))
+            os.replace(tmp, path)
+        except OSError:
+            pass
+    return codes
+
+
 @reusable_query
 @cached_short_query
 def option_chain(underlying):
     api = QUERY_WORKER.acquire_api()
     try:
-        codes = list(api.query_options(underlying, expired=False))
+        codes = cached_option_codes(api, underlying)
         result = []
         for start in range(0, len(codes), 64):
             batch = codes[start:start + 64]
             for code, quote in zip(batch, api.get_quote_list(batch)):
-                if (quote.underlying_symbol == underlying and math.isfinite(quote.strike_price)
+                if (quote.underlying_symbol == underlying and not getattr(quote, "expired", False) and math.isfinite(quote.strike_price)
                         and quote.option_class in ("CALL", "PUT")):
                     row = option_quote_row(code, quote)
                     result.append(row)
@@ -863,17 +889,17 @@ KLINE_MAX_SERIES = 8
 KLINE_DATA_LENGTH = 2
 KLINE_HISTORY_LENGTH = 1200  # prefetch recent history once per symbol/period
 KLINE_DISK_HISTORY_LENGTH = 8964  # preserve older pages on VPS across visits
-KLINE_MAX_MEMORY_SERIES = 24   # soft LRU bound; active readers take precedence
+KLINE_MAX_MEMORY_SERIES = 64   # soft LRU bound; active readers take precedence
 KLINE_HISTORY_REFRESH_SECONDS = 600
 # The favorites' stored history need not be re-downloaded every 10 minutes.
 # Opening a chart always requests an up-to-date reconciliation separately.
 KLINE_WARM_HISTORY_FRESH_SECONDS = 900
 KLINE_SAVE_INTERVAL = 30
 KLINE_CACHE_DIR = os.environ.get("QIHUI_KLINE_CACHE_DIR", "/root/tq_test/cache/klines")
-KLINE_PERIOD_ORDER = (900, 300, 1800, 3600, 60, 86400)
+KLINE_PERIOD_ORDER = (900, 300, 1800, 3600, 7200, 60, 86400)
 # Watchlist hints only; leave the disabled legacy offline planner compatible.
 FAVORITE_WARM_PERIODS = (900, 1800, 3600, 7200, 86400)
-FAVORITE_WARM_MIN_AVAILABLE_KIB = 600 * 1024
+FAVORITE_WARM_MIN_AVAILABLE_KIB = 1024 * 1024
 
 
 def favorite_warm_memory_ok():
@@ -918,7 +944,7 @@ def next_kline_stream_event(symbol, previous, incoming, count, force_full=False)
 class KlineFileCache:
     """Atomic, bounded, non-database cache. Never stores account credentials."""
 
-    def __init__(self, directory=KLINE_CACHE_DIR, max_files=1800):
+    def __init__(self, directory=KLINE_CACHE_DIR, max_files=3000):
         self.directory = Path(directory)
         self.max_files = max_files
         self.writes = 0
