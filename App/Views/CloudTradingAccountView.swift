@@ -444,7 +444,11 @@ struct TradingCenterView: View {
     @State private var priceMode: PriceMode = .opponent
     @State private var openingDraft: OpeningDraft?
     @State private var selectedPrice = ""
-    @State private var selectedQuantity = 1
+    @State private var selectedQuantityText = "1"
+    private var selectedQuantity: Int {
+        get { Int(selectedQuantityText) ?? 0 }
+        nonmutating set { selectedQuantityText = String(newValue) }
+    }
     @State private var pendingAction: String?
     @State private var quickSubmittedID: String?
     @State private var quickConfirmationError: String?
@@ -452,7 +456,11 @@ struct TradingCenterView: View {
     @State private var closeToday = false
     @State private var closingSide: Bool? = nil
     @State private var closePrice = ""
-    @State private var closeQuantity = 1
+    @State private var closeQuantityText = "1"
+    private var closeQuantity: Int {
+        get { Int(closeQuantityText) ?? 0 }
+        nonmutating set { closeQuantityText = String(newValue) }
+    }
     @State private var closeConfirm = false
     @State private var tab = "持仓"
     @State private var quoteStamp: Date?
@@ -843,7 +851,11 @@ struct TradingCenterView: View {
             Button { if selectedQuantity > 1 { selectedQuantity -= 1 } else { selectedQuantity = 1 } } label: {
                 Image(systemName: "minus").font(.system(size: 13)).frame(width: 30, height: 44)
             }.buttonStyle(.plain).accessibilityLabel("减少手数")
-            TextField("手数", value: $selectedQuantity, format: .number.grouping(.never))
+            TextField("手数", text: $selectedQuantityText)
+                .onChange(of: selectedQuantityText) { _, value in
+                    let digits = value.filter { $0.isASCII && $0.isNumber }
+                    if digits != value { selectedQuantityText = digits }
+                }
                 .keyboardType(.numberPad).multilineTextAlignment(.center).font(.system(size: 13)).monospacedDigit()
             Button { if selectedQuantity < Int.max { selectedQuantity += 1 } } label: {
                 Image(systemName: "plus").font(.system(size: 13)).frame(width: 30, height: 44)
@@ -1566,7 +1578,12 @@ struct TradingCenterView: View {
                     }
                     confirmationRow("平仓手数") {
                         HStack {
-                            TextField("手数", value: $closeQuantity, format: .number.grouping(.never)).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                            TextField("手数", text: $closeQuantityText)
+                                .keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                                .onChange(of: closeQuantityText) { _, value in
+                                    let digits = value.filter { $0.isASCII && $0.isNumber }
+                                    if digits != value { closeQuantityText = digits }
+                                }
                             Button("最多") { closeQuantity = available ?? 0 }.buttonStyle(.borderless).disabled((available ?? 0) <= 0)
                         }
                     }
