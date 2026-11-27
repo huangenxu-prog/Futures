@@ -9,6 +9,11 @@ private func optionDays(_ value: Double?) -> String {
     return String(max(0, Int(ceil((value - Date().timeIntervalSince1970) / 86400)))) + "天"
 }
 
+private struct OptionColumnOffsetKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct OptionChainView: View {
     let code: String
     let underlyingLast: Double?
@@ -36,6 +41,7 @@ struct OptionChainView: View {
     @State private var anchor: Double?
     @State private var sort = 0
     @State private var descending = false
+    @State private var columnOffset: CGFloat = 0
     private let headings = ["最新价","涨幅%","持仓量","成交量","日增仓","买一","卖一","买一量","卖一量","今开","最高","最低","昨结"]
     private var spot: Double? { last ?? (activeCode == code ? underlyingLast : nil) }
     private var name: String { underlyingName + monthLabel(activeCode) }
@@ -97,11 +103,29 @@ struct OptionChainView: View {
                     if let error { Text(error).font(.caption).foregroundStyle(MarketPalette.muted) }
                     GeometryReader { geometry in
                     let columnWidth = max(58, (geometry.size.width - 54) / 4)
-                    ScrollViewReader { proxy in
+                    VStack(spacing: 0) {
+                        HStack(spacing: 0) {
+                            Button("行权价") { changeSort(0) }
+                                .font(.caption.weight(.semibold)).frame(width: 54, height: 32)
+                                .background(MarketPalette.raised)
+                            HStack(spacing: 0) {
+                                ForEach(headings.indices, id: \.self) { j in
+                                    Button(headings[j] + (sort == j+1 ? (descending ? "↓" : "↑") : "")) { changeSort(j+1) }
+                                        .font(.caption).foregroundStyle(MarketPalette.muted).frame(width: columnWidth, height: 32)
+                                }
+                            }
+                            .fixedSize(horizontal: true, vertical: false)
+                            .offset(x: columnOffset)
+                            .frame(width: max(0, geometry.size.width - 54), alignment: .leading)
+                            .clipped()
+                            .contentShape(Rectangle())
+                        }
+                        .frame(width: geometry.size.width, alignment: .leading)
+                        .background(MarketPalette.background)
+                        ScrollViewReader { proxy in
                         ScrollView(.vertical) {
                             HStack(alignment: .top, spacing: 0) {
                                 VStack(spacing: 0) {
-                                    Button("行权价") { changeSort(0) }.font(.caption.weight(.semibold)).frame(width: 54, height: 32)
                                     ForEach(visible) { q in
                                         Button { selected = q } label: {
                                             Text(optionNumber(q.strike)).font(.system(size: 14, weight: .semibold)).monospacedDigit()
@@ -113,12 +137,6 @@ struct OptionChainView: View {
                                 }.frame(width: 54).clipped().background(MarketPalette.raised)
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     VStack(spacing: 0) {
-                                        HStack(spacing: 0) {
-                                            ForEach(headings.indices, id: \.self) { j in
-                                                Button(headings[j] + (sort == j+1 ? (descending ? "↓" : "↑") : "")) { changeSort(j+1) }
-                                                    .font(.caption).foregroundStyle(MarketPalette.muted).frame(width: columnWidth, height: 32)
-                                            }
-                                        }
                                         ForEach(visible) { q in
                                             Button { selected = q } label: {
                                                 HStack(spacing: 0) {
@@ -134,7 +152,16 @@ struct OptionChainView: View {
                                             Divider().frame(height: 1)
                                         }
                                     }
-                                }.frame(width: max(0, geometry.size.width - 54)).clipped()
+                                    .background {
+                                        GeometryReader { contentGeometry in
+                                            Color.clear.preference(key: OptionColumnOffsetKey.self,
+                                                value: contentGeometry.frame(in: .named("optionColumns")).minX)
+                                        }
+                                    }
+                                }
+                                .coordinateSpace(name: "optionColumns")
+                                .onPreferenceChange(OptionColumnOffsetKey.self) { columnOffset = $0 }
+                                .frame(width: max(0, geometry.size.width - 54)).clipped()
                             }.frame(width: geometry.size.width, alignment: .leading)
                         }.refreshable { await load() }
                         .onAppear {
@@ -146,6 +173,7 @@ struct OptionChainView: View {
                         .onChange(of: side) { _, _ in
                             if let target = anchor ?? nearest { proxy.scrollTo(target, anchor: .center) }
                         }
+                    }
                     }
                     }
                 }
