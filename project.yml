@@ -29,7 +29,7 @@ targets:
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_QIHUI_API_BASE_URL: "https://8.153.96.190"
+        INFOPLIST_KEY_QIHUI_API_BASE_URL: "https://43.143.5.184"
         TARGETED_DEVICE_FAMILY: "1"
     scheme:
       testTargets: [DetailPagerUITests]

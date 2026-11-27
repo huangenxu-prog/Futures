@@ -406,7 +406,7 @@ struct TradingCenterView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var session = CloudTradeSession.shared
-    @AppStorage("qihui.trade.endpoint.v1") private var address = "https://8.153.96.190"
+    @AppStorage("qihui.trade.endpoint.v1") private var address = "https://43.143.5.184"
     @AppStorage("qihui.trade.default-mode.v1") private var defaultMode = "simulation"
     @AppStorage("qihui.trade.live-endpoint.v1") private var liveEndpoint = ""
     @State private var showConnectionSettings = false
@@ -599,6 +599,12 @@ struct TradingCenterView: View {
         return id
     }
     private func connectDefault() async {
+        if address == "https://8.153.96.190" || address == "https://8.153.96.190/" {
+            address = "https://43.143.5.184"
+        }
+        if liveEndpoint == "https://8.153.96.190" || liveEndpoint == "https://8.153.96.190/" {
+            liveEndpoint = "https://43.143.5.184"
+        }
         let target = defaultMode == "live_readonly" ? liveEndpoint : address
         guard !target.isEmpty, defaultMode != "live_readonly" || target != address else { return }
         await session.recover(address: target, mode: defaultMode)
@@ -1761,7 +1767,7 @@ struct TradeConnectionSettingsView: View {
 
 struct TradeConnectionFields: View {
     @ObservedObject private var session = CloudTradeSession.shared
-    @AppStorage("qihui.trade.endpoint.v1") private var address = "https://8.153.96.190"
+    @AppStorage("qihui.trade.endpoint.v1") private var address = "https://43.143.5.184"
     @AppStorage("qihui.trade.default-mode.v1") private var defaultMode = "simulation"
     @AppStorage("qihui.trade.live-endpoint.v1") private var savedLiveEndpoint = ""
     @State private var draftAddress = ""
@@ -1851,6 +1857,12 @@ struct TradeConnectionFields: View {
             .onDisappear { password = ""; key = ""; livePassword = ""; liveKey = "" }
     }
     private func loadSaved() {
+        if address == "https://8.153.96.190" || address == "https://8.153.96.190/" {
+            address = "https://43.143.5.184"
+        }
+        if savedLiveEndpoint == "https://8.153.96.190" || savedLiveEndpoint == "https://8.153.96.190/" {
+            savedLiveEndpoint = "https://43.143.5.184"
+        }
         draftAddress = address
         liveAddress = savedLiveEndpoint
         liveUsername = TradeKeychain.load(liveAddress, kind: "username")
