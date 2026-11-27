@@ -98,6 +98,7 @@ private struct CloudSnapshot: Decodable {
         let price: Double?
         let quantity: Int
         let time_ns: Int64
+        let calculated_close_profit: Double?
     }
     let positions: [Position]
     let orders: [Order]?
@@ -1213,6 +1214,16 @@ struct TradingCenterView: View {
                         recordCell(String(f.quantity), width: 28)
                         recordCell(recordTime(f.time_ns), width: 63)
                     }.padding(.vertical, 10)
+                    if let profit = f.calculated_close_profit, profit.isFinite, f.offset != "OPEN" {
+                        HStack {
+                            Spacer()
+                            Text("平仓盈亏（计算）")
+                                .foregroundStyle(MarketPalette.muted)
+                            Text(money(profit, suffix: false))
+                                .foregroundStyle(MarketPalette.movement(profit))
+                                .monospacedDigit()
+                        }.font(.caption2).padding(.bottom, 6)
+                    }
                     Divider()
                 }
                 if session.snapshot?.fills?.isEmpty != false { Text("暂无成交或未取得数据").font(.caption).foregroundStyle(.secondary) }

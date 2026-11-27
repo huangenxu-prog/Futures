@@ -46,5 +46,36 @@ class SnapshotTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_order(dict(order, **patch))
 
+class ClosedProfitTests(unittest.TestCase):
+    def test_partial_and_full_close(self):
+        from trade_gateway import close_profit_points
+        p = {"symbol": "CZCE.SR701", "long": 3, "open_price_long": 10}
+        q = {"symbol": "CZCE.SR701", "long": 2, "open_price_long": 11}
+        f = {"symbol": p["symbol"], "direction": "SELL", "offset": "CLOSE", "quantity": 1, "price": 18}
+        self.assertEqual(close_profit_points([p], [q], [f]), [(f, 10)])
+        f = dict(f, quantity=3)
+        self.assertEqual(close_profit_points([p], [], [f]), [(f, 24)])
+        self.assertEqual(close_profit_points([p], [q], [f]), [])
+        self.assertEqual(close_profit_points([p], [], [f, f]), [])
+
+    def test_short_and_missing_cost(self):
+        from trade_gateway import close_profit_points
+        p = {"symbol": "DCE.m2701", "short": 2, "open_price_short": 20}
+        f = {"symbol": p["symbol"], "direction": "BUY", "offset": "CLOSE", "quantity": 2, "price": 15}
+        self.assertEqual(close_profit_points([p], [], [f]), [(f, 10)])
+        self.assertEqual(close_profit_points([], [], [f]), [])
+        self.assertEqual(close_profit_points([dict(p, open_price_short=None)], [], [f]), [])
+
+    def test_persistence_and_account_isolation(self):
+        import tempfile, os
+        from trade_gateway import OrderIntentLedger
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "ledger.sqlite3")
+            ledger = OrderIntentLedger(path)
+            ledger.save_closed_profit("a", "fill", 12.5)
+            ledger.save_closed_profit("a", "fill", 99)
+            self.assertEqual(OrderIntentLedger(path).closed_profit("a", "fill"), 12.5)
+            self.assertIsNone(ledger.closed_profit("b", "fill"))
+
 if __name__ == "__main__":
     unittest.main()

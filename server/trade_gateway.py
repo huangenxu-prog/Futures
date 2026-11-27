@@ -197,6 +197,114 @@ def snapshot(account, positions, orders=None, fills=None):
             "fills": [fill_row(k, v) for k, v in (fills or {}).items() if v.instrument_id and v.volume > 0],
             "simulation_orders": True}
 
+def close_profit_points(previous, current, new_fills):
+    """Calculate gross closed cost differences only when snapshots reconcile.
+    No guessed historical matching, no fee allocation, no trade submission."""
+    before = {p["symbol"]: p for p in previous}
+    after = {p["symbol"]: p for p in current}
+    grouped = {}
+    for f in new_fills:
+        direction, offset = f["direction"], f["offset"]
+        if direction not in ("BUY", "SELL"):
+            continue
+        if offset == "OPEN":
+            side = "long" if direction == "BUY" else "short"
+        elif offset in ("CLOSE", "CLOSETODAY"):
+            side = "short" if direction == "BUY" else "long"
+        else:
+            continue
+        grouped.setdefault((f["symbol"], side), []).append(f)
+    result = []
+    for (symbol, side), rows in grouped.items():
+        # Multiple new fills can have different cost allocations. Do not invent them.
+        if len(rows) != 1 or rows[0]["offset"] == "OPEN":
+            continue
+        f = rows[0]
+        p = before.get(symbol, {})
+        q = after.get(symbol, {})
+        old_qty, new_qty = p.get(side, 0), q.get(side, 0)
+        qty, price = f["quantity"], number(f["price"])
+        old_price = number(p.get("open_price_" + side))
+        new_price = number(q.get("open_price_" + side)) if new_qty else 0.0
+        if qty <= 0 or old_qty - new_qty != qty or new_qty < 0:
+            continue
+        if price is None or price <= 0 or old_price is None or old_price <= 0 or new_price is None or (new_qty and new_price <= 0):
+            continue
+        # Cost removed from the position, not today's settlement cost.
+        removed = old_qty * old_price - new_qty * new_price
+        if not math.isfinite(removed) or removed <= 0:
+            continue
+        points = qty * price - removed
+        if side == "short":
+            points = -points
+        if math.isfinite(points):
+            result.append((f, points))
+    return result
+
+
+class ClosedProfitTracker:
+    """Per-session baseline; persist only reconciled fills, never infer during gaps."""
+    def __init__(self, ledger, namespace):
+        self.ledger = ledger
+        self.namespace = namespace
+        self.previous = None
+        self.seen = set()
+        self.results = {}
+        self.pending = {}
+        self.multipliers = {}
+        self.requested = set()
+
+    @staticmethod
+    def key(f):
+        return json.dumps([f["id"], f["symbol"], f["time_ns"]], separators=(",", ":"))
+
+    def update(self, api, data):
+        if data is None:
+            self.previous = None
+            self.pending.clear()
+            return
+        fills = data["fills"]
+        fresh = [f for f in fills if self.key(f) not in self.seen]
+        for f in fresh:
+            key = self.key(f)
+            saved = self.ledger.closed_profit(self.namespace, key)
+            if saved is not None:
+                self.results[key] = saved
+            self.seen.add(key)
+        if self.previous is not None:
+            for f, points in close_profit_points(self.previous, data["positions"], fresh):
+                key = self.key(f)
+                if key not in self.results:
+                    self.pending[key] = (f["symbol"], points)
+        self.previous = data["positions"]
+        # Subscribe only to instruments with a pending calculation, asynchronously
+        # on the existing SDK owner loop. Never block the command processing loop.
+        async def read_multiplier(symbol):
+            try:
+                q = await api.get_quote(symbol)
+                value = number(q.volume_multiple)
+                if value is not None and value > 0:
+                    self.multipliers[symbol] = value
+            except Exception:
+                pass
+        for key, (symbol, points) in list(self.pending.items()):
+            multiplier = self.multipliers.get(symbol)
+            if multiplier is None:
+                if symbol not in self.requested and len(self.requested) < 128:
+                    self.requested.add(symbol)
+                    api.create_task(read_multiplier(symbol))
+                continue
+            profit = round(points * multiplier, 2)
+            if math.isfinite(profit):
+                self.ledger.save_closed_profit(self.namespace, key, profit)
+                self.results[key] = profit
+            del self.pending[key]
+        for f in fills:
+            key = self.key(f)
+            if key in self.results:
+                f["calculated_close_profit"] = self.results[key]
+
+
 class OrderIntentLedger:
     """Durable simulation order intents. Never replay an uncertain submission."""
     def __init__(self, path):
@@ -208,6 +316,16 @@ class OrderIntentLedger:
             os.close(fd)
         with sqlite3.connect(path) as db:
             db.execute("CREATE TABLE IF NOT EXISTS intents (account TEXT NOT NULL, oid TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(account, oid))")
+            db.execute("CREATE TABLE IF NOT EXISTS closed_profits (account TEXT NOT NULL, fill_key TEXT NOT NULL, profit REAL NOT NULL, PRIMARY KEY(account, fill_key))")
+
+    def closed_profit(self, account, key):
+        with sqlite3.connect(self.path, timeout=1) as db:
+            row = db.execute("SELECT profit FROM closed_profits WHERE account=? AND fill_key=?", (account, key)).fetchone()
+            return row[0] if row else None
+
+    def save_closed_profit(self, account, key, profit):
+        with sqlite3.connect(self.path, timeout=1) as db:
+            db.execute("INSERT OR IGNORE INTO closed_profits VALUES (?, ?, ?)", (account, key, profit))
 
     def lookup(self, account, oid):
         with sqlite3.connect(self.path, timeout=5) as db:
@@ -286,6 +404,7 @@ class Session:
             positions = api.get_position()
             orders = api.get_order()
             fills = api.get_trade()
+            profit_tracker = ClosedProfitTracker(ORDER_LEDGER, self.ledger_namespace()) if ORDER_LEDGER is not None else None
             reconciliation = None
             next_reconcile = 0.0
             while not self.stop.is_set() and (self.keepalive or time.monotonic() - self.last_access < IDLE):
@@ -328,6 +447,13 @@ class Session:
                     with self.data_lock:
                         self.sdk_update_monotonic = time.monotonic()
                 data = snapshot(account, positions, orders, fills)
+                if profit_tracker is not None:
+                    try:
+                        profit_tracker.update(api, data)
+                    except Exception as exc:
+                        profit_tracker.previous = None
+                        profit_tracker.pending.clear()
+                        audit("close_profit_exception", error_type=type(exc).__name__)
                 if data is not None:
                     data["simulation_orders"] = self.mode == "simulation"
                     data["trade_mode"] = self.mode
