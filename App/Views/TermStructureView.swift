@@ -12,6 +12,7 @@ struct TermStructureView: View {
     @State private var history: [String: [MarketBar]] = [:]
     @State private var dailyFallback: [String: MarketBar] = [:]
     @State private var fallbackAttempt: [String: Date] = [:]
+    @State private var historyAttempt: [String: Date] = [:]
     @State private var loading = false
     @State private var error: String?
     private let labels = ["实时", "1日前", "1周前", "2周前", "1月前", "3月前", "6月前"]
@@ -267,10 +268,12 @@ struct TermStructureView: View {
             let cutoff = Int64(calendar.startOfDay(for:Date()).timeIntervalSince1970)
             for q in contracts where history[q.code] == nil {
                 guard !Task.isCancelled else { return }
+                if let attempted = historyAttempt[q.code], Date().timeIntervalSince(attempted) < 60 { continue }
+                historyAttempt[q.code] = Date()
                 do {
                     let bars = try await MarketDataService.fetchOlder(symbol:q.code,period:86400,before:cutoff,count:180,depth:500)
                     guard !Task.isCancelled else { return }
-                    history[q.code]=bars
+                    if !bars.isEmpty { history[q.code]=bars }
                 } catch { if !Task.isCancelled { self.error="部分历史行情未取得" } }
             }
             if historicalDay == nil && !Task.isCancelled { error="暂无对应日期历史行情" }

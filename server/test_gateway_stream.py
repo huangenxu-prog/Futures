@@ -20,6 +20,23 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayStreamingTests(unittest.TestCase):
+    def test_cold_snapshot_waits_for_history_not_live_tail(self):
+        hub = gateway.SharedKlineHub()
+        key = ("CZCE.CF701", 7200)
+        hub.cache[key] = ([{"time": 1}, {"time": 2}], 1)
+        with patch.object(hub, "start"), patch.object(hub.condition, "wait", side_effect=lambda **kw: hub.cache.update({key: ([{"time": i} for i in range(1, 201)], 2)})) as wait:
+            self.assertEqual(len(hub.snapshot(*key, 200)), 200)
+            wait.assert_called_once()
+
+    def test_genuine_short_history_returns_without_waiting(self):
+        hub = gateway.SharedKlineHub()
+        key = ("CZCE.CF701", 7200)
+        hub.cache[key] = ([{"time": 1}, {"time": 2}], 1)
+        hub.history_completed.add(key)
+        with patch.object(hub, "start"), patch.object(hub.condition, "wait") as wait:
+            self.assertEqual(len(hub.snapshot(*key, 200)), 2)
+            wait.assert_not_called()
+
     def test_exact_main_quote_uses_current_connection_not_cold_query(self):
         hub = gateway.LiveQuoteHub()
         hub.record_poll(False)

@@ -461,8 +461,8 @@ enum MarketDataService {
                 URLQueryItem(name: "symbol", value: symbol),
                 URLQueryItem(name: "period", value: String(period)),
                 URLQueryItem(name: "before", value: String(before)),
-                URLQueryItem(name: "count", value: String(count)),
-                URLQueryItem(name: "depth", value: String(depth))
+                URLQueryItem(name: "count", value: String(min(300, max(5, count)))),
+                URLQueryItem(name: "depth", value: String(min(8964, max(500, depth))))
             ])
         var request = authorizedRequest(url: url)
         request.timeoutInterval = 35

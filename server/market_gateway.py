@@ -872,7 +872,7 @@ KLINE_SAVE_INTERVAL = 30
 KLINE_CACHE_DIR = os.environ.get("QIHUI_KLINE_CACHE_DIR", "/root/tq_test/cache/klines")
 KLINE_PERIOD_ORDER = (900, 300, 1800, 3600, 60, 86400)
 # Watchlist hints only; leave the disabled legacy offline planner compatible.
-FAVORITE_WARM_PERIODS = (900, 1800, 3600, 86400)
+FAVORITE_WARM_PERIODS = (900, 1800, 3600, 7200, 86400)
 FAVORITE_WARM_MIN_AVAILABLE_KIB = 600 * 1024
 
 
@@ -1045,6 +1045,8 @@ class SharedKlineHub:
         self.disk_writer = None
         self.last_history = {}
         self.pending_history = set()
+        self.history_enqueued = {}
+        self.history_completed = set()
         self.urgent_history = deque()
         self.background_history = deque()
         self.history_running = set()
@@ -1069,6 +1071,7 @@ class SharedKlineHub:
             self.cached_used.pop(oldest, None)
             self.live_tail.pop(oldest, None)
             self.live_timing.pop(oldest, None)
+            self.history_completed.discard(oldest)
 
     def _restore_locked(self, key):
         if key in self.cache or self.store is None:
@@ -1097,9 +1100,11 @@ class SharedKlineHub:
             if urgent and self.background_history:
                 dropped = self.background_history.pop()
                 self.pending_history.discard(dropped)
+                self.history_enqueued.pop(dropped, None)
             else:
                 return
         self.pending_history.add(key)
+        self.history_enqueued[key] = time.monotonic()
         (self.urgent_history if urgent else self.background_history).append(key)
         self.condition.notify_all()
 
@@ -1138,7 +1143,7 @@ class SharedKlineHub:
                 entry["waiters"] += 1
             bars = self.cache.get(key, ([], 0))[0]
             refreshed = self.last_history.get(key, 0)
-            if (not bars or time.time() - refreshed > KLINE_HISTORY_REFRESH_SECONDS):
+            if ((len(bars) <= KLINE_DATA_LENGTH and key not in self.history_completed) or time.time() - refreshed > KLINE_HISTORY_REFRESH_SECONDS):
                 self._schedule_locked(key, urgent=True)
             self.condition.notify_all()
         self.start()
@@ -1272,12 +1277,22 @@ class SharedKlineHub:
         with self.condition:
             self._restore_locked(key)
             bars = self.cache.get(key, ([], 0))[0]
-            if (not bars or time.time() - self.last_history.get(key, 0)
+            if ((len(bars) <= KLINE_DATA_LENGTH and key not in self.history_completed) or time.time() - self.last_history.get(key, 0)
                     > KLINE_HISTORY_REFRESH_SECONDS):
                 self._schedule_locked(key, urgent=True)
         self.start()
-        bars, _ = self.read(key, timeout=timeout)
-        return bars[-count:]
+        deadline = time.monotonic() + timeout
+        with self.condition:
+            while True:
+                bars = self.cache.get(key, ([], 0))[0]
+                # Wait for history instead of treating the two-bar live tail as a full snapshot.
+                if len(bars) >= count or (bars and key in self.history_completed):
+                    self.cached_used[key] = time.monotonic()
+                    return list(bars[-count:])
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return list(bars[-count:])
+                self.condition.wait(timeout=remaining)
 
     def warm_symbols(self, symbols):
         if not favorite_warm_memory_ok():
@@ -1301,7 +1316,7 @@ class SharedKlineHub:
                         bars, saved = self.store.read(key)
                     else:
                         bars, saved = [], 0
-                    if bars and time.time() - saved < KLINE_WARM_HISTORY_FRESH_SECONDS:
+                    if len(bars) > KLINE_DATA_LENGTH and time.time() - saved < KLINE_WARM_HISTORY_FRESH_SECONDS:
                         continue
                     self._schedule_locked(key)
         if accepted:
@@ -1338,6 +1353,7 @@ class SharedKlineHub:
                         # requests can still enqueue the same series urgently.
                         for deferred in self.background_history:
                             self.pending_history.discard(deferred)
+                            self.history_enqueued.pop(deferred, None)
                             self.warm_until.pop(deferred[0], None)
                         self.background_history.clear()
                         break
@@ -1346,6 +1362,7 @@ class SharedKlineHub:
                     if candidate in self.pending_history:
                         self.pending_history.remove(candidate)
                         self.history_running.add(candidate)
+                        queue_ms = (time.monotonic() - self.history_enqueued.pop(candidate, time.monotonic())) * 1000
                         key = candidate
                         break
             if key is None:
@@ -1360,6 +1377,7 @@ class SharedKlineHub:
                     reclaim_sdk_memory("history-idle")
                 continue
             try:
+                sdk_started = time.monotonic()
                 if api is None:
                     with open(AUTH_PATH, encoding="utf-8") as handle:
                         credentials = json.load(handle)
@@ -1377,10 +1395,17 @@ class SharedKlineHub:
                     # a partial frame, but don't block the worker indefinitely.
                     if bars and time.time() > deadline - 3:
                         break
+                sdk_ms = (time.monotonic() - sdk_started) * 1000
                 if bars:
+                    publish_started = time.monotonic()
                     self.publish(key, bars, history=True)
+                    publish_ms = (time.monotonic() - publish_started) * 1000
                     with self.condition:
+                        if key in self.cache:
+                            self.history_completed.add(key)
                         self.history_retry_after.pop(key, None)
+                        self.condition.notify_all()
+                    print(f"QIHUI_HISTORY symbol={key[0]} period={key[1]} queue_ms={max(0, queue_ms):.1f} sdk_ms={sdk_ms:.1f} publish_ms={publish_ms:.1f} bars={len(bars)}", flush=True)
                 else:
                     with self.condition:
                         self.history_retry_after[key] = time.monotonic() + 60
