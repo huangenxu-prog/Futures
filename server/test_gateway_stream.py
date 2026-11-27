@@ -24,7 +24,7 @@ class GatewayStreamingTests(unittest.TestCase):
         hub = gateway.SharedKlineHub()
         key = ("CZCE.CF701", 7200)
         hub.cache[key] = ([{"time": 1}, {"time": 2}], 1)
-        with patch.object(hub, "start"), patch.object(hub.condition, "wait", side_effect=lambda **kw: hub.cache.update({key: ([{"time": i} for i in range(1, 201)], 2)})) as wait:
+        with patch.object(hub, "start"), patch.object(hub.condition, "wait", side_effect=lambda **kw: hub.publish(key, [{"time": i} for i in range(1, 201)], history=True)) as wait:
             self.assertEqual(len(hub.snapshot(*key, 200)), 200)
             wait.assert_called_once()
 
@@ -32,7 +32,7 @@ class GatewayStreamingTests(unittest.TestCase):
         hub = gateway.SharedKlineHub()
         key = ("CZCE.CF701", 7200)
         hub.cache[key] = ([{"time": 1}, {"time": 2}], 1)
-        hub.history_completed.add(key)
+        hub.publish(key, hub.cache[key][0], history=True)
         with patch.object(hub, "start"), patch.object(hub.condition, "wait") as wait:
             self.assertEqual(len(hub.snapshot(*key, 200)), 2)
             wait.assert_not_called()
@@ -362,8 +362,9 @@ class GatewayStreamingTests(unittest.TestCase):
     def test_live_timing_matches_only_current_version(self):
         hub = gateway.SharedKlineHub()
         key = ("CZCE.SR701", 900)
+        hub.publish(key, [{"time": 100, "close": 0}], history=True)
         hub.publish(key, [{"time": 100, "close": 1}], received_at=1000.0)
-        self.assertEqual(hub.timing_for(key, 1), 1000.0)
+        self.assertEqual(hub.timing_for(key, 2), 1000.0)
         self.assertIsNone(hub.timing_for(key, 0))
         # History at the same timestamp preserves the latest live bar.
         # A newer historical candle actually advances the published version.
@@ -407,7 +408,7 @@ class GatewayStreamingTests(unittest.TestCase):
                  "low": 2999, "close": 3001, "volume": 3},
                 {"time": 200, "open": 3001, "high": 3002,
                  "low": 3000, "close": 3002, "volume": 5}]
-        hub.publish(key, rows)
+        hub.publish(key, rows, history=True)
         with patch.object(hub, "start") as start, patch.object(gateway, "TqApi") as sdk:
             self.assertEqual(hub.snapshot("CZCE.MA701", 900, 1), rows[-1:])
             self.assertEqual(hub.snapshot("CZCE.MA701", 900, 2), rows)
@@ -439,8 +440,8 @@ class GatewayStreamingTests(unittest.TestCase):
             self.assertEqual(hub.warm_symbols(["CZCE.MA701"]), 0)
         self.assertEqual(accepted, 1)
         self.assertEqual(len(hub.entries), 0)
-        self.assertEqual(hub.status()["pending_history"], 4)
-        self.assertEqual(set(hub.pending_history), {("CZCE.MA701", p) for p in (900, 1800, 3600, 86400)})
+        self.assertEqual(hub.status()["pending_history"], 5)
+        self.assertEqual(set(hub.pending_history), {("CZCE.MA701", p) for p in (900, 1800, 3600, 7200, 86400)})
 
     def test_warmup_skips_low_memory_without_touching_cache(self):
         hub = gateway.SharedKlineHub()
@@ -454,13 +455,13 @@ class GatewayStreamingTests(unittest.TestCase):
         from unittest.mock import Mock
         import time
         store = Mock()
-        store.read.return_value = ([{"time": 100}], time.time())
+        store.read.return_value = ([{"time": n} for n in (100, 200, 300)], time.time())
         hub = gateway.SharedKlineHub(store=store)
         with patch.object(hub, "start"), patch.object(gateway, "favorite_warm_memory_ok", return_value=True):
             self.assertEqual(hub.warm_symbols(["CZCE.MA701"]), 1)
         self.assertFalse(hub.cache)
         self.assertFalse(hub.pending_history)
-        self.assertEqual(store.read.call_count, 4)
+        self.assertEqual(store.read.call_count, 5)
 
     def test_stream_sends_full_frame_for_corrected_previous_candle(self):
         previous = [
@@ -539,9 +540,9 @@ class GatewayStreamingTests(unittest.TestCase):
         class Store:
             def __init__(self):
                 self.saved = None
-            def read(self, key):
+            def read(self, key, *, frame=False):
                 return self.saved or [], 0.0
-            def write(self, key, bars):
+            def write(self, key, bars, *, history_frame=None):
                 self.saved = list(bars)
         store = Store()
         key = ("CZCE.MA701", 900)
