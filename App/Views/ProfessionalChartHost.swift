@@ -67,6 +67,10 @@ struct ProfessionalChartHost: View {
     @State private var drawingsRestored = false
     @State private var historyDepth = 1100
     @State private var historyTask: Task<Void, Never>?
+    @State private var pineCalculation: PineChartCalculation?
+    @State private var pineSnapshots: [PineChartIndicator] = []
+    @State private var pineErrors: [UUID: String] = [:]
+    @State private var pineVisible = false
 
     private var interval: ChartInterval {
         ChartInterval(seconds: TimeInterval(period))
@@ -215,6 +219,7 @@ struct ProfessionalChartHost: View {
         .tradingChartStrings(chartStrings)
         .background(backgroundStyle.surface)
         .onAppear {
+            pineVisible = true
             model.onVerticalSwipe = isReplay ? nil : onVerticalSwipe
             model.style = .candles
             model.indicators = displaySettings.indicators(darkAppearance: colorScheme == .dark)
@@ -230,7 +235,9 @@ struct ProfessionalChartHost: View {
             if active {
                 displaySettings = ChartDisplaySettings.load()
                 configureChart()
+                refreshPine()
             } else {
+                stopPine()
                 historyTask?.cancel()
                 historyTask = nil
                 model.activeDrawingTool = nil
@@ -238,11 +245,13 @@ struct ProfessionalChartHost: View {
             }
         }
         .onChange(of: colorScheme) { _, scheme in
-            model.indicators = displaySettings.indicators(darkAppearance: scheme == .dark)
+            model.indicators = displaySettings.indicators(darkAppearance: scheme == .dark) + pineSnapshots.map { $0 as any ChartIndicator }
         }
         .onChange(of: displaySettings) { _, current in
+            stopPine()
             model.indicators = current.indicators(darkAppearance: colorScheme == .dark)
             current.save()
+            refreshPine()
         }
         .sheet(isPresented: $showingIndicatorSettings) {
             IndicatorSettingsView(settings: displaySettings,
@@ -254,6 +263,8 @@ struct ProfessionalChartHost: View {
             }
         }
         .onDisappear {
+            pineVisible = false
+            stopPine()
             feed.detach(owner: feedOwner)
             model.onEvent = nil
             model.onVerticalSwipe = nil
@@ -305,6 +316,24 @@ struct ProfessionalChartHost: View {
                                 .frame(height: 30)
                         }
                         .buttonStyle(.plain)
+                    }
+                    ForEach(displaySettings.pineFormulas) { formula in
+                        Button {
+                            if let i = displaySettings.pineFormulas.firstIndex(where: { $0.id == formula.id }) {
+                                displaySettings.pineFormulas[i].enabled.toggle()
+                            }
+                        } label: {
+                            Text(formula.name + (pineErrors[formula.id] == nil ? "" : " !"))
+                                .font(.system(size: 12, weight: formula.enabled ? .semibold : .regular))
+                                .foregroundStyle(pineErrors[formula.id] != nil ? Color.red : (formula.enabled ? MarketPalette.accent : MarketPalette.muted))
+                                .padding(.horizontal, 6)
+                                .frame(height: 30)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            if let error = pineErrors[formula.id] { Text(error) }
+                            Button("编辑指标") { showingIndicatorSettings = true }
+                        }
                     }
                     ForEach(displaySettings.additionalAverages) { average in
                         Button {
@@ -434,6 +463,7 @@ struct ProfessionalChartHost: View {
             return
         }
         model.currentPrice = last.close
+        refreshPine()
         KlineDiagnostics.chartUpdated(symbol: symbol, period: period, newest: last, started: started)
         if isReplay, model.series.candles?.last == chartCandle(last) {
             onReplayApplied?(last, (ProcessInfo.processInfo.systemUptime - started) * 1000)
@@ -445,6 +475,7 @@ struct ProfessionalChartHost: View {
         guard !incoming.isEmpty else { return }
         let modelStarted = ProcessInfo.processInfo.systemUptime
         defer {
+            refreshPine()
             KlineDiagnostics.chartUpdated(symbol: symbol, period: period, newest: incoming.last, started: modelStarted)
             if isReplay, let last = incoming.last,
                let plotted = model.series.candles?.last, plotted == chartCandle(last) {
@@ -493,6 +524,42 @@ struct ProfessionalChartHost: View {
         } else if let last = incoming.last, last != previous.last {
             model.update(chartCandle(last), interval: interval)
             model.currentPrice = last.close
+        }
+    }
+
+    @MainActor
+    private func stopPine() {
+        pineCalculation?.reset()
+        if !pineSnapshots.isEmpty {
+            pineSnapshots = []
+            model.indicators = displaySettings.indicators(darkAppearance: colorScheme == .dark)
+        }
+        if !pineErrors.isEmpty { pineErrors = [:] }
+    }
+
+    @MainActor
+    private func refreshPine() {
+        // Fast path: no JS context, no candle conversion and no task if disabled.
+        guard pineVisible, isInteractive, !isReplay,
+              displaySettings.pineFormulas.contains(where: { $0.enabled }) else { return }
+        let definitions = displaySettings.pineFormulas.filter { $0.enabled }.map {
+            PineChartCalculation.Definition(id: $0.id, name: $0.name, source: $0.source, overlay: $0.overlay)
+        }
+        let input = (model.series.candles ?? []).suffix(10_000).compactMap { candle -> MarketBar? in
+            guard let actual = sessionAxis.actualTime(for: candle.time) else { return nil }
+            return MarketBar(time: actual, open: candle.open, high: candle.high, low: candle.low,
+                             close: candle.close, preSettlement: nil, volume: Int64(exactly: candle.volume) ?? 0,
+                             openInterest: candle.openInterest, closeInterest: candle.closeInterest)
+        }
+        guard !input.isEmpty else { return }
+        if pineCalculation == nil { pineCalculation = PineChartCalculation() }
+        let request = PineChartCalculation.Request(scope: feedKey, period: period, bars: input,
+                      axis: sessionAxis.actualToVirtual, definitions: definitions)
+        pineCalculation?.submit(request) { result in
+            pineSnapshots = result.indicators
+            pineErrors = result.errors
+            model.indicators = displaySettings.indicators(darkAppearance: colorScheme == .dark)
+                + result.indicators.map { $0 as any ChartIndicator }
         }
     }
 
@@ -568,6 +635,7 @@ struct ProfessionalChartHost: View {
                     sessionAxis.register(older.map(\.time), period: period)
                     model.prependHistory(ChartSeries(candles: older.map(chartCandle),
                                                      interval: interval))
+                    refreshPine()
                     historyDepth = min(8964, historyDepth + 450)
                     if older.count < KlineStartupMerge.historyPageCount && historyDepth == 8964 {
                         model.hasMoreHistory = false
