@@ -24,6 +24,42 @@ jobs:
           context.exceptionHandler = { _, exception in
               failure = exception?.toString() ?? "Unknown JavaScript exception"
           }
+          // Standalone JavaScriptCore has no DOM cancellation API.
+          context.evaluateScript(#"""
+          if (typeof globalThis.AbortController === 'undefined') {
+            class LocalAbortSignal {
+              constructor() { this.aborted = false; this.reason = undefined; this.onabort = null; this.listeners = new Map(); }
+              addEventListener(type, fn, options) {
+                if (type === 'abort' && fn && !this.listeners.has(fn)) this.listeners.set(fn, !!(options && options.once));
+              }
+              removeEventListener(type, fn) { if (type === 'abort') this.listeners.delete(fn); }
+              throwIfAborted() { if (this.aborted) throw this.reason; }
+            }
+            class LocalAbortController {
+              constructor() { this.signal = new LocalAbortSignal(); }
+              abort(reason) {
+                const s = this.signal;
+                if (s.aborted) return;
+                s.aborted = true;
+                s.reason = reason === undefined ? Object.assign(new Error('Aborted'), {name:'AbortError'}) : reason;
+                const event = {type:'abort', target:s, currentTarget:s};
+                for (const [fn, once] of Array.from(s.listeners)) {
+                  if (once) s.listeners.delete(fn);
+                  if (typeof fn === 'function') fn.call(s,event); else fn.handleEvent(event);
+                }
+                if (typeof s.onabort === 'function') s.onabort.call(s,event);
+              }
+            }
+            globalThis.AbortSignal = LocalAbortSignal;
+            globalThis.AbortController = LocalAbortController;
+            const c = new AbortController();
+            let calls = 0;
+            c.signal.addEventListener('abort', () => calls++, {once:true});
+            c.abort(); c.abort();
+            if (!c.signal.aborted || calls !== 1) throw new Error('Cancellation shim self-test failed');
+          }
+          """#)
+          if let failure { fatalError(failure) }
           let source = try String(contentsOfFile: "pinets.js", encoding: .utf8)
           context.evaluateScript(source)
           if let failure { fatalError(failure) }
