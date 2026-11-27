@@ -548,7 +548,7 @@ struct ProfessionalChartHost: View {
         let input = (model.series.candles ?? []).suffix(10_000).compactMap { candle -> MarketBar? in
             guard let actual = sessionAxis.actualTime(for: candle.time) else { return nil }
             return MarketBar(time: actual, open: candle.open, high: candle.high, low: candle.low,
-                             close: candle.close, preSettlement: nil, volume: Int64(exactly: candle.volume) ?? 0,
+                             close: candle.close, preSettlement: nil, volume: candle.volume.flatMap { Int64(exactly: $0) } ?? 0,
                              openInterest: candle.openInterest, closeInterest: candle.closeInterest)
         }
         guard !input.isEmpty else { return }
