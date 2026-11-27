@@ -1299,7 +1299,7 @@ struct TradingCenterView: View {
                                         if tab != "挂单" {
                                             recordCell(String(max(0, o.quantity - o.remaining)), width: 48)
                                             recordCell(canceledQuantity(o), width: 48)
-                                            recordCell(o.trade_price?.formatted() ?? "--", width: 72)
+                                            recordCell(o.trade_price?.formatted(.number.precision(.fractionLength(2))) ?? "--", width: 72)
                                         }
                                         recordCell(recordTime(o.time_ns), width: 76)
                                     }.contentShape(Rectangle())
@@ -1607,7 +1607,7 @@ struct TradingCenterView: View {
                     Text(long ? "多" : "空").font(.system(size: 14)).foregroundStyle(long ? MarketPalette.up : MarketPalette.down)
                 }.frame(width: 132, alignment: .leading)
                 Text(String(qty) + "/" + (frozen.map { String(max(0, qty-$0)) } ?? "--")).frame(width: 65)
-                Text(average.map { $0.formatted() } ?? "--").frame(width: 67, alignment: .trailing)
+                Text(average.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "--").frame(width: 67, alignment: .trailing)
                 Text(money(profit, suffix: false)).foregroundStyle(MarketPalette.movement(profit)).frame(width: 75, alignment: .trailing)
                 Text(money(long ? p.margin_long : p.margin_short, suffix: false)).frame(width: 85, alignment: .trailing)
                 Text(money(long ? p.market_value_long : p.market_value_short, suffix: false)).frame(width: 85, alignment: .trailing)
