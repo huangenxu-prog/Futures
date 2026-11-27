@@ -1207,7 +1207,7 @@ struct TradingCenterView: View {
     ) -> some View {
         HStack(alignment: .top, spacing: 0) {
             left()
-                .frame(width: frozenContractWidth, alignment: .leading)
+                .frame(width: tab == "挂单" ? 116 : frozenContractWidth, alignment: .leading)
                 .background(MarketPalette.background)
                 .zIndex(1)
             ScrollView(.horizontal, showsIndicators: true) {
@@ -1364,48 +1364,58 @@ struct TradingCenterView: View {
 
     private func frozenOrders(_ orders: [CloudSnapshot.Order]) -> some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 0) {
             frozenRecordTable {
                 VStack(spacing: 0) {
                     recordBand(height: recordHeaderHeight) {
-                        recordCell("合约", width: frozenContractWidth).foregroundStyle(.secondary)
+                        recordCell("合约", width: tab == "挂单" ? 116 : frozenContractWidth).foregroundStyle(.secondary)
                     }
                     ForEach(orders) { o in
                         recordBand(height: recordRowHeight) {
-                            recordCell(contractName(o.symbol), width: frozenContractWidth)
+                            recordCell(contractName(o.symbol), width: tab == "挂单" ? 116 : frozenContractWidth)
                         }
-                        if rejectionReason(o) != nil { recordBand(height: 23) { Color.clear.frame(width: frozenContractWidth) } }
+                        if rejectionReason(o) != nil { recordBand(height: 23) { Color.clear.frame(width: tab == "挂单" ? 116 : frozenContractWidth) } }
                     }
                 }
             } right: {
                 VStack(spacing: 0) {
                     recordBand(height: recordHeaderHeight) {
-                        HStack(spacing: 5) {
-                            recordCell("状态", width: 56)
-                            recordCell("开平", width: 38)
-                            recordCell("委托价", width: 60)
-                            recordCell("委托量", width: 48)
+                        HStack(spacing: tab == "挂单" ? 2 : 5) {
+                            recordCell("状态", width: tab == "挂单" ? 31 : 56)
+                            recordCell("开平", width: tab == "挂单" ? 29 : 38)
+                            recordCell("委托价", width: tab == "挂单" ? 48 : 60)
+                            recordCell(tab == "挂单" ? "手数" : "委托量", width: tab == "挂单" ? 28 : 48)
                             if tab != "挂单" {
                                 recordCell("已成交", width: 48)
                                 recordCell("已撤单", width: 48)
                                 recordCell("成交均价", width: 72)
                             }
+                            if tab == "挂单" { recordCell("操作", width: 32) }
                             recordCell("时间", width: 76)
                         }.foregroundStyle(.secondary)
                     }
                     ForEach(orders) { o in
                         recordBand(height: recordRowHeight) {
-                            HStack(spacing: 5) {
-                                    HStack(spacing: 5) {
-                                        recordCell(o.stateText, width: 56)
-                                        recordCell(recordAction(o.direction, o.offset), width: 38)
+                            HStack(spacing: tab == "挂单" ? 2 : 5) {
+                                    HStack(spacing: tab == "挂单" ? 2 : 5) {
+                                        recordCell(o.stateText, width: tab == "挂单" ? 31 : 56)
+                                        recordCell(recordAction(o.direction, o.offset), width: tab == "挂单" ? 29 : 38)
                                             .foregroundStyle(o.direction == "BUY" ? MarketPalette.up : MarketPalette.down)
-                                        recordCell(o.price?.formatted() ?? "", width: 60)
-                                        recordCell(String(o.quantity), width: 48)
+                                        recordCell(o.price?.formatted() ?? "", width: tab == "挂单" ? 48 : 60)
+                                        recordCell(String(o.quantity), width: tab == "挂单" ? 28 : 48)
                                         if tab != "挂单" {
                                             recordCell(String(max(0, o.quantity - o.remaining)), width: 48)
                                             recordCell(canceledQuantity(o) == "--" ? "" : canceledQuantity(o), width: 48)
                                             recordCell(o.trade_price?.formatted(.number.precision(.fractionLength(2))) ?? "", width: 72)
+                                        }
+                                        if tab == "挂单" {
+                                            Button("撤单", role: .destructive) { cancelID = o.id }
+                                                .font(.system(size: 13)).lineLimit(1).buttonStyle(.plain)
+                                                .foregroundStyle(MarketPalette.up)
+                                                .frame(width: 32, height: recordRowHeight)
+                                                .contentShape(Rectangle())
+                                                .disabled(session.busy || session.isLive || o.status != "ALIVE")
+                                                .opacity(session.busy || session.isLive || o.status != "ALIVE" ? 0.4 : 1)
+                                                .accessibilityLabel("撤单 " + contractName(o.symbol))
                                         }
                                         recordCell(recordTime(o.time_ns), width: 76)
                                     }.frame(height: recordRowHeight)
@@ -1419,32 +1429,6 @@ struct TradingCenterView: View {
                         }
                     }
                 }
-            }
-            if tab == "挂单" {
-                VStack(spacing: 0) {
-                    recordBand(height: recordHeaderHeight) {
-                        Text("操作").font(.system(size: 13)).foregroundStyle(.secondary)
-                            .frame(width: 52)
-                    }
-                    ForEach(orders) { o in
-                        recordBand(height: recordRowHeight) {
-                            Button("撤单", role: .destructive) { cancelID = o.id }
-                                .font(.system(size: 13))
-                                .buttonStyle(.plain)
-                                .foregroundStyle(MarketPalette.up)
-                                .frame(width: 52, height: recordRowHeight)
-                                .contentShape(Rectangle())
-                                .disabled(session.busy || session.isLive || o.status != "ALIVE")
-                                .opacity(session.busy || session.isLive || o.status != "ALIVE" ? 0.4 : 1)
-                                .accessibilityLabel("撤单 " + contractName(o.symbol))
-                        }
-                        if rejectionReason(o) != nil { recordBand(height: 23) { Color.clear.frame(width: 52) } }
-                    }
-                }
-                .frame(width: 52)
-                .background(MarketPalette.background)
-                .zIndex(1)
-            }
             }
             if orders.isEmpty { Text(tab == "挂单" ? "暂无挂单" : "暂无委托或未取得数据").font(.caption).foregroundStyle(.secondary) }
         }
