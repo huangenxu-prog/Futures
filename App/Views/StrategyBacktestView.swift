@@ -240,6 +240,7 @@ struct StrategyBacktestView: View {
         let requested = historyCount, warmup = warmupCount
         guard p.valid else { error = "回测参数无效"; return }
         persistParameters(for: strategyID)
+        let selectedFormula = formulas.first { $0.id.uuidString == strategyID }
         let code = source, executionPeriod = period, executionSymbol = symbol
         running = true; error = nil; result = nil; resultTimes = []; phase = "获取历史K线"
         task = Task {
@@ -258,7 +259,8 @@ struct StrategyBacktestView: View {
                     volume:Double($0.volume),openInterest:$0.openInterest,closeInterest:$0.closeInterest) }
                 phase = "计算信号与模拟成交"
                 let calculation = Task.detached(priority:.userInitiated) {
-                    let signals = try FuturesBacktest.formulaSignals(code,bars:bars)
+                    let program = try selectedFormula?.program() ?? FormulaProgram(code)
+                    let signals = try FuturesBacktest.formulaSignals(program,bars:bars)
                     return (try FuturesBacktest.run(bars:bars,signals:signals,p:p,startIndex:startIndex),"")
                 }
                 let (value,researchNote) = try await withTaskCancellationHandler {

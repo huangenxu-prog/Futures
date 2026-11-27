@@ -1,9 +1,10 @@
+import Foundation
 import TradingChart
 
 struct QihuiFormulaIndicator: ChartIndicator {
     let definition: FormulaDefinition
     let program: FormulaProgram
-    var id: String { "formula:\(definition.id):\(definition.overlay):\(definition.source)" }
+    var id: String { "formula:\(definition.id):\(definition.effectivePlatform.rawValue):\(definition.parameters ?? ""):\(definition.overlay):\(definition.source)" }
     var displayName: String { definition.name }
     var placement: IndicatorPlacement { definition.overlay ? .overlay : .pane }
 
@@ -35,6 +36,12 @@ struct QihuiFormulaIndicator: ChartIndicator {
                     }
                     segmentSeries.append(IndicatorSegmentSeries(segments:plotted,
                         style:IndicatorLineStyle(color:color,width:output.width)))
+                case .numbers(let numbers,let precision):
+                    for i in bars.indices {
+                        guard let value = output.values[i], let number = numbers[i] else { continue }
+                        signals.append(IndicatorSignal(time:input.candles[i].time,value:value,
+                            text:String(format:"%.*f",precision,number),color:color,fontSize:11))
+                    }
                 case .signal(let label):
                     for (bar,value) in zip(input.candles,output.values) {
                         guard let value else { continue }
@@ -42,14 +49,39 @@ struct QihuiFormulaIndicator: ChartIndicator {
                     }
                 }
             } else if output.histogram {
-                var sticks: [HistogramBar] = []
+                var histogramBars: [HistogramBar] = []
+                let positive = ChartColor(red:1, green:0, blue:0)
+                let negative = ChartColor(red:0, green:1, blue:0)
                 for (bar,value) in zip(input.candles,output.values) {
                     guard let value, value.isFinite else { continue }
-                    sticks.append(HistogramBar(time:bar.time,value:value,
+                    if definition.overlay && definition.effectivePlatform != .native {
+                        sticks.append(IndicatorStick(time:bar.time,start:0,end:value,width:3,hollow:false,
+                                                     color:color ?? (value < 0 ? negative : positive)))
+                        continue
+                    }
+                    histogramBars.append(HistogramBar(time:bar.time,value:value,
                         tone:value > 0 ? .positive : value < 0 ? .negative : .neutral,color:color))
                 }
-                histograms.append(IndicatorHistogram(id:"output.\(index)",name:output.name,bars:sticks))
+                if !definition.overlay || definition.effectivePlatform == .native {
+                    histograms.append(IndicatorHistogram(id:"output.\(index)",name:output.name,bars:histogramBars))
+                }
             } else {
+                // Swift Charts connects successive non-nil points. Preserve real gaps in imported lines.
+                if definition.effectivePlatform != .native,
+                   let first = output.values.firstIndex(where: { $0 != nil }),
+                   let last = output.values.lastIndex(where: { $0 != nil }),
+                   output.values[first...last].contains(nil) {
+                    var segments: [IndicatorSegment] = []
+                    var previous: IndicatorValue?
+                    for (bar,value) in zip(input.candles,output.values) {
+                        guard let value else { previous = nil; continue }
+                        let point = IndicatorValue(time:bar.time,value:value)
+                        if let previous { segments.append(IndicatorSegment(start:previous,end:point)) }
+                        previous = point
+                    }
+                    segmentSeries.append(IndicatorSegmentSeries(segments:segments,style:IndicatorLineStyle(color:color,width:output.width)))
+                    continue
+                }
                 var values: [IndicatorValue] = []
                 for (bar,value) in zip(input.candles,output.values) {
                     if let value, value.isFinite { values.append(IndicatorValue(time:bar.time,value:value)) }

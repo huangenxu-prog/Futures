@@ -253,7 +253,7 @@ struct ChartDisplaySettings: Codable, Equatable {
             if let indicator = movingAverage(average) { result.append(indicator) }
         }
         for formula in formulas where formula.enabled {
-            if let program = try? FormulaProgram(formula.source) {
+            if let program = try? formula.program() {
                 result.append(QihuiFormulaIndicator(definition:formula,program:program))
             }
         }

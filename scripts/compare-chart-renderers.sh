@@ -44,3 +44,15 @@ for mode in ("hollow","native"):
 (out/"summary.json").write_text(json.dumps(summary, indent=2))
 print(json.dumps(summary,indent=2))
 PY
+
+# Validate the actual formula overlays and lower pane in the same offline replay.
+xcrun simctl terminate "$UDID" "$BUNDLE" || true
+rm -f "$DATA/Documents/chart-replay.json"
+xcrun simctl launch "$UDID" "$BUNDLE" -qihui-chart-replay -qihui-formula-replay
+for i in $(seq 1 30); do
+    [[ -s "$DATA/Documents/chart-replay.json" ]] && break
+    sleep 1
+done
+test -s "$DATA/Documents/chart-replay.json"
+xcrun simctl io "$UDID" screenshot "$OUT/formula-platforms.png"
+swift scripts/check-formula-screenshot.swift "$OUT/formula-platforms.png"

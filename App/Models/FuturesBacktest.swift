@@ -73,7 +73,11 @@ enum FuturesBacktest {
     }
 
     static func formulaSignals(_ source: String, bars: [FormulaBar]) throws -> [BacktestSignal] {
-        let outputs = try FormulaProgram(source).evaluate(bars)
+        return try formulaSignals(FormulaProgram(source), bars: bars)
+    }
+
+    static func formulaSignals(_ program: FormulaProgram, bars: [FormulaBar]) throws -> [BacktestSignal] {
+        let outputs = try program.evaluate(bars)
         let named = Dictionary(uniqueKeysWithValues:outputs.filter { $0.drawing == nil }.map { ($0.name,$0.values) })
         guard named["LONG"] != nil || named["SHORT"] != nil else {
             throw FormulaFailure("回测公式须输出 LONG 或 SHORT；可选 EXIT 与 STOP。均线本身不是交易规则。")

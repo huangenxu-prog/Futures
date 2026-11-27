@@ -5,6 +5,10 @@ struct FormulaEngineSelfTest {
         precondition(a != nil && abs(a!-b) < 1e-8, "Expected \(b), got \(String(describing:a))")
     }
     static func main() throws {
+        if CommandLine.arguments.contains("--platform-corpus") {
+            try runPlatformCorpus()
+            return
+        }
         let bars = (1...6).map { i -> FormulaBar in
             let x = Double(i)
             return FormulaBar(open:x,high:x+1,low:x-1,close:x,volume:x*10)
@@ -230,6 +234,85 @@ struct FormulaEngineSelfTest {
         let layers = (0..<20).map { _ in "STICKLINE(C>0,0,C,1,0),COLORFF0000;" }.joined()
         let layered = try FormulaProgram(layers).evaluate(bars)
         precondition(layered.count == 20)
+        let corpus = Process()
+        corpus.executableURL = URL(fileURLWithPath:"/usr/bin/env")
+        corpus.arguments = ["python3","scripts/formula-platform-corpus.py",CommandLine.arguments[0]]
+        try corpus.run()
+        corpus.waitUntilExit()
+        precondition(corpus.terminationStatus == 0,"platform corpus failed")
         print("Formula engine: causal state, dynamic references, confirmed segments and previous fixtures passed")
     }
+    struct Fixture: Decodable {
+        let label: String
+        let source: String
+        let platform: FormulaPlatform
+        let parameters: String
+        let expected: [[Double?]]
+    }
+
+    static func runPlatformCorpus() throws {
+        let fixtures = try JSONDecoder().decode([Fixture].self, from: FileHandle.standardInput.readDataToEndOfFile())
+        let bars = (0..<80).map { i -> FormulaBar in
+            let close = Double(97 + i%7 - (3*i)%11)
+            let open = close + Double(i%3-1)
+            return FormulaBar(open:open,high:max(open,close)+2,low:min(open,close)-2,
+                              close:close,volume:Double(11+i%9))
+        }
+        for fixture in fixtures {
+            var saved = FormulaDefinition()
+            saved.source = fixture.source
+            saved.platform = fixture.platform
+            saved.parameters = fixture.parameters
+            let restored = try JSONDecoder().decode(FormulaDefinition.self,from:JSONEncoder().encode(saved))
+            precondition(saved == restored)
+            let output = try restored.program().evaluate(bars)
+            precondition(output.count == fixture.expected.count, fixture.label)
+            for (line, reference) in zip(output, fixture.expected) {
+                precondition(line.values.count == reference.count, fixture.label)
+                for (index,pair) in zip(line.values,reference).enumerated() {
+                    switch pair {
+                    case (nil,nil): break
+                    case let (actual?,expected?) where abs(actual-expected) < 1e-8: break
+                    default: fatalError("\(fixture.label) \(line.name) bar \(index) \(pair)")
+                    }
+                }
+            }
+        }
+        let legacy = try JSONDecoder().decode(FormulaDefinition.self,from: Data(
+            #"{"id":"00000000-0000-0000-0000-000000000002","name":"old","source":"X:C;","enabled":true,"overlay":true}"#.utf8))
+        precondition(legacy.effectivePlatform == .native)
+        let wh = try FormulaProgram("STICK(C<O,O,C,3,COLORCYAN,0);DRAWTEXT(C<O,H,'阴'),COLORYELLOW;",platform:.wenhua).evaluate(bars)
+        guard case .stick(let starts,10,false)? = wh[0].drawing,
+              case .signal("阴")? = wh[1].drawing else { fatalError("wrong drawing primitives") }
+        precondition(wh[0].color == "00FFFF" && wh[1].color == "FFFF00")
+        for i in bars.indices {
+            let active = bars[i].close < bars[i].open
+            precondition(starts[i] == (active ? bars[i].open : nil))
+            precondition(wh[0].values[i] == (active ? bars[i].close : nil))
+            precondition(wh[1].values[i] == (active ? bars[i].high : nil))
+        }
+        let tdx = try FormulaProgram("STICKLINE(C>0,O,C,0.8,1),COLOR0000FF;",platform:.tongdaxin).evaluate(bars)
+        guard case .stick(_,2,true)? = tdx[0].drawing else { fatalError("wrong TDX width") }
+        precondition(tdx[0].color == "FF0000")
+        let macd = try FormulaProgram("X:C,COLORSTICK;Y:C,COLORFF8D1F;",platform:.hexin).evaluate(bars)
+        precondition(macd[0].histogram && macd[1].color == "1F8DFF")
+        let numeric = try FormulaProgram("DRAWNUMBER(C>O,L,H-C,2,RGB(12,34,56));",platform:.wenhua).evaluate(bars)
+        guard case .numbers(let labels,2)? = numeric[0].drawing else { fatalError("missing numeric label") }
+        precondition(numeric[0].color == "0C2238")
+        for i in bars.indices {
+            precondition(labels[i] == bars[i].high-bars[i].close)
+            precondition(numeric[0].values[i] == (bars[i].close > bars[i].open ? bars[i].low : nil))
+        }
+        let rejected: [(FormulaPlatform,String)] = [
+            (.hexin,"X:STD(C,2);"),(.hexin,"X:IFN(C,1,2);"),(.tongdaxin,"A:BACKSET(C,3);"),
+            (.tongdaxin,"X:C,UNKNOWNSTYLE;"),(.wenhua,"CROSS(C,O),BK;"),(.wenhua,"A:HHVBARS(C,4);"),
+            (.wenhua,"STICKLINE(C,O,C,3,0);"),(.tongdaxin,"A:MA(C,501);"),
+            (.hexin,"X:=C,COLORSTICK;Y:C;"),(.wenhua,"A:REFX(C,3);")]
+        for (platform,code) in rejected {
+            do { _ = try FormulaProgram(code,platform:platform); fatalError("accepted " + code) }
+            catch is FormulaFailure { }
+        }
+        print("Passed \(fixtures.count) platform fixtures × 80 bars, drawing and persistence checks, \(rejected.count) rejection cases")
+    }
+
 }
