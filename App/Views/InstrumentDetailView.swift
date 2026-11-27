@@ -233,6 +233,7 @@ private struct InstrumentDetailPage: View {
     @Environment(\.mainContracts) private var contracts
     @EnvironmentObject private var favorites: Favorites
     @State private var showOptions = false
+    @State private var showTermStructure = false
     @State private var tradeContract: PaperContract?
     @State private var showContracts = false
     @State private var showChartIndicatorSettings = false
@@ -408,6 +409,9 @@ private struct InstrumentDetailPage: View {
             QuickTradeSheet(contract: contract)
                 .presentationDetents([.height(390), .large])
                 .presentationDragIndicator(.visible)
+        }
+        .fullScreenCover(isPresented: $showTermStructure) {
+            TermStructureView(symbol: chartSymbol, name: instrument.name, product: instrument.id)
         }
         .fullScreenCover(isPresented: $showOptions) {
             OptionChainView(code: chartSymbol, underlyingLast: currentLast,underlyingName:instrument.name, productID: instrument.id)
@@ -624,7 +628,12 @@ private struct InstrumentDetailPage: View {
             .monospacedDigit()
             .lineLimit(1)
             .minimumScaleFactor(0.7)
-            Spacer(minLength: 4)
+            Button { showTermStructure = true } label: {
+                Image(systemName: "chart.xyaxis.line").font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(MarketPalette.muted).frame(width: 30, height: 40)
+                    .contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel("期限结构")
+            Spacer(minLength: 0)
             VStack(spacing: 4) {
                 bookQuote("卖1", price: contractQuote(quote?.ask, selectedContract?.ask),
                           quantity: selectedContract == nil ? quote?.askVolume : selectedContract?.askVolume)

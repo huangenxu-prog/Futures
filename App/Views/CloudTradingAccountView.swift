@@ -680,16 +680,28 @@ struct TradingCenterView: View {
         }
     }
     private var accountHeader: some View {
-        HStack(spacing: 8) {
-            VStack(spacing: 5) {
-                accountMetric("账户权益", money(session.snapshot?.account.balance, suffix: false))
-                accountMetric("可用资金", money(session.snapshot?.account.available, suffix: false))
+        VStack(spacing: 5) {
+            HStack(spacing: 8) {
+                VStack(spacing: 5) {
+                    accountMetric("账户权益", money(session.snapshot?.account.balance, suffix: false))
+                    accountMetric("可用资金", money(session.snapshot?.account.available, suffix: false))
+                }
+                Divider().frame(height: 34)
+                VStack(spacing: 5) {
+                    accountMetric("持仓盈亏", money(session.snapshot?.account.float_profit, suffix: false),
+                                  tint: MarketPalette.movement(session.snapshot?.account.float_profit))
+                    accountMetric("平仓盈亏", money(session.snapshot?.account.close_profit, suffix: false),
+                                  tint: MarketPalette.movement(session.snapshot?.account.close_profit))
+                }
             }
-            Divider().frame(height: 34)
-            VStack(spacing: 5) {
-                accountMetric("持仓盈亏", money(session.snapshot?.account.float_profit, suffix: false),
-                              tint: MarketPalette.movement(session.snapshot?.account.float_profit))
-                accountMetric("保证金占比", usage)
+            HStack(spacing: 8) {
+                accountMetric("风险", usage)
+                accountMetric("手续费", money(session.snapshot?.account.commission, suffix: false))
+                Button("银期转账") {}.font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(MarketPalette.accent)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(MarketPalette.accent.opacity(0.65)) }
+                    .disabled(true).accessibilityHint("暂未开放")
             }
         }.padding(.vertical, 8)
     }
