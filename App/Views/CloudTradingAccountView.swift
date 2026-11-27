@@ -580,7 +580,7 @@ struct TradingCenterView: View {
     private var signedInPanel: some View {
         VStack(spacing: 0) {
                         if !quickOnly { accountHeader; Divider() }
-                        else { Text(session.isLive ? "实盘只读" : "快期云端模拟").font(.caption).foregroundStyle(.secondary) }
+                        else { Text(session.isLive ? "实盘只读" : "快期云端模拟").font(.caption).foregroundStyle(MarketPalette.muted).padding(.bottom, 8) }
                         if session.isLive {
                             Text("实盘只读 · 禁止下单及撤单").font(.caption).foregroundStyle(.secondary)
                             if quickOnly { Button("退出账户") { Task { await session.logout() } } }
@@ -715,29 +715,29 @@ struct TradingCenterView: View {
                     }
                     priceMode = mode
                 } label: {
-                    Text(mode.rawValue).font(.caption2.weight(.medium))
-                        .frame(maxWidth: .infinity).padding(.vertical, 6)
-                        .foregroundStyle(priceMode == mode ? MarketPalette.accent : MarketPalette.muted)
-                        .background(priceMode == mode ? MarketPalette.accent.opacity(0.12) : MarketPalette.raised, in: RoundedRectangle(cornerRadius: 4))
+                    Text(mode.rawValue).font(quickOnly ? .subheadline.weight(.medium) : .caption2.weight(.medium))
+                        .frame(maxWidth: .infinity).padding(.vertical, quickOnly ? 11 : 6)
+                        .foregroundStyle(priceMode == mode ? (quickOnly ? Color.white : MarketPalette.accent) : (quickOnly ? MarketPalette.ink : MarketPalette.muted))
+                        .background(priceMode == mode ? MarketPalette.accent.opacity(quickOnly ? 1 : 0.12) : MarketPalette.raised, in: RoundedRectangle(cornerRadius: quickOnly ? 7 : 4))
                 }.buttonStyle(.plain)
             }
         }
     }
     private var priceInput: some View {
         HStack(spacing: 4) {
-            Button { stepPrice(-1) } label: { Image(systemName: "minus").frame(width: 30, height: 30) }
+            Button { stepPrice(-1) } label: { Image(systemName: "minus").frame(width: quickOnly ? 44 : 30, height: quickOnly ? 44 : 30) }
                 .buttonStyle(.plain).disabled(selected?.tick == nil)
             if priceMode == .limit {
                 TextField("限价", text: $selectedPrice).keyboardType(.decimalPad).multilineTextAlignment(.center).monospacedDigit()
             } else {
                 Text(priceMode.rawValue).font(.subheadline.weight(.medium)).frame(maxWidth: .infinity)
             }
-            Button { stepPrice(1) } label: { Image(systemName: "plus").frame(width: 30, height: 30) }
+            Button { stepPrice(1) } label: { Image(systemName: "plus").frame(width: quickOnly ? 44 : 30, height: quickOnly ? 44 : 30) }
                 .buttonStyle(.plain).disabled(selected?.tick == nil)
-        }.padding(3).overlay(RoundedRectangle(cornerRadius: 5).stroke(MarketPalette.divider))
+        }.padding(3).overlay(RoundedRectangle(cornerRadius: quickOnly ? 8 : 5).stroke(MarketPalette.divider))
     }
     private var quickOrderPanel: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 14) {
             HStack {
                 Text(selected.map { contractName($0.symbol) } ?? initialContract.map { contractName($0.symbol) } ?? "--")
                     .font(.headline)
@@ -746,16 +746,28 @@ struct TradingCenterView: View {
             }
             HStack(spacing: 6) {
                 priceButton("买一", selected?.bid)
+                Rectangle().fill(MarketPalette.divider).frame(width: 1, height: 22)
                 priceButton("最新", selected?.last)
+                Rectangle().fill(MarketPalette.divider).frame(width: 1, height: 22)
                 priceButton("卖一", selected?.ask)
             }
             priceModePicker
             priceInput
-            HStack {
-                Text("手数").font(.caption)
-                Button { if selectedQuantity > 1 { selectedQuantity -= 1 } else { selectedQuantity = 1 } } label: { Image(systemName: "minus.circle") }
-                TextField("手数", value: $selectedQuantity, format: .number.grouping(.never)).keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit()
-                Button { if selectedQuantity < Int.max { selectedQuantity += 1 } } label: { Image(systemName: "plus.circle") }
+            HStack(spacing: 16) {
+                Text("手数").font(.subheadline.weight(.medium)).frame(width: 64, alignment: .leading)
+                HStack(spacing: 4) {
+                    Button { if selectedQuantity > 1 { selectedQuantity -= 1 } else { selectedQuantity = 1 } } label: {
+                        Image(systemName: "minus").font(.title3.weight(.medium)).frame(width: 48, height: 44)
+                    }.foregroundStyle(MarketPalette.accent).accessibilityLabel("减少手数")
+                    TextField("手数", value: $selectedQuantity, format: .number.grouping(.never))
+                        .keyboardType(.numberPad).multilineTextAlignment(.center).monospacedDigit().font(.title3.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                    Button { if selectedQuantity < Int.max { selectedQuantity += 1 } } label: {
+                        Image(systemName: "plus").font(.title3.weight(.medium)).frame(width: 48, height: 44)
+                    }.foregroundStyle(MarketPalette.accent).accessibilityLabel("增加手数")
+                }
+                .padding(3)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(MarketPalette.divider))
             }.buttonStyle(.borderless)
             HStack(spacing: 8) {
                 tradeButton("开多", color: MarketPalette.up)
@@ -763,8 +775,8 @@ struct TradingCenterView: View {
             }
             if let quickConfirmationError { Text(quickConfirmationError).font(.caption).foregroundStyle(.red) }
             Text(quoteError ? "报价获取失败，请核对价格" : (quoteStamp == nil ? "等待报价" : "参考报价 · " + (quoteStamp?.formatted(date: .omitted, time: .standard) ?? "")))
-                .font(.caption2).foregroundStyle(.secondary)
-        }.padding(.vertical, 4)
+                .font(.caption).foregroundStyle(MarketPalette.muted)
+        }.padding(.vertical, 8)
     }
     private func quoteColor(_ value: Double?) -> Color {
         guard let value, value.isFinite else { return MarketPalette.muted }
@@ -912,8 +924,8 @@ struct TradingCenterView: View {
             if let value, value.isFinite, value > 0 { priceMode = .limit; selectedPrice = priceText(value) }
         } label: {
             VStack(spacing: 4) {
-                Text(title).font(.caption2).foregroundStyle(.secondary)
-                Text(value.map { $0.formatted() } ?? "--").font(.subheadline.weight(.medium)).monospacedDigit().foregroundStyle(quoteColor(value))
+                Text(title).font(quickOnly ? .caption : .caption2).foregroundStyle(quickOnly ? MarketPalette.muted : Color.secondary)
+                Text(value.map { $0.formatted() } ?? "--").font(quickOnly ? .title3.weight(.semibold) : .subheadline.weight(.medium)).monospacedDigit().foregroundStyle(quoteColor(value))
             }.frame(maxWidth: .infinity).padding(.vertical, 7)
         }.buttonStyle(.borderless).disabled(value == nil)
     }
@@ -927,10 +939,10 @@ struct TradingCenterView: View {
             if quickOnly { showQuickConfirmation = true }
         } label: {
             VStack(spacing: 3) {
-                Text(priceText(effectivePrice(buy: action == "开多"))).font(.system(size: 22, weight: .semibold).monospacedDigit())
+                Text(priceText(effectivePrice(buy: action == "开多"))).font(.system(size: quickOnly ? 26 : 22, weight: .semibold).monospacedDigit())
                 Text(title ?? (selected?.option != nil ? (action == "开多" ? "买开" : "卖开") : action))
             }.font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 64)
+                .foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: quickOnly ? 76 : 64)
                 .background(color.opacity(validOrder(action) ? 0.85 : 0.25), in: RoundedRectangle(cornerRadius: 8))
         }.buttonStyle(.borderless).disabled(!validOrder(action))
     }
