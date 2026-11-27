@@ -832,5 +832,16 @@ class GatewayStreamingTests(unittest.TestCase):
         self.assertEqual(result["interest"], 2000)
 
 
+class OrderLimitMetadataTests(unittest.TestCase):
+    def test_positive_limits_only(self):
+        from types import SimpleNamespace
+        from market_gateway import append_order_limits
+        q = SimpleNamespace(open_min_limit_order_volume=5, open_max_limit_order_volume=1000,
+                            min_limit_order_volume=1, max_limit_order_volume=0, open_limit=200)
+        self.assertEqual(append_order_limits({}, q), {"openMinLimitVolume": 5,
+            "openMaxLimitVolume": 1000, "minLimitVolume": 1, "dailyOpenLimit": 200})
+        self.assertEqual(append_order_limits({}, SimpleNamespace(open_limit=0,
+            open_min_limit_order_volume=float("nan"), open_max_limit_order_volume=1.5)), {})
+
 if __name__ == "__main__":
     unittest.main()

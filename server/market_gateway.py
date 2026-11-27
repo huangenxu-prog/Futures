@@ -466,6 +466,19 @@ def main_contracts():
         QUERY_WORKER.release_api(api)
 
 
+def append_order_limits(row, quote):
+    """Positive SDK limits only; zero or missing is not a prohibition."""
+    for field, key in (("open_min_limit_order_volume", "openMinLimitVolume"),
+                       ("open_max_limit_order_volume", "openMaxLimitVolume"),
+                       ("min_limit_order_volume", "minLimitVolume"),
+                       ("max_limit_order_volume", "maxLimitVolume"),
+                       ("open_limit", "dailyOpenLimit")):
+        value = getattr(quote, field, None)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 < value <= 2147483647 and int(value) == value:
+            row[key] = int(value)
+    return row
+
+
 def option_quote_row(code, quote):
     row = dict(snapshot(quote), code=code, strike=float(quote.strike_price),
                side=quote.option_class)
@@ -477,7 +490,7 @@ def option_quote_row(code, quote):
             if key == "expireEpoch" and value > 1e12:
                 value /= 1e9
             row[key] = float(value)
-    return row
+    return append_order_limits(row, quote)
 
 
 @reusable_query
@@ -538,7 +551,7 @@ def exact_quote_row(symbol, quote):
         value = getattr(quote, field, None)
         if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0:
             row[key] = float(value)
-    return row
+    return append_order_limits(row, quote)
 
 
 def exact_contract_quote(symbol):

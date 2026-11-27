@@ -518,7 +518,7 @@ struct TradingCenterView: View {
                 guard scenePhase == .active, let updates = notification.object as? [String: MarketDataService.MainContract], let c = selected, c.option == nil, let p = product(c.symbol), let q = updates[p.id], q.code == c.symbol, let last = q.last, last.isFinite, last > 0 else { return }
                 if let previous = detailedQuote?.time, let incoming = q.time, incoming < previous { return }
                 selected = PaperContract(symbol: c.symbol, name: c.name, tick: c.tick, multiplier: c.multiplier, last: last, bid: q.bid, ask: q.ask, option: nil)
-                detailedQuote = MarketDataService.ContractQuote(code: q.code, month: q.month, last: q.last, settlement: q.settlement, bid: q.bid, ask: q.ask, volume: q.volume, interest: q.interest, priceTick: c.tick, volumeMultiple: c.multiplier, bidVolume: q.bidVolume, askVolume: q.askVolume, opening: q.opening, highest: q.highest, lowest: q.lowest, upperLimit: detailedQuote?.upperLimit, lowerLimit: detailedQuote?.lowerLimit, referenceMargin: detailedQuote?.referenceMargin, referenceCommission: detailedQuote?.referenceCommission, time: q.time)
+                detailedQuote = MarketDataService.ContractQuote(code: q.code, month: q.month, last: q.last, settlement: q.settlement, bid: q.bid, ask: q.ask, volume: q.volume, interest: q.interest, priceTick: c.tick, volumeMultiple: c.multiplier, bidVolume: q.bidVolume, askVolume: q.askVolume, opening: q.opening, highest: q.highest, lowest: q.lowest, upperLimit: detailedQuote?.upperLimit, lowerLimit: detailedQuote?.lowerLimit, referenceMargin: detailedQuote?.referenceMargin, referenceCommission: detailedQuote?.referenceCommission, openMinLimitVolume: detailedQuote?.openMinLimitVolume, openMaxLimitVolume: detailedQuote?.openMaxLimitVolume, minLimitVolume: detailedQuote?.minLimitVolume, maxLimitVolume: detailedQuote?.maxLimitVolume, dailyOpenLimit: detailedQuote?.dailyOpenLimit, time: q.time)
             }
             .task(id: "\(selectionRequest)-\(scenePhase)-\(session.signedIn)") {
                 guard scenePhase == .active, session.signedIn, let c = selected else { return }
@@ -700,15 +700,53 @@ struct TradingCenterView: View {
         let steps = price / tick
         return steps.isFinite && abs(steps - steps.rounded()) < 0.00001
     }
+    private var openingMinimum: Int? {
+        guard let c = selected else { return nil }
+        return c.isOption ? optionQuote?.openMinLimitVolume : detailedQuote?.openMinLimitVolume
+    }
+    private var openingMaximum: Int? {
+        guard let c = selected else { return nil }
+        return c.isOption ? optionQuote?.openMaxLimitVolume : detailedQuote?.openMaxLimitVolume
+    }
+    private var dailyOpeningLimit: Int? {
+        guard let c = selected else { return nil }
+        return c.isOption ? optionQuote?.dailyOpenLimit : detailedQuote?.dailyOpenLimit
+    }
+    private func openingQuantityAllowed(_ quantity: Int) -> Bool {
+        guard quantity > 0 else { return false }
+        if let minimum = openingMinimum, minimum > 0, quantity < minimum { return false }
+        if let maximum = openingMaximum, maximum > 0, quantity > maximum { return false }
+        return true
+    }
+    private func closingQuantityAllowed(_ quantity: Int) -> Bool {
+        guard let c = selected, quantity > 0 else { return false }
+        let minimum = c.isOption ? optionQuote?.minLimitVolume : detailedQuote?.minLimitVolume
+        let maximum = c.isOption ? optionQuote?.maxLimitVolume : detailedQuote?.maxLimitVolume
+        if let minimum, minimum > 0, quantity < minimum { return false }
+        if let maximum, maximum > 0, quantity > maximum { return false }
+        return true
+    }
+    @ViewBuilder private var openingLimitNotice: some View {
+        if let minimum = openingMinimum, minimum > 1 {
+            Text("最小开仓 \(minimum)手")
+                .font(.caption).foregroundStyle(selectedQuantity < minimum ? Color.yellow : MarketPalette.muted)
+        }
+        if let maximum = openingMaximum, maximum > 0, selectedQuantity > maximum {
+            Text("单笔最多开仓 \(maximum)手").font(.caption).foregroundStyle(Color.yellow)
+        }
+        if let limit = dailyOpeningLimit, limit > 0 {
+            Text("日内开仓限额 \(limit)手（非剩余额度）").font(.caption2).foregroundStyle(MarketPalette.muted)
+        }
+    }
     private func validOrder(_ action: String) -> Bool {
         guard action == "开多" || action == "开空", session.canTrade,
-              let c = selected, c.hasMetadata, selectedQuantity > 0,
+              let c = selected, c.hasMetadata, openingQuantityAllowed(selectedQuantity),
               !quoteError, let stamp = quoteStamp, Date().timeIntervalSince(stamp) < 60 else { return false }
         return validPrice(effectivePrice(buy: action == "开多"))
     }
     private func validDraft(_ action: String) -> Bool {
         guard let draft = openingDraft, draft.action == action, draft.symbol == selected?.symbol,
-              session.canTrade, !quoteError, let stamp = quoteStamp, Date().timeIntervalSince(stamp) < 60, draft.quantity > 0, selected?.hasMetadata == true else { return false }
+              session.canTrade, !quoteError, let stamp = quoteStamp, Date().timeIntervalSince(stamp) < 60, openingQuantityAllowed(draft.quantity), selected?.hasMetadata == true else { return false }
         return validPrice(Double(draft.price))
     }
     private var priceModePicker: some View {
@@ -781,6 +819,7 @@ struct TradingCenterView: View {
             }
             if let amount = orderReferenceAmount { Text(amount).font(.caption).foregroundStyle(MarketPalette.muted) }
             orderFundingDetails
+            openingLimitNotice
             if let quickConfirmationError { Text(quickConfirmationError).font(.caption).foregroundStyle(.red) }
             Text(quoteError ? "报价获取失败，请核对价格" : (quoteStamp == nil ? "等待报价" : "参考报价 · " + (quoteStamp?.formatted(date: .omitted, time: .standard) ?? "")))
                 .font(.caption).foregroundStyle(MarketPalette.muted)
@@ -853,6 +892,7 @@ struct TradingCenterView: View {
                 if let amount = orderReferenceAmount { Text(amount) }
             }.font(.caption2).foregroundStyle(MarketPalette.muted)
             orderFundingDetails
+            openingLimitNotice
             HStack(spacing: 8) {
                 tradeButton("开多", color: MarketPalette.up, title: selected?.isOption == true ? "买开" : "买多")
                 tradeButton("开空", color: MarketPalette.down, title: selected?.isOption == true ? "卖开" : "卖空")
@@ -887,8 +927,8 @@ struct TradingCenterView: View {
         let fee = q.referenceCommission.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
         if let margin, (margin * quantity).isFinite {
             lines.append("参考保证金/手 " + money(margin, suffix: false) + " · 合计 " + money(margin * quantity))
-            if let fee, let count = capacity(margin + fee) {
-                lines.append("参考可开 " + count + "手")
+            if let count = capacity(margin) {
+                lines.append("参考最大可开 " + count + "手（未计手续费）")
             }
         }
         if let fee, (fee * quantity).isFinite {
@@ -1184,7 +1224,7 @@ struct TradingCenterView: View {
                     Text("手数 / 可平").frame(width: 65)
                     Text("开仓均价").frame(width: 67, alignment: .trailing)
                     Text("浮盈").frame(width: 65, alignment: .trailing)
-                }.font(.caption2).foregroundStyle(.secondary)
+                }.font(.system(size: 12)).foregroundStyle(.secondary)
                 ForEach(session.snapshot?.positions ?? []) { p in
                     if p.long > 0 { positionRow(p, long: true) }
                     if p.short > 0 { positionRow(p, long: false) }
@@ -1324,7 +1364,7 @@ struct TradingCenterView: View {
     }
 
     private func recordCell(_ value: String, width: CGFloat? = nil) -> some View {
-        Text(value).font(.caption2).monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
+        Text(value).font(.system(size: 13)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
             .frame(width: width, alignment: .leading)
             .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
     }
@@ -1356,7 +1396,7 @@ struct TradingCenterView: View {
     private func validClose(_ long: Bool) -> Bool {
         guard (!quickOnly || selected?.option != nil), closingSide == long, session.canTrade,
               !quoteError, let stamp = quoteStamp, Date().timeIntervalSince(stamp) < 60,
-              let available = availableToClose(long), closeQuantity > 0,
+              let available = availableToClose(long), closingQuantityAllowed(closeQuantity),
               closeQuantity <= available, let tick = selected?.tick, tick.isFinite, tick > 0,
               let price = Double(closePrice), price.isFinite, price > 0 else { return false }
         let steps = price / tick
@@ -1519,7 +1559,7 @@ struct TradingCenterView: View {
                     .lineLimit(1).minimumScaleFactor(0.65)
                     .frame(width: 65, alignment: .trailing)
             }
-            .font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(MarketPalette.ink)
+            .font(.system(size: 14, weight: .semibold)).monospacedDigit().foregroundStyle(MarketPalette.ink)
             .padding(.vertical, 9)
         }
     }
@@ -1540,13 +1580,13 @@ struct TradingCenterView: View {
         } label: {
             HStack(spacing: 4) {
                 HStack(spacing: 3) {
-                    Text(contractName(p.symbol)).font(.caption.weight(.medium)).lineLimit(1)
-                    Text(long ? "多" : "空").font(.caption2).foregroundStyle(long ? MarketPalette.up : MarketPalette.down)
+                    Text(contractName(p.symbol)).font(.system(size: 13, weight: .medium)).lineLimit(1).minimumScaleFactor(0.75)
+                    Text(long ? "多" : "空").font(.system(size: 12)).foregroundStyle(long ? MarketPalette.up : MarketPalette.down)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 Text(String(qty) + "/" + (frozen.map { String(max(0, qty-$0)) } ?? "--")).frame(width: 65)
                 Text(average.map { $0.formatted() } ?? "--").frame(width: 67, alignment: .trailing)
                 Text(money(profit, suffix: false)).foregroundStyle(MarketPalette.movement(profit)).frame(width: 65, alignment: .trailing)
-            }.font(.caption).monospacedDigit().foregroundStyle(MarketPalette.ink)
+            }.font(.system(size: 14)).monospacedDigit().foregroundStyle(MarketPalette.ink).lineLimit(1).minimumScaleFactor(0.65)
         }.buttonStyle(.borderless).padding(.vertical, 8)
         if expanded {
             let margin = long ? p.margin_long : p.margin_short

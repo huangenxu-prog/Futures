@@ -243,6 +243,11 @@ enum MarketDataService {
         var lowerLimit: Double? = nil
         var referenceMargin: Double? = nil
         var referenceCommission: Double? = nil
+        var openMinLimitVolume: Int? = nil
+        var openMaxLimitVolume: Int? = nil
+        var minLimitVolume: Int? = nil
+        var maxLimitVolume: Int? = nil
+        var dailyOpenLimit: Int? = nil
         let time: String?
         var id: String { code }
 
@@ -302,6 +307,11 @@ enum MarketDataService {
         var time: String?
         var previousInterest: Double? = nil
         var expireEpoch: Double? = nil
+        var openMinLimitVolume: Int? = nil
+        var openMaxLimitVolume: Int? = nil
+        var minLimitVolume: Int? = nil
+        var maxLimitVolume: Int? = nil
+        var dailyOpenLimit: Int? = nil
         var id: String { code }
         func paperContract(underlying:String,name:String)->PaperContract {
             PaperContract(symbol:code,name:name,tick:priceTick,multiplier:volumeMultiple,last:last,bid:bid,ask:ask,
