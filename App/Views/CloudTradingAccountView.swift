@@ -1358,7 +1358,7 @@ struct TradingCenterView: View {
                             recordCell("成交价", width: 54, alignment: .center)
                             recordCell("手数", width: 34, alignment: .center)
                             recordCell("平仓盈亏", width: 80, alignment: .center)
-                            recordCell("时间", width: 80, alignment: .center)
+                            recordCell("时间", width: 80, alignment: .center).padding(.leading, 14)
                         }.foregroundStyle(.secondary)
                     }
                     ForEach(fills) { f in
@@ -1370,7 +1370,7 @@ struct TradingCenterView: View {
                                 recordCell(String(f.quantity), width: 34, alignment: .center)
                                 recordCell(f.offset != "OPEN" && f.calculated_close_profit?.isFinite == true ? money(f.calculated_close_profit, suffix: false) : "", width: 80, alignment: .center)
                                     .foregroundStyle(MarketPalette.movement(f.calculated_close_profit))
-                                recordCell(recordTime(f.time_ns), width: 80, alignment: .center)
+                                recordCell(recordTime(f.time_ns), width: 80, alignment: .center).padding(.leading, 14)
                             }
                         }
                     }
@@ -1382,7 +1382,7 @@ struct TradingCenterView: View {
                                 recordCell(String(fills.reduce(0) { $0 + $1.quantity }), width: 34, alignment: .center).fontWeight(.semibold)
                                 recordCell(total.map { money($0, suffix: false) } ?? "", width: 80, alignment: .center)
                                     .foregroundStyle(MarketPalette.movement(total)).fontWeight(.semibold)
-                                Color.clear.frame(width: 80)
+                                Color.clear.frame(width: 80).padding(.leading, 14)
                             }
                         }
                     }
@@ -1426,7 +1426,7 @@ struct TradingCenterView: View {
                                 recordCell("成交均价", width: 72, alignment: .center)
                             }
                             if tab == "挂单" { recordCell("操作", width: 34, alignment: .center) }
-                            recordCell("时间", width: 80, alignment: .center)
+                            recordCell("时间", width: 80, alignment: .center).padding(.leading, 14)
                         }.foregroundStyle(.secondary)
                     }
                     ForEach(orders) { o in
@@ -1453,7 +1453,7 @@ struct TradingCenterView: View {
                                                 .opacity(session.busy || session.isLive || o.status != "ALIVE" ? 0.4 : 1)
                                                 .accessibilityLabel("撤单 " + contractName(o.symbol))
                                         }
-                                        recordCell(recordTime(o.time_ns), width: 80, alignment: .center)
+                                        recordCell(recordTime(o.time_ns), width: 80, alignment: .center).padding(.leading, 14)
                                     }.frame(height: recordRowHeight)
                             }
                         }
@@ -1563,47 +1563,42 @@ struct TradingCenterView: View {
                 confirmationRow("合约") { Text(selected.map { contractName($0.symbol) } ?? "--") }
                 confirmationRow("持仓") { Text((long ? "多头" : "空头") + " · 可平 " + (available.map { String($0) } ?? "--") + " 手") }
                 Divider()
-                if !closeConfirm {
-                    HStack {
-                        Button("买一 " + (selected?.bid.map { $0.formatted() } ?? "--")) {
-                            if let v = selected?.bid { closePrice = String(v) }
-                        }.buttonStyle(.borderless)
-                        Spacer()
-                        Button("卖一 " + (selected?.ask.map { $0.formatted() } ?? "--")) {
-                            if let v = selected?.ask { closePrice = String(v) }
-                        }.buttonStyle(.borderless)
-                    }.font(.caption)
-                    confirmationRow("平仓价格") {
-                        TextField("限价", text: $closePrice).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                    }
-                    confirmationRow("平仓手数") {
-                        HStack {
-                            TextField("手数", text: $closeQuantityText)
-                                .keyboardType(.numberPad).multilineTextAlignment(.trailing)
-                                .onChange(of: closeQuantityText) { _, value in
-                                    let digits = value.filter { $0.isASCII && $0.isNumber }
-                                    if digits != value { closeQuantityText = digits }
-                                }
-                            Button("最多") { closeQuantity = available ?? 0 }.buttonStyle(.borderless).disabled((available ?? 0) <= 0)
-                        }
-                    }
-                    if requiresSplit {
-                        Picker("平仓类型", selection: $closeToday) {
-                            Text("平昨").tag(false)
-                            Text("平今").tag(true)
-                        }.pickerStyle(.segmented)
-                        Text("平今/平昨具体可平量以柜台回报为准").font(.caption2).foregroundStyle(.secondary)
-                    }
-                } else {
-                    confirmationRow("平仓价格") { Text(closePrice) }
-                    confirmationRow("平仓手数") { Text("\(closeQuantity) 手") }
-                    if requiresSplit { confirmationRow("平仓类型") { Text(closeToday ? "平今" : "平昨") } }
+                HStack {
+                    Button("买一 " + (selected?.bid.map { $0.formatted() } ?? "--")) {
+                        if let v = selected?.bid { closePrice = String(v) }
+                    }.buttonStyle(.borderless)
+                    Spacer()
+                    Button("卖一 " + (selected?.ask.map { $0.formatted() } ?? "--")) {
+                        if let v = selected?.ask { closePrice = String(v) }
+                    }.buttonStyle(.borderless)
+                }.font(.caption)
+                confirmationRow("平仓价格") {
+                    TextField("限价", text: $closePrice).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                 }
+                confirmationRow("平仓手数") {
+                    HStack {
+                        TextField("手数", text: $closeQuantityText)
+                            .keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                            .onChange(of: closeQuantityText) { _, value in
+                                let digits = value.filter { $0.isASCII && $0.isNumber }
+                                if digits != value { closeQuantityText = digits }
+                            }
+                        Button("最多") { closeQuantity = available ?? 0 }.buttonStyle(.borderless).disabled((available ?? 0) <= 0)
+                    }
+                }
+                if requiresSplit {
+                    Picker("平仓类型", selection: $closeToday) {
+                        Text("平昨").tag(false)
+                        Text("平今").tag(true)
+                    }.pickerStyle(.segmented)
+                    Text("平今/平昨具体可平量以柜台回报为准").font(.caption2).foregroundStyle(.secondary)
+                }
+
             }
-            confirmationButtons(closeConfirm ? "确认" + title : title, tint: long ? MarketPalette.down : MarketPalette.up,
+            confirmationButtons("确认" + title, tint: long ? MarketPalette.down : MarketPalette.up,
                                 enabled: validClose(long), cancel: { closingSide = nil; closeConfirm = false }) {
                 IndicatorKeyboard.dismiss()
-                if closeConfirm { submitClose(long) } else { closeConfirm = true }
+                submitClose(long)
             }
         }
     }
