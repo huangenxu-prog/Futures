@@ -1224,7 +1224,7 @@ struct TradingCenterView: View {
             selected = PaperContract(symbol: c.symbol, name: c.name, tick: c.tick, multiplier: c.multiplier, last: nil, bid: nil, ask: nil, option: c.option)
         }
     }
-    private let frozenContractWidth: CGFloat = 132
+    private let frozenContractWidth: CGFloat = 120
     private let recordHeaderHeight: CGFloat = 28
     private let recordRowHeight: CGFloat = 34
 
@@ -1730,7 +1730,7 @@ struct TradingCenterView: View {
         return recordBand(height: recordRowHeight, selected: selectedRow) {
             Button { selectPosition(p, long: long) } label: {
                 HStack(spacing: 3) {
-                    Text(contractName(p.symbol)).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    Text(contractName(p.symbol)).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.tail)
                     Text(long ? "多" : "空").font(.system(size: 13))
                         .foregroundStyle(long ? MarketPalette.up : MarketPalette.down).fixedSize()
                 }.frame(width: frozenContractWidth, alignment: .leading)
