@@ -1209,9 +1209,6 @@ struct TradingCenterView: View {
             left()
                 .frame(width: frozenContractWidth, alignment: .leading)
                 .background(MarketPalette.background)
-                .overlay(alignment: .trailing) {
-                    Rectangle().fill(MarketPalette.divider).frame(width: 0.5)
-                }
                 .zIndex(1)
             ScrollView(.horizontal, showsIndicators: true) {
                 right().fixedSize(horizontal: true, vertical: false)
@@ -1446,9 +1443,6 @@ struct TradingCenterView: View {
                 }
                 .frame(width: 52)
                 .background(MarketPalette.background)
-                .overlay(alignment: .leading) {
-                    Rectangle().fill(MarketPalette.divider).frame(width: 0.5)
-                }
                 .zIndex(1)
             }
             }
