@@ -1,4 +1,4 @@
-"""Bounded pilot: append completed 1-minute bars for current futures main contracts.
+"""Bounded collector: append completed 1-minute bars for current futures main contracts.
 No quote subscriptions for options; no changes to gateway or trade services.
 Run manually under the shared prefetch lock before scheduling.
 """
@@ -38,6 +38,7 @@ def collect(limit):
             symbol TEXT PRIMARY KEY, attempted REAL NOT NULL, result TEXT NOT NULL)""")
         conn.commit()
         previous = dict(conn.execute("SELECT symbol,attempted FROM collector_attempts"))
+        started = time.monotonic()
         api = TqApi(auth=TqAuth(auth["username"], auth["password"]))
         try:
             codes = sorted(set(c for c in api.query_cont_quotes()
@@ -45,8 +46,16 @@ def collect(limit):
             if not codes:
                 raise RuntimeError("No valid main contracts")
             jobs = sorted(codes, key=lambda c: (previous.get(c, 0), c))[:limit]
-            print("MAIN_CONTRACTS", len(codes), "PILOT_JOBS", len(jobs), flush=True)
-            for code in jobs:
+            print("MAIN_CONTRACTS", len(codes), "JOBS", len(jobs), flush=True)
+            for i, code in enumerate(jobs):
+                if time.monotonic() - started >= 240:
+                    print("STOP: runtime budget", flush=True)
+                    break
+                # Release accumulated subscriptions at bounded intervals.
+                if i and i % 6 == 0:
+                    api.close()
+                    api = None
+                    api = TqApi(auth=TqAuth(auth["username"], auth["password"]))
                 if not memory_ok():
                     print("STOP: memory guard", flush=True)
                     break
@@ -54,7 +63,12 @@ def collect(limit):
                 result = "no_data"
                 rows = []
                 try:
-                    serial = api.get_kline_serial(code, PERIOD, data_length=1200)
+                    # Wall-clock elapsed minutes upper-bound the number of
+                    # trading-minute bars; overlap recent history for corrections.
+                    # Long outages may still exceed the maximum window.
+                    age = max(0, time.time() - before) if before else float("inf")
+                    length = 1200 if age >= 1170 * 60 else max(30, math.ceil(age / 60) + 15)
+                    serial = api.get_kline_serial(code, PERIOD, data_length=length)
                     deadline = time.monotonic() + 12
                     while not api.is_serial_ready(serial) and time.monotonic() < deadline:
                         api.wait_update(deadline=min(time.time()+1, time.time()+max(0,deadline-time.monotonic())))
@@ -84,9 +98,10 @@ def collect(limit):
                 after = conn.execute("SELECT max(ts) FROM candles WHERE symbol=? AND period=?", (code,PERIOD)).fetchone()[0]
                 print(code,result,"ROWS",len(rows),"BEFORE",before,"AFTER",after,flush=True)
         finally:
-            api.close()
+            if api is not None:
+                api.close()
 
 if __name__ == "__main__":
     p=argparse.ArgumentParser()
-    p.add_argument("--limit",type=int,default=6,choices=range(1,7))
+    p.add_argument("--limit",type=int,default=24,choices=range(1,91))
     collect(p.parse_args().limit)
