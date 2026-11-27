@@ -38,6 +38,7 @@ struct ChartDisplaySettings: Codable, Equatable {
     var averageWidths: [String: Double] = [:]
     var additionalAverages: [AdditionalMovingAverage] = []
     var formulas: [FormulaDefinition] = []
+    var pineFormulas: [PineFormulaDefinition] = []
     var bollPeriod = 20
     var bollMultiplier = 2.0
     var volumeMA = 20
@@ -71,6 +72,7 @@ struct ChartDisplaySettings: Codable, Equatable {
         averageWidths = try c.decodeIfPresent([String: Double].self, forKey: .averageWidths) ?? [:]
         additionalAverages = try c.decodeIfPresent([AdditionalMovingAverage].self, forKey: .additionalAverages) ?? []
         formulas = try c.decodeIfPresent([FormulaDefinition].self, forKey: .formulas) ?? []
+        pineFormulas = try c.decodeIfPresent([PineFormulaDefinition].self, forKey: .pineFormulas) ?? []
         bollPeriod = try c.decodeIfPresent(Int.self, forKey: .bollPeriod) ?? bollPeriod
         bollMultiplier = try c.decodeIfPresent(Double.self, forKey: .bollMultiplier) ?? bollMultiplier
         volumeMA = try c.decodeIfPresent(Int.self, forKey: .volumeMA) ?? volumeMA
@@ -120,6 +122,7 @@ struct ChartDisplaySettings: Codable, Equatable {
             && additionalAverages.allSatisfy(\.isValid)
             && Set(additionalAverages.map(\.id)).count == additionalAverages.count
             && formulas.count <= 12 && Set(formulas.map(\.id)).count == formulas.count
+            && pineFormulas.count <= 12 && Set(pineFormulas.map(\.id)).count == pineFormulas.count
             && !hasDuplicateAverages
             && macdFast < macdSlow
             && sarStep.isFinite && sarMaximum.isFinite && sarStep > 0 && sarStep <= sarMaximum && sarMaximum <= 1
