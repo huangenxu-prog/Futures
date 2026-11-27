@@ -10,6 +10,8 @@ struct TermStructureView: View {
     @State private var period = 0
     @State private var contracts: [MarketDataService.ContractQuote] = []
     @State private var history: [String: [MarketBar]] = [:]
+    @State private var dailyFallback: [String: MarketBar] = [:]
+    @State private var fallbackAttempt: [String: Date] = [:]
     @State private var loading = false
     @State private var error: String?
     private let labels = ["实时", "1日前", "1周前", "2周前", "1月前", "3月前", "6月前"]
@@ -40,13 +42,22 @@ struct TermStructureView: View {
         let ratio: Double?
         let volume: Double?
         let interest: Double?
+        var fallbackDay: Date? = nil
         var label: String { String(id.split(separator: ".").last ?? "") }
     }
     private var rows: [Row] {
         let date = historicalDay
         return contracts.map { q in
             if period == 0 {
-                return Row(id:q.code, month:q.month, price: finite(q.last), ratio: q.ratio(basis:basis), volume:q.volume, interest:q.interest)
+                if let price = finite(q.last) {
+                    return Row(id:q.code, month:q.month, price:price, ratio:q.ratio(basis:basis), volume:q.volume, interest:q.interest)
+                }
+                if let bar = dailyFallback[q.code] {
+                    let reference = basis == "open" ? bar.open : bar.preSettlement
+                    let ratio = reference.flatMap { $0 > 0 ? bar.close / $0 - 1 : nil }
+                    return Row(id:q.code, month:q.month, price:finite(bar.close), ratio:ratio, volume:Double(bar.volume), interest:bar.closeInterest, fallbackDay:day(bar))
+                }
+                return Row(id:q.code, month:q.month, price:nil, ratio:nil, volume:nil, interest:q.interest)
             }
             let bars = history[q.code] ?? []
             guard let date, let bar = bars.last(where: { day($0) == date }) else {
@@ -107,7 +118,7 @@ struct TermStructureView: View {
     }
     private func structureContent(columnWidth: CGFloat) -> some View {
         let data = rows
-        let base = data.first(where: { $0.id == symbol })?.price
+        let base = data.first(where: { $0.id == symbol })
         return VStack(spacing: 8) {
             datePickerBar
             if loading { ProgressView().controlSize(.small) }
@@ -115,11 +126,20 @@ struct TermStructureView: View {
             if period != 0, let date = historicalDay {
                 Text(dateLabel(date)).font(.caption2).foregroundStyle(MarketPalette.muted)
             }
-            chart(data).frame(height: 190).padding(.horizontal, 8)
+            if period == 0, data.contains(where: { $0.fallbackDay != nil }) {
+                Text("* 最近可用日线价，非实时成交价").font(.caption2).foregroundStyle(MarketPalette.muted)
+            }
+            if !data.contains(where: { $0.price != nil }) {
+                Text(loading ? "正在获取行情" : "暂无有效价格，等待行情更新")
+                    .font(.caption).foregroundStyle(MarketPalette.muted)
+                    .frame(maxWidth:.infinity).frame(height:190)
+            } else {
+                chart(data).frame(height: 190).padding(.horizontal, 8)
+            }
             structureTable(data, base: base, col: columnWidth)
         }
     }
-    private func structureTable(_ data: [Row], base: Double?, col: CGFloat) -> some View {
+    private func structureTable(_ data: [Row], base: Row?, col: CGFloat) -> some View {
         ScrollView(.vertical) {
             HStack(alignment: .top, spacing: 0) {
                 contractColumn(data)
@@ -144,7 +164,7 @@ struct TermStructureView: View {
             }
         }.frame(width: 68).background(MarketPalette.background).zIndex(1)
     }
-    private func dataColumn(_ data: [Row], base: Double?, col: CGFloat) -> some View {
+    private func dataColumn(_ data: [Row], base: Row?, col: CGFloat) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 ForEach(["最新", "价差", "涨跌幅", "成交量", "持仓量"], id: \.self) { title in
@@ -159,12 +179,15 @@ struct TermStructureView: View {
             }
         }.fixedSize(horizontal: true, vertical: false)
     }
-    private func quoteRow(_ row: Row, base: Double?, col: CGFloat) -> some View {
-        let spread: Double? = base.flatMap { b in row.price.map { $0 - b } }
+    private func quoteRow(_ row: Row, base: Row?, col: CGFloat) -> some View {
+        let spread: Double? = base.flatMap { b in
+            guard b.fallbackDay == row.fallbackDay, let bp = b.price, let rp = row.price else { return nil }
+            return rp - bp
+        }
         let percent = row.ratio.map { String(format: "%+.2f%%", $0 * 100) } ?? "--"
         let movement = MarketPalette.movement(row.ratio)
         return HStack(spacing: 0) {
-            cell(number(row.price), width: col, color: movement)
+            cell(number(row.price) + (row.fallbackDay != nil ? "*" : ""), width: col, color: movement)
             cell(number(spread, signed: true), width: col, color: MarketPalette.movement(spread))
             cell(percent, width: col, color: movement)
             cell(CompactMarketQuantity.format(row.volume), width: col)
@@ -221,11 +244,14 @@ struct TermStructureView: View {
             } catch { if !Task.isCancelled { self.error="合约行情获取失败" };return }
         }
         if selection == 0 {
+            await loadMissingDailyQuotes()
+            guard !Task.isCancelled else { return }
             loading=false
             while !Task.isCancelled {
                 do { try await Task.sleep(for:.seconds(10)) } catch { return }
                 if let result = try? await MarketDataService.listedContracts(for:product), !Task.isCancelled {
                     contracts=result.sorted { $0.month < $1.month };error=nil
+                    await loadMissingDailyQuotes()
                 } else if !Task.isCancelled { error="行情更新失败" }
             }
         } else {
@@ -243,4 +269,26 @@ struct TermStructureView: View {
             if historicalDay == nil && !Task.isCancelled { error="暂无对应日期历史行情" }
         }
     }
+    @MainActor private func loadMissingDailyQuotes() async {
+        // Missing prices commonly occur between trading sessions. Read genuine
+        // daily bars through the existing HTTP snapshot API, one at a time.
+        // Never subscribe to a new live K-line stream or use settlement as last.
+        for q in contracts where finite(q.last) == nil {
+            guard !Task.isCancelled else { return }
+            if let attempted = fallbackAttempt[q.code],
+               Date().timeIntervalSince(attempted) < (dailyFallback[q.code] == nil ? 60 : 300) { continue }
+            fallbackAttempt[q.code] = Date()
+            do {
+                let bars = try await MarketDataService.fetch(symbol:q.code, period:86400, count:5, mergeCached:false)
+                guard !Task.isCancelled else { return }
+                if let bar = bars.last(where: { finite($0.close) != nil }) {
+                    dailyFallback[q.code] = bar
+                }
+            } catch {
+                if Task.isCancelled { return }
+                // A failed request is not evidence that the contract has no trades.
+            }
+        }
+    }
+
 }
