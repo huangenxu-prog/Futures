@@ -107,6 +107,7 @@ def order_row(oid, o):
             "direction": str(o.direction), "offset": str(o.offset),
             "price": number(o.limit_price), "quantity": int(o.volume_orign),
             "remaining": int(o.volume_left), "status": str(o.status),
+            "trade_price": number(getattr(o, "trade_price", None)),
             "message": message[:200], "time_ns": int(getattr(o, "insert_date_time", 0) or 0),
             "exchange_order_id": exchange_order_id,
             "is_error": is_error if isinstance(is_error, bool) else None,
@@ -170,7 +171,7 @@ def close_capacity(positions, symbol, direction, offset):
 
 
 def snapshot(account, positions, orders=None, fills=None):
-    fields = ("balance", "available", "margin", "float_profit", "close_profit")
+    fields = ("balance", "available", "margin", "float_profit", "close_profit", "commission", "market_value", "risk_ratio", "frozen_margin", "frozen_commission", "premium")
     data = {field: number(getattr(account, field, None)) for field in fields}
     if data["balance"] is None or data["available"] is None:
         return None
@@ -185,6 +186,10 @@ def snapshot(account, positions, orders=None, fills=None):
                          "open_price_short": number(getattr(pos, "open_price_short", None)),
                          "float_profit_long": number(getattr(pos, "float_profit_long", None)),
                          "float_profit_short": number(getattr(pos, "float_profit_short", None)),
+                         "margin_long": number(getattr(pos, "margin_long", None)),
+                         "margin_short": number(getattr(pos, "margin_short", None)),
+                         "market_value_long": number(getattr(pos, "market_value_long", None)),
+                         "market_value_short": number(getattr(pos, "market_value_short", None)),
                          "frozen_long": number(getattr(pos, "volume_long_frozen", None)),
                          "frozen_short": number(getattr(pos, "volume_short_frozen", None))})
     return {"account": data, "positions": sorted(rows, key=lambda x: x["symbol"]),

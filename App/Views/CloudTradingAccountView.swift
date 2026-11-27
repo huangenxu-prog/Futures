@@ -49,6 +49,7 @@ private struct CloudSnapshot: Decodable {
         let margin: Double?
         let float_profit: Double?
         let close_profit: Double?
+        let commission, market_value, risk_ratio, frozen_margin, frozen_commission, premium: Double?
     }
     struct Position: Decodable, Identifiable {
         let symbol: String
@@ -57,6 +58,7 @@ private struct CloudSnapshot: Decodable {
         let float_profit: Double?
         let open_price_long, open_price_short, float_profit_long, float_profit_short: Double?
         let frozen_long, frozen_short: Int?
+        let margin_long, margin_short, market_value_long, market_value_short: Double?
         var id: String { symbol }
     }
     let account: Account
@@ -72,6 +74,7 @@ private struct CloudSnapshot: Decodable {
         let message: String
         let time_ns: Int64?
         let display_state: String?
+        let trade_price: Double?
         var stateText: String {
             switch display_state {
             case "ALIVE": return "挂单"
@@ -474,6 +477,8 @@ struct TradingCenterView: View {
                             LabeledContent("占用保证金", value: money(a.margin))
                             LabeledContent("浮动盈亏", value: money(a.float_profit))
                             LabeledContent("平仓盈亏", value: money(a.close_profit))
+                            if let fee = a.commission { LabeledContent("累计手续费", value: money(fee)) }
+                            if let value = a.market_value { LabeledContent("期权市值", value: money(value)) }
                         }
                         Button("银期转账（未开放）") {}.disabled(true)
                         Button("退出账户", role: .destructive) {
@@ -773,6 +778,7 @@ struct TradingCenterView: View {
                 tradeButton("开多", color: MarketPalette.up)
                 if selected?.option != nil { unifiedCloseButton } else { tradeButton("开空", color: MarketPalette.down) }
             }
+            if let amount = orderReferenceAmount { Text(amount).font(.caption).foregroundStyle(MarketPalette.muted) }
             if let quickConfirmationError { Text(quickConfirmationError).font(.caption).foregroundStyle(.red) }
             Text(quoteError ? "报价获取失败，请核对价格" : (quoteStamp == nil ? "等待报价" : "参考报价 · " + (quoteStamp?.formatted(date: .omitted, time: .standard) ?? "")))
                 .font(.caption).foregroundStyle(MarketPalette.muted)
@@ -842,7 +848,7 @@ struct TradingCenterView: View {
             HStack {
                 Text(quoteError ? "报价失败" : (quoteStamp == nil ? (selected?.last == nil ? "等待报价" : "参考行情 · 确认中") : "参考报价"))
                 Spacer()
-                Text("最大可开 -- · 保证金 --")
+                if let amount = orderReferenceAmount { Text(amount) }
             }.font(.caption2).foregroundStyle(MarketPalette.muted)
             HStack(spacing: 8) {
                 tradeButton("开多", color: MarketPalette.up, title: selected?.isOption == true ? "买开" : "买多")
@@ -850,6 +856,18 @@ struct TradingCenterView: View {
                 unifiedCloseButton
             }
         }.padding(.vertical, 6)
+    }
+
+    private var orderReferenceAmount: String? {
+        guard let c = selected, let multiplier = c.multiplier, multiplier.isFinite, multiplier > 0,
+              selectedQuantity > 0, let buy = effectivePrice(buy: true), let sell = effectivePrice(buy: false),
+              buy.isFinite, sell.isFinite, buy > 0, sell > 0 else { return nil }
+        let b = buy * multiplier * Double(selectedQuantity)
+        let s = sell * multiplier * Double(selectedQuantity)
+        guard b.isFinite, s.isFinite else { return nil }
+        let label = c.isOption ? "权利金" : "名义金额"
+        if b == s { return label + " " + money(b) }
+        return label + " 买 " + money(b, suffix: false) + " / 卖 " + money(s)
     }
 
     private var closeCandidates: [Bool] {
@@ -1211,6 +1229,8 @@ struct TradingCenterView: View {
                     LabeledContent("委托手数", value: String(order.quantity))
                     LabeledContent("成交手数", value: String(order.quantity - order.remaining))
                     LabeledContent("未成交手数", value: String(order.remaining))
+                    if ["CANCELED", "PARTIAL_CANCELED"].contains(order.display_state ?? "") { LabeledContent("已撤手数", value: String(order.remaining)) }
+                    if order.quantity > order.remaining, let price = order.trade_price, price.isFinite, price > 0 { LabeledContent("成交均价", value: price.formatted()) }
                     LabeledContent("委托时间（北京时间）", value: orderDetailTime(order.time_ns))
                 }
                 Section(rejected ? "拒单原因 / 原始回报" : "原始回报") {
@@ -1470,6 +1490,15 @@ struct TradingCenterView: View {
             }.font(.caption).monospacedDigit().foregroundStyle(MarketPalette.ink)
         }.buttonStyle(.borderless).padding(.vertical, 8)
         if expanded {
+            let margin = long ? p.margin_long : p.margin_short
+            let value = long ? p.market_value_long : p.market_value_short
+            if margin != nil || value != nil {
+                HStack {
+                    if let margin { Text("保证金 " + money(margin)) }
+                    Spacer()
+                    if let value { Text("市值 " + money(value)) }
+                }.font(.caption2).foregroundStyle(MarketPalette.muted).padding(.bottom, 5)
+            }
             HStack(spacing: 10) {
                 Spacer()
                 if let q = detailedQuote, q.code == p.symbol, let product = product(p.symbol) {
