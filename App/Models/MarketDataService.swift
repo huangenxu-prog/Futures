@@ -241,6 +241,8 @@ enum MarketDataService {
         }
         var upperLimit: Double? = nil
         var lowerLimit: Double? = nil
+        var referenceMargin: Double? = nil
+        var referenceCommission: Double? = nil
         let time: String?
         var id: String { code }
 

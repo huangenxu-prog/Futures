@@ -517,7 +517,7 @@ struct TradingCenterView: View {
                 guard scenePhase == .active, let updates = notification.object as? [String: MarketDataService.MainContract], let c = selected, c.option == nil, let p = product(c.symbol), let q = updates[p.id], q.code == c.symbol, let last = q.last, last.isFinite, last > 0 else { return }
                 if let previous = detailedQuote?.time, let incoming = q.time, incoming < previous { return }
                 selected = PaperContract(symbol: c.symbol, name: c.name, tick: c.tick, multiplier: c.multiplier, last: last, bid: q.bid, ask: q.ask, option: nil)
-                detailedQuote = MarketDataService.ContractQuote(code: q.code, month: q.month, last: q.last, settlement: q.settlement, bid: q.bid, ask: q.ask, volume: q.volume, interest: q.interest, priceTick: c.tick, volumeMultiple: c.multiplier, bidVolume: q.bidVolume, askVolume: q.askVolume, opening: q.opening, highest: q.highest, lowest: q.lowest, upperLimit: detailedQuote?.upperLimit, lowerLimit: detailedQuote?.lowerLimit, time: q.time)
+                detailedQuote = MarketDataService.ContractQuote(code: q.code, month: q.month, last: q.last, settlement: q.settlement, bid: q.bid, ask: q.ask, volume: q.volume, interest: q.interest, priceTick: c.tick, volumeMultiple: c.multiplier, bidVolume: q.bidVolume, askVolume: q.askVolume, opening: q.opening, highest: q.highest, lowest: q.lowest, upperLimit: detailedQuote?.upperLimit, lowerLimit: detailedQuote?.lowerLimit, referenceMargin: detailedQuote?.referenceMargin, referenceCommission: detailedQuote?.referenceCommission, time: q.time)
             }
             .task(id: "\(selectionRequest)-\(scenePhase)-\(session.signedIn)") {
                 guard scenePhase == .active, session.signedIn, let c = selected else { return }
@@ -779,6 +779,7 @@ struct TradingCenterView: View {
                 if selected?.option != nil { unifiedCloseButton } else { tradeButton("开空", color: MarketPalette.down) }
             }
             if let amount = orderReferenceAmount { Text(amount).font(.caption).foregroundStyle(MarketPalette.muted) }
+            orderFundingDetails
             if let quickConfirmationError { Text(quickConfirmationError).font(.caption).foregroundStyle(.red) }
             Text(quoteError ? "报价获取失败，请核对价格" : (quoteStamp == nil ? "等待报价" : "参考报价 · " + (quoteStamp?.formatted(date: .omitted, time: .standard) ?? "")))
                 .font(.caption).foregroundStyle(MarketPalette.muted)
@@ -850,12 +851,59 @@ struct TradingCenterView: View {
                 Spacer()
                 if let amount = orderReferenceAmount { Text(amount) }
             }.font(.caption2).foregroundStyle(MarketPalette.muted)
+            orderFundingDetails
             HStack(spacing: 8) {
                 tradeButton("开多", color: MarketPalette.up, title: selected?.isOption == true ? "买开" : "买多")
                 tradeButton("开空", color: MarketPalette.down, title: selected?.isOption == true ? "卖开" : "卖空")
                 unifiedCloseButton
             }
         }.padding(.vertical, 6)
+    }
+
+    private var referenceFundingLines: [String] {
+        guard let c = selected, !quoteError, let stamp = quoteStamp,
+              Date().timeIntervalSince(stamp) < 60, selectedQuantity > 0 else { return [] }
+        let quantity = Double(selectedQuantity)
+        let available = session.snapshot?.account.available
+        func capacity(_ cost: Double) -> String? {
+            guard let available, available.isFinite, cost.isFinite, cost > 0 else { return nil }
+            let count = floor(max(0, available) / cost)
+            guard count.isFinite else { return nil }
+            return count.formatted(.number.precision(.fractionLength(0)))
+        }
+        if c.isOption {
+            guard let price = effectivePrice(buy: true), price.isFinite, price > 0,
+                  let multiplier = c.multiplier, multiplier.isFinite, multiplier > 0 else { return [] }
+            let premium = price * multiplier
+            guard premium.isFinite, (premium * quantity).isFinite else { return [] }
+            var lines = ["买开保证金 0 · 权利金 " + money(premium * quantity)]
+            if let count = capacity(premium) { lines.append("买开可开上限 " + count + "手（未计手续费）") }
+            return lines
+        }
+        guard let q = detailedQuote, q.code == c.symbol else { return [] }
+        var lines: [String] = []
+        let margin = q.referenceMargin.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        let fee = q.referenceCommission.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        if let margin, (margin * quantity).isFinite {
+            lines.append("参考保证金/手 " + money(margin, suffix: false) + " · 合计 " + money(margin * quantity))
+            if let fee, let count = capacity(margin + fee) {
+                lines.append("参考可开 " + count + "手")
+            }
+        }
+        if let fee, (fee * quantity).isFinite {
+            lines.append("参考手续费/手 " + money(fee, suffix: false) + " · 合计 " + money(fee * quantity))
+        }
+        return lines
+    }
+    @ViewBuilder private var orderFundingDetails: some View {
+        let lines = referenceFundingLines
+        if !lines.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(lines, id: \.self) { line in
+                    Text(line).font(.caption2).foregroundStyle(MarketPalette.muted)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var orderReferenceAmount: String? {

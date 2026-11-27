@@ -533,6 +533,11 @@ def exact_quote_row(symbol, quote):
         value = getattr(quote, field, None)
         if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
             row[key] = float(value)
+    # Internal TqSdk simulation reference amounts, not account-specific rates.
+    for field, key in (("margin", "referenceMargin"), ("commission", "referenceCommission")):
+        value = getattr(quote, field, None)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0:
+            row[key] = float(value)
     return row
 
 
