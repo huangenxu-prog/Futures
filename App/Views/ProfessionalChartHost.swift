@@ -226,18 +226,21 @@ struct ProfessionalChartHost: View {
             model.style = .candles
             model.indicators = displaySettings.indicators(darkAppearance: colorScheme == .dark)
             configureChart()
-            feed.attach(key: feedKey, owner: feedOwner, fallback: bars,
-                        receiveTail: { incoming in
-                synchronizeTail(incoming)
-            }) { previous, incoming in
-                synchronizeBars(previous: previous ?? [], incoming: incoming)
+            if isInteractive || isReplay {
+                attachChartFeed()
+            } else if model.series.isEmpty {
+                // Keep a static chart for the existing pager transition.
+                synchronizeBars(previous: [], incoming: bars)
             }
         }
         .onChange(of: isInteractive) { _, active in
             if active {
-                displaySettings = ChartDisplaySettings.load()
+                let latest = ChartDisplaySettings.load()
+                if displaySettings != latest { displaySettings = latest }
                 configureChart()
+                attachChartFeed()
             } else {
+                if !isReplay { feed.detach(owner: feedOwner) }
                 historyTask?.cancel()
                 historyTask = nil
                 model.activeDrawingTool = nil
@@ -401,6 +404,16 @@ struct ProfessionalChartHost: View {
 
     private func choose(_ tool: DrawingKind) {
         model.activeDrawingTool = model.activeDrawingTool == tool ? nil : tool
+    }
+
+    @MainActor
+    private func attachChartFeed() {
+        feed.attach(key: feedKey, owner: feedOwner, fallback: bars,
+                    receiveTail: { incoming in
+            synchronizeTail(incoming)
+        }) { previous, incoming in
+            synchronizeBars(previous: previous ?? [], incoming: incoming)
+        }
     }
 
     @MainActor

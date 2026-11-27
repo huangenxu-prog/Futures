@@ -399,7 +399,7 @@ private struct InstrumentDetailPage: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .qihuiLiveQuotes)) { notification in
-            guard scenePhase == .active,
+            guard isActive, scenePhase == .active,
                   let updates = notification.object as? [String: MarketDataService.MainContract],
                   let incoming = updates[instrument.id], incoming != liveQuote else { return }
             // A navigation destination may have captured an older environment
