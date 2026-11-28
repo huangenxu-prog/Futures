@@ -852,6 +852,7 @@ enum QihuiPeriods {
 struct PeriodOrderView: View {
     @Environment(\.qihuiInPageStack) private var inPageStack
     @Environment(\.dismiss) private var dismiss
+    private var backgroundStyle = MarketBackgroundStyle()
     @State var order: [String]
     let label: (String) -> String
     let onSave: ([String]) -> Void
@@ -875,6 +876,8 @@ struct PeriodOrderView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(backgroundStyle.raised.ignoresSafeArea())
             .environment(\.editMode, .constant(.active))
             .navigationTitle("周期排序")
             .navigationBarTitleDisplayMode(.inline)
@@ -883,7 +886,7 @@ struct PeriodOrderView: View {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { onSave(order); dismiss() }
+                    Button(inPageStack ? "保存" : "完成") { onSave(order); dismiss() }
                 }
             }
         }

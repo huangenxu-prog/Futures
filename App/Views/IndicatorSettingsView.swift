@@ -7,6 +7,7 @@ struct IndicatorSettingsView: View {
     @FocusState private var focusedField: String?
     @State private var draft: ChartDisplaySettings
     @State private var main = true
+    private var backgroundStyle = MarketBackgroundStyle()
     @State private var editingFormula: FormulaDefinition?
     @State private var composingFormula: FormulaDefinition?
     @State private var builtIn: ChartIndicatorKind?
@@ -40,7 +41,7 @@ struct IndicatorSettingsView: View {
                                     }.buttonStyle(.plain).padding(12)
                                 }
                             }
-                        }.background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:12))
+                        }.background(backgroundStyle.surface,in:RoundedRectangle(cornerRadius:12))
                         Text("自定义指标").font(.subheadline.weight(.semibold)).foregroundStyle(MarketPalette.muted)
                         VStack(spacing:0) {
                             let formulas = draft.formulas.filter { $0.overlay == main }
@@ -51,7 +52,7 @@ struct IndicatorSettingsView: View {
                                 formulaRow(formula)
                                 if formula.id != formulas.last?.id { Divider().padding(.leading,46) }
                             }
-                        }.background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:12))
+                        }.background(backgroundStyle.surface,in:RoundedRectangle(cornerRadius:12))
                         if !draft.isValid {
                             Text(draft.hasDuplicateAverages ? "均线周期重复，请调整。" : "请检查指标参数范围。").font(.caption).foregroundStyle(.red)
                         }
@@ -73,7 +74,7 @@ struct IndicatorSettingsView: View {
                     }
                 }.buttonStyle(.plain).foregroundStyle(MarketPalette.accent).disabled(draft.formulas.count >= 12)
             }.padding(16)
-            .background(MarketPalette.background.ignoresSafeArea())
+            .background(backgroundStyle.raised.ignoresSafeArea())
             .navigationTitle("指标管理").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if !inPageStack { ToolbarItem(placement:.cancellationAction) { Button("取消") { dismiss() } } }
@@ -83,10 +84,10 @@ struct IndicatorSettingsView: View {
                 if let kind = builtIn { BuiltInIndicatorEditor(settings:$draft,kind:kind,bars:previewBars) }
             }
             .navigationDestination(isPresented:Binding(get:{ editingFormula != nil },set:{ if !$0 { editingFormula = nil } })) {
-                if let formula = editingFormula { FormulaEditorView(draft:formula,onSave:saveFormula,previewBars:previewBars) }
+                if let formula = editingFormula { FormulaEditorView(draft:formula,onSave:saveFormula,previewBars:previewBars).environment(\.qihuiInPageStack,true) }
             }
             .navigationDestination(isPresented:Binding(get:{ composingFormula != nil },set:{ if !$0 { composingFormula = nil } })) {
-                if let formula = composingFormula { FormulaComposerView(draft:formula,previewBars:previewBars,onSave:saveFormula) }
+                if let formula = composingFormula { FormulaComposerView(draft:formula,previewBars:previewBars,onSave:saveFormula).environment(\.qihuiInPageStack,true) }
             }
         }.tint(MarketPalette.accent)
     }

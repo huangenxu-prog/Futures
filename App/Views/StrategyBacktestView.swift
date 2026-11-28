@@ -5,6 +5,7 @@ struct StrategyBacktestView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.qihuiInPageStack) private var inPageStack
     @FocusState private var focusedField: String?
+    private var backgroundStyle = MarketBackgroundStyle()
     let instruments: [FuturesInstrument]
     let favoriteIDs: [String]
     let mainCodes: [String:String]
@@ -152,6 +153,8 @@ struct StrategyBacktestView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(backgroundStyle.raised.ignoresSafeArea())
             .scrollDismissesKeyboard(.immediately)
             .onSubmit { dismissInput() }
             .navigationTitle("策略中心")

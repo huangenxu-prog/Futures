@@ -138,13 +138,13 @@ struct QihuiSettingsView: View {
             }
             .onAppear { marketConfigured = !MarketAccessKey.load().isEmpty }
             .onDisappear { marketKey = "" }
-            .navigationDestination(isPresented: $strategy) { StrategyCenterView(instruments: instruments, favoriteIDs: favoriteIDs, mainCodes: mainCodes) }
-            .navigationDestination(isPresented: $indicators) { IndicatorSettingsView(settings: ChartDisplaySettings.load()) { $0.save() } }
+            .navigationDestination(isPresented: $strategy) { StrategyCenterView(instruments: instruments, favoriteIDs: favoriteIDs, mainCodes: mainCodes).environment(\.qihuiInPageStack,true) }
+            .navigationDestination(isPresented: $indicators) { IndicatorSettingsView(settings: ChartDisplaySettings.load()) { $0.save() }.environment(\.qihuiInPageStack,true) }
             .navigationDestination(isPresented: $period) {
                 PeriodOrderView(order: periods, label: { QihuiPeriods.labels[$0] ?? $0 }) { updated in
                     storedPeriodOrder = updated.joined(separator: ",")
                     hiddenPeriods = QihuiPeriods.all.filter { !updated.contains($0) }.joined(separator: ",")
-                }
+                }.environment(\.qihuiInPageStack,true)
             }
         }.tint(MarketPalette.accent)
     }
