@@ -191,7 +191,7 @@ struct ProfessionalChartHost: View {
         VStack(spacing: 0) {
             TradingChartView(model: model)
                 .frame(maxHeight: .infinity)
-            if displaySettings.enabled.contains(.intraday), !isReplay {
+            if displaySettings.toolbarKinds.contains(.intraday), displaySettings.enabled.contains(.intraday), !isReplay {
                 IntradayPane(symbol:symbol,previousSettlement:previousSettlement,isActive:isInteractive)
                     .frame(height:120)
                     .id(symbol)
@@ -289,77 +289,41 @@ struct ProfessionalChartHost: View {
         }
     }
 
+    private func indicatorLabel(_ title:String,active:Bool)->some View {
+        Text(title).font(.system(size:12,weight:active ? .semibold : .regular))
+            .foregroundStyle(active ? MarketPalette.accent : MarketPalette.muted)
+            .padding(.horizontal,6).frame(height:30).contentShape(Rectangle())
+    }
     private var indicatorToolbar: some View {
         HStack(spacing: 2) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 3) {
-                    ForEach(ChartIndicatorKind.available) { kind in
+                    ForEach(MovingAverageType.allCases.filter { displaySettings.toolbarAverages.contains($0) }) { type in
                         Button {
-                            displaySettings = displaySettings.toggle(kind)
+                            var updated=displaySettings
+                            updated.toggleAverageGroup(type)
+                            displaySettings=updated
                         } label: {
-                            Text(displaySettings.label(for: kind))
-                                .font(.system(size: 12,
-                                              weight: displaySettings.enabled.contains(kind) ? .semibold : .regular))
-                                .foregroundStyle(displaySettings.enabled.contains(kind)
-                                                 ? MarketPalette.accent : MarketPalette.muted)
-                                .padding(.horizontal, 6)
-                                .frame(height: 30)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("设置参数", systemImage: "slider.horizontal.3") {
-                                showingIndicatorSettings = true
-                            }
-                            Button(displaySettings.enabled.contains(kind) ? "隐藏指标" : "显示指标") {
-                                displaySettings = displaySettings.toggle(kind)
-                            }
-                        }
+                            indicatorLabel(type.title,active:displaySettings.activeAverages.contains(type))
+                        }.buttonStyle(.plain)
+                        .contextMenu { Button("设置参数",systemImage:"slider.horizontal.3") { showingIndicatorSettings=true } }
                     }
-                    ForEach(displaySettings.formulas) { formula in
-                        Button {
-                            var updated = displaySettings
-                            if let index = updated.formulas.firstIndex(where: { $0.id == formula.id }) {
-                                updated.formulas[index].enabled.toggle()
-                                displaySettings = updated
-                            }
-                        } label: {
-                            Text(formula.name)
-                                .font(.system(size: 12, weight: formula.enabled ? .semibold : .regular))
-                                .foregroundStyle(formula.enabled ? MarketPalette.accent : MarketPalette.muted)
-                                .padding(.horizontal, 6)
-                                .frame(height: 30)
-                        }
-                        .buttonStyle(.plain)
+                    ForEach((ChartDisplaySettings.mainKinds + ChartDisplaySettings.subKinds).filter { displaySettings.toolbarKinds.contains($0) }) { kind in
+                        Button { displaySettings=displaySettings.toggle(kind) } label: {
+                            indicatorLabel(kind.title,active:displaySettings.enabled.contains(kind))
+                        }.buttonStyle(.plain)
+                        .contextMenu { Button("设置参数",systemImage:"slider.horizontal.3") { showingIndicatorSettings=true } }
                     }
-                    ForEach(displaySettings.additionalAverages) { average in
+                    ForEach(displaySettings.formulas.filter { displaySettings.toolbarFormulas.contains($0.id) }) { formula in
                         Button {
-                            var updated = displaySettings
-                            updated.toggleAverage(id: average.id)
-                            // Leave invalid combinations for the settings sheet to fix.
-                            if updated.isValid { displaySettings = updated }
-                            else { showingIndicatorSettings = true }
+                            var updated=displaySettings
+                            if let i=updated.formulas.firstIndex(where:{$0.id==formula.id}) {
+                                updated.formulas[i].enabled.toggle()
+                                displaySettings=updated
+                            }
                         } label: {
-                            Text(average.label)
-                                .font(.system(size: 12,
-                                              weight: average.enabled ? .semibold : .regular))
-                                .foregroundStyle(average.enabled ? MarketPalette.accent : MarketPalette.muted)
-                                .padding(.horizontal, 6)
-                                .frame(height: 30)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("设置参数", systemImage: "slider.horizontal.3") {
-                                showingIndicatorSettings = true
-                            }
-                            Button(average.enabled ? "隐藏指标" : "显示指标") {
-                                var updated = displaySettings
-                                updated.toggleAverage(id: average.id)
-                                if updated.isValid { displaySettings = updated }
-                                else { showingIndicatorSettings = true }
-                            }
-                        }
+                            indicatorLabel(formula.name,active:formula.enabled)
+                        }.buttonStyle(.plain)
                     }
                 }
             }

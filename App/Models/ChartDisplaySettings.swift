@@ -29,7 +29,11 @@ enum ChartIndicatorKind: String, Codable, CaseIterable, Hashable, Identifiable {
 
 struct ChartDisplaySettings: Codable, Equatable {
     // Keep the original four moving averages and their saved visibility intact.
-    var enabled: Set<ChartIndicatorKind> = [.emaFast, .emaSlow, .macd]
+    var enabled: Set<ChartIndicatorKind> = [.macd]
+    var toolbarKinds: Set<ChartIndicatorKind> = [.boll,.macd,.volume]
+    var toolbarAverages: Set<MovingAverageType> = [.sma,.ema,.wma]
+    var activeAverages: Set<MovingAverageType> = [.ema]
+    var toolbarFormulas: Set<UUID> = []
     var sma = 20
     var emaFast = 20
     var emaSlow = 50
@@ -37,7 +41,7 @@ struct ChartDisplaySettings: Codable, Equatable {
     var averageColors: [String: String] = [:]
     var averageWidths: [String: Double] = [:]
     var averageLineTypes: [String: String] = [:]
-    var additionalAverages: [AdditionalMovingAverage] = []
+    var additionalAverages: [AdditionalMovingAverage] = [AdditionalMovingAverage(type:.ema,period:20),AdditionalMovingAverage(type:.ema,period:50),AdditionalMovingAverage(type:.sma,period:20),AdditionalMovingAverage(type:.wma,period:20)]
     var formulas: [FormulaDefinition] = []
     var bollPeriod = 20
     var bollMultiplier = 2.0
@@ -54,7 +58,7 @@ struct ChartDisplaySettings: Codable, Equatable {
     var sarMaximum = 0.2
 
     // Preserve the existing key so upgrades retain the old parameters.
-    private static let key = "qihui.chart.custom-indicator-settings.v1"
+    private static let key = "qihui.chart.custom-indicator-settings.v2"
 
     init() {}
 
@@ -64,6 +68,10 @@ struct ChartDisplaySettings: Codable, Equatable {
         self.init()
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = (try c.decodeIfPresent(Set<ChartIndicatorKind>.self, forKey: .enabled) ?? enabled).subtracting([.chan, .hunt])
+        toolbarKinds = try c.decodeIfPresent(Set<ChartIndicatorKind>.self,forKey:.toolbarKinds) ?? toolbarKinds
+        toolbarAverages = try c.decodeIfPresent(Set<MovingAverageType>.self,forKey:.toolbarAverages) ?? toolbarAverages
+        activeAverages = try c.decodeIfPresent(Set<MovingAverageType>.self,forKey:.activeAverages) ?? activeAverages
+        toolbarFormulas = try c.decodeIfPresent(Set<UUID>.self,forKey:.toolbarFormulas) ?? []
         sma = try c.decodeIfPresent(Int.self, forKey: .sma) ?? sma
         emaFast = try c.decodeIfPresent(Int.self, forKey: .emaFast) ?? emaFast
         emaSlow = try c.decodeIfPresent(Int.self, forKey: .emaSlow) ?? emaSlow
@@ -102,10 +110,6 @@ struct ChartDisplaySettings: Codable, Equatable {
 
     private var enabledAverageKeys: [String] {
         var keys: [String] = []
-        if enabled.contains(.sma) { keys.append("SMA:\(sma)") }
-        if enabled.contains(.emaFast) { keys.append("EMA:\(emaFast)") }
-        if enabled.contains(.emaSlow) { keys.append("EMA:\(emaSlow)") }
-        if enabled.contains(.wma) { keys.append("WMA:\(wma)") }
         keys += additionalAverages.filter(\.enabled).map(\.key)
         return keys
     }
@@ -128,8 +132,24 @@ struct ChartDisplaySettings: Codable, Equatable {
             && bollMultiplier.isFinite && bollMultiplier >= 0.1 && bollMultiplier <= 10
     }
 
+    static let mainKinds: [ChartIndicatorKind] = [.boll,.sar]
+    static let subKinds: [ChartIndicatorKind] = [.macd,.rsi,.kdj,.atr,.volume,.opi,.intraday]
+    mutating func setToolbarKind(_ kind:ChartIndicatorKind,_ visible:Bool) {
+        if visible { toolbarKinds.insert(kind) } else { toolbarKinds.remove(kind); enabled.remove(kind) }
+    }
+    mutating func setToolbarAverage(_ type:MovingAverageType,_ visible:Bool) {
+        if visible { toolbarAverages.insert(type) } else { toolbarAverages.remove(type); activeAverages.remove(type) }
+    }
+    mutating func toggleAverageGroup(_ type:MovingAverageType) {
+        guard toolbarAverages.contains(type) else { return }
+        if activeAverages.contains(type) { activeAverages.remove(type) } else { activeAverages.insert(type) }
+    }
+    mutating func setToolbarFormula(_ id:UUID,_ visible:Bool) {
+        if visible { toolbarFormulas.insert(id) } else { toolbarFormulas.remove(id); if let i=formulas.firstIndex(where:{$0.id==id}) { formulas[i].enabled=false } }
+    }
     func toggle(_ kind: ChartIndicatorKind) -> Self {
         var changed = self
+        guard toolbarKinds.contains(kind) else { return changed }
         if changed.enabled.contains(kind) {
             changed.enabled.remove(kind)
         } else {
@@ -229,7 +249,7 @@ struct ChartDisplaySettings: Codable, Equatable {
 
     func indicators(darkAppearance: Bool = true) -> [any ChartIndicator] {
         var result: [any ChartIndicator] = []
-        for kind in ChartIndicatorKind.available where enabled.contains(kind) {
+        for kind in ChartIndicatorKind.available where enabled.contains(kind) && toolbarKinds.contains(kind) {
             switch kind {
             case .sma: result.append(Self.movingAverage(type: .sma, period: sma, style: averageStyle(key: ChartIndicatorKind.sma.rawValue, type: .sma, period: sma)))
             case .emaFast: result.append(Self.movingAverage(type: .ema, period: emaFast, style: averageStyle(key: ChartIndicatorKind.emaFast.rawValue, type: .ema, period: emaFast)))
@@ -252,10 +272,10 @@ struct ChartDisplaySettings: Codable, Equatable {
             case .intraday: break // Independent minute-series pane, not a main-period indicator.
             }
         }
-        for average in additionalAverages where average.enabled {
+        for average in additionalAverages where average.enabled && toolbarAverages.contains(average.type) && activeAverages.contains(average.type) {
             if let indicator = movingAverage(average) { result.append(indicator) }
         }
-        for formula in formulas where formula.enabled {
+        for formula in formulas where formula.enabled && toolbarFormulas.contains(formula.id) {
             if let program = try? FormulaProgram(formula.source) {
                 result.append(QihuiFormulaIndicator(definition:formula,program:program))
             }

@@ -29,6 +29,7 @@ struct AdditionalMovingAverage: Codable, Equatable, Identifiable, Sendable {
     var period: Int = 100
     var enabled = true
     // Optional fields preserve all old saved settings.
+    var name: String? = nil
     var weight: Int? = nil
     var alpha: Double? = nil
 
@@ -58,6 +59,7 @@ struct AdditionalMovingAverage: Codable, Equatable, Identifiable, Sendable {
         }
     }
     var label: String {
+        if let name, !name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty { return name }
         switch type {
         case .dma: return "DMA(\(String(format:"%.4g",dynamicAlpha)))"
         case .smoothSMA: return "SMA(\(period),\(smoothingWeight))"
