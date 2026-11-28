@@ -881,12 +881,10 @@ struct PeriodOrderView: View {
             .environment(\.editMode, .constant(.active))
             .navigationTitle("周期排序")
             .navigationBarTitleDisplayMode(.inline)
+            .onChange(of:order) { _,updated in if !updated.isEmpty { onSave(updated) } }
             .toolbar {
                 if !inPageStack {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(inPageStack ? "保存" : "完成") { onSave(order); dismiss() }
+                    ToolbarItem(placement:.cancellationAction) { Button("关闭") { dismiss() } }
                 }
             }
         }

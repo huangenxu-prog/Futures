@@ -517,7 +517,7 @@ struct TradingCenterView: View {
             .navigationDestination(isPresented: $selecting) {
                 PaperContractPicker(instruments: catalog, favoriteIDs: favoriteIDs, mainCodes: mainCodes) { c in
                     choose(c); selecting = false
-                }
+                }.environment(\.qihuiInPageStack,true)
             }
             .navigationDestination(isPresented: $showHoldingChart) {
                 if let chartProduct, let chartQuote {
@@ -586,8 +586,9 @@ struct TradingCenterView: View {
                     pendingAction = nil; openingDraft = nil; quickSubmittedID = nil; cancelID = nil; closingSide = nil; closeConfirm = false
                     recentTradeQuotes.removeAll(); expandedHolding = nil
                 }
+                    .environment(\.qihuiInPageStack,true)
             }
-            .navigationDestination(isPresented: $showConnectionSettings) { TradeConnectionSettingsView() }
+            .navigationDestination(isPresented: $showConnectionSettings) { TradeConnectionSettingsView().environment(\.qihuiInPageStack,true) }
             .task(id: "\(address)-\(scenePhase)") {
                 guard scenePhase == .active else { return }
                 while !Task.isCancelled {

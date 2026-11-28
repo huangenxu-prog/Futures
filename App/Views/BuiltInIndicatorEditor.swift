@@ -1,105 +1,103 @@
 import SwiftUI
 import TradingChart
 
-struct BuiltInIndicatorEditor: View {
-    @Environment(\.dismiss) private var dismiss
-    @Binding var settings: ChartDisplaySettings
-    let kind: ChartIndicatorKind
-    let bars: [FormulaBar]
-    @State private var draft = ChartDisplaySettings()
-    @State private var initialized = false
-    private var type: MovingAverageType? {
-        switch kind { case .sma:return .sma; case .emaFast:return .ema; case .wma:return .wma; default:return nil }
+struct BuiltInIndicatorEditor:View {
+    @State private var draft:ChartDisplaySettings
+    let type:MovingAverageType?
+    let kind:ChartIndicatorKind?
+    let bars:[FormulaBar]
+    let onSave:(ChartDisplaySettings)->Void
+    private var backgroundStyle=MarketBackgroundStyle()
+    init(settings:ChartDisplaySettings,type:MovingAverageType?,kind:ChartIndicatorKind?,bars:[FormulaBar],onSave:@escaping(ChartDisplaySettings)->Void) {
+        _draft=State(initialValue:settings);self.type=type;self.kind=kind;self.bars=bars;self.onSave=onSave
     }
-    private var slots: [ChartIndicatorKind] { kind == .emaFast ? [.emaFast,.emaSlow] : [kind] }
-    private var title: String { kind == .sma ? "MA（均线）" : kind == .emaFast ? "EMA（指数均线）" : kind.title }
-    var body: some View {
+    var body:some View {
         ScrollView {
             VStack(alignment:.leading,spacing:16) {
-                Toggle("启用该指标",isOn:enabled).padding(12).background(panel)
-                Text("参数设置").font(.subheadline.weight(.semibold)).foregroundStyle(MarketPalette.muted)
-                VStack(spacing:10) {
-                    if let type {
-                        HStack { Text("显示"); Text("名称"); Spacer(); Text("周期"); Spacer(); Text("颜色") }.font(.caption).foregroundStyle(MarketPalette.muted)
-                        ForEach(slots) { slot in
-                            averageRow(slot.rawValue,label:slot == .emaSlow ? "EMA2" : slot == .emaFast ? "EMA1" : title.components(separatedBy:"（")[0],type:type,period:period(slot),active:slotEnabled(slot))
-                            Divider()
-                        }
+                if let type {
+                    VStack(spacing:0) {
+                        HStack(spacing:8) {
+                            Text("显示").frame(width:34)
+                            Text(type == .dma ? "权重":"周期").frame(maxWidth:.infinity)
+                            if type == .smoothSMA { Text("M").frame(width:30) }
+                            Text("颜色").frame(width:34)
+                            Text("线宽").frame(width:42)
+                            Text("线型").frame(width:42)
+                            Color.clear.frame(width:24,height:1)
+                        }.font(.caption).foregroundStyle(MarketPalette.muted).padding(.vertical,10)
                         ForEach($draft.additionalAverages) { $average in
-                            if average.type == type || (kind == .sma && ![.sma,.ema,.wma].contains(average.type)) {
-                                if average.type == .dma {
-                                    HStack { Toggle("DMA",isOn:$average.enabled); TextField("权重",value:$average.dynamicAlpha,format:.number).keyboardType(.decimalPad).frame(width:65) }
-                                } else {
-                                    averageRow(average.id.uuidString,label:average.type.title,type:average.type,period:$average.period,active:$average.enabled)
-                                    if average.type == .smoothSMA { Stepper("平滑权重 M：\(average.smoothingWeight)",value:$average.smoothingWeight,in:1...max(1,average.period)) }
-                                }
-                                HStack {
-                                    Picker("计算类型",selection:$average.type) { ForEach(MovingAverageType.allCases) { Text($0.title).tag($0) } }
-                                    Spacer()
-                                    Button(role:.destructive) { let id=average.id; draft.additionalAverages.removeAll{$0.id==id}; draft.averageColors.removeValue(forKey:id.uuidString); draft.averageWidths.removeValue(forKey:id.uuidString); draft.averageLineTypes.removeValue(forKey:id.uuidString) } label: { Image(systemName:"minus.circle") }.buttonStyle(.plain)
-                                }.font(.caption)
-                                Divider()
-                            }
+                            if average.type==type { Divider();averageRow($average) }
                         }
-                        Button {
-                            let used = Set(draft.additionalAverages.filter{$0.type==type}.map(\.period) + slots.map{period($0).wrappedValue})
-                            if let p = ([5,10,20,30,50,60,100,120,200]+Array(2...500)).first(where:{!used.contains($0)}) {
-                                draft.additionalAverages.append(AdditionalMovingAverage(type:type,period:p))
-                            }
-                        } label: { Label("添加一条均线",systemImage:"plus.circle").frame(maxWidth:.infinity,alignment:.leading) }.buttonStyle(.plain).foregroundStyle(MarketPalette.accent)
-                    } else { parameters }
-                }.padding(12).background(panel)
-                Text("效果预览").font(.subheadline.weight(.semibold)).foregroundStyle(MarketPalette.muted)
-                if bars.isEmpty { Text("从K线页进入指标管理可预览真实行情。").font(.caption).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading).padding(16).background(panel) }
-                else if let type { averagePreview(type) }
-                else { Text("该指标的完整绘图请在K线页查看。").font(.caption).foregroundStyle(.secondary).padding(12).background(panel) }
-                Button { if draft.isValid { settings=draft; dismiss() } } label: {
-                    Text("保存").font(.headline).foregroundStyle(.white).frame(maxWidth:.infinity).padding(13).background(MarketPalette.accent,in:RoundedRectangle(cornerRadius:10))
-                }.buttonStyle(.plain).disabled(!draft.isValid).opacity(draft.isValid ? 1 : 0.4)
-                if !draft.isValid { Text("参数无效或启用的均线重复。").foregroundStyle(.red).font(.caption) }
+                        Divider()
+                        Button { add(type) } label:{
+                            Label("添加一条均线",systemImage:"plus.circle").frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,14)
+                        }.buttonStyle(.plain).foregroundStyle(MarketPalette.accent)
+                    }.padding(.horizontal,12).background(backgroundStyle.surface,in:RoundedRectangle(cornerRadius:12))
+                } else {
+                    VStack(spacing:12){parameters}.padding(12).background(backgroundStyle.surface,in:RoundedRectangle(cornerRadius:12))
+                }
+                if !draft.isValid { Text("参数无效或重复，保留上一次有效设置。").font(.caption).foregroundStyle(.red) }
+                if !bars.isEmpty && kind != .intraday && draft.isValid {
+                    Text("效果预览").font(.subheadline.weight(.semibold)).foregroundStyle(MarketPalette.muted)
+                    IndicatorWorkspacePreview(bars:bars,settings:previewSettings).frame(height:type != nil || kind == .boll || kind == .sar ? 170:250)
+                }
             }.padding(16)
-        }.background(MarketPalette.background.ignoresSafeArea()).navigationTitle(title).navigationBarTitleDisplayMode(.inline)
-        .task { if !initialized { draft=settings; initialized=true } }
+        }.background(backgroundStyle.raised.ignoresSafeArea())
+        .navigationTitle(type?.title ?? kind?.title ?? "指标参数").navigationBarTitleDisplayMode(.inline)
+        .scrollDismissesKeyboard(.interactively)
+        .toolbar { ToolbarItemGroup(placement:.keyboard){Spacer();Button("完成"){IndicatorKeyboard.dismiss()}} }
+        .onChange(of:draft) { _,updated in if updated.isValid {onSave(updated)} }
     }
-    private var panel: some ShapeStyle { Color.primary.opacity(0.055) }
-    private var enabled: Binding<Bool> {
-        Binding(get:{ slots.contains{draft.enabled.contains($0)} || (type.map{t in draft.additionalAverages.contains{$0.type==t && $0.enabled}} ?? false) },set:{value in
-            for slot in slots { if value { draft.enabled.insert(slot) } else { draft.enabled.remove(slot) } }
-            if let type { for i in draft.additionalAverages.indices where draft.additionalAverages[i].type == type { draft.additionalAverages[i].enabled=value } }
-        })
-    }
-    private func slotEnabled(_ slot:ChartIndicatorKind)->Binding<Bool> {
-        Binding(get:{draft.enabled.contains(slot)},set:{if $0 { draft.enabled.insert(slot) } else { draft.enabled.remove(slot) }})
-    }
-    private func period(_ slot:ChartIndicatorKind)->Binding<Int> {
-        switch slot { case .sma:return $draft.sma; case .emaFast:return $draft.emaFast; case .emaSlow:return $draft.emaSlow; default:return $draft.wma }
-    }
-    private func averageRow(_ key:String,label:String,type:MovingAverageType,period:Binding<Int>,active:Binding<Bool>)->some View {
-        VStack(spacing:8) {
-            HStack(spacing:8) {
-                Button { active.wrappedValue.toggle() } label: { Image(systemName:active.wrappedValue ? "checkmark.square.fill":"square").foregroundStyle(MarketPalette.accent) }.buttonStyle(.plain)
-                Text(label).font(.subheadline).frame(width:46,alignment:.leading)
-                Spacer(minLength:0)
-                Button { period.wrappedValue=max(2,period.wrappedValue-1) } label:{Image(systemName:"minus")}.buttonStyle(.borderless)
-                TextField("周期",value:period,format:.number).keyboardType(.numberPad).multilineTextAlignment(.center).frame(width:42)
-                Button { period.wrappedValue=min(500,period.wrappedValue+1) } label:{Image(systemName:"plus")}.buttonStyle(.borderless)
-                Spacer(minLength:0)
-                ColorPicker("颜色",selection:Binding(get:{
-                    let c=draft.averageStyle(key:key,type:type,period:max(2,min(500,period.wrappedValue))).color ?? ChartDisplaySettings.averageColor(type:type,period:20)
-                    return Color(red:c.red,green:c.green,blue:c.blue)
-                },set:{if let n=CandleAppearance.rgb($0){draft.averageColors[key]=String(format:"%06X",n)}}),supportsOpacity:false).labelsHidden()
+    private func add(_ type:MovingAverageType) {
+        if type == .dma {
+            let used=Set(draft.additionalAverages.filter{$0.type==type}.map(\.dynamicAlpha))
+            if let a=(1...99).map({Double($0)/100}).first(where:{!used.contains($0)}) {
+                draft.additionalAverages.append(AdditionalMovingAverage(type:type,period:20,alpha:a))
             }
-            HStack {
-                Text("线宽").font(.caption).foregroundStyle(.secondary)
-                Picker("线宽",selection:Binding(get:{draft.averageWidths[key] ?? 1.7},set:{draft.averageWidths[key]=$0})) {
-                    ForEach([0.5,1.0,1.5,1.7,2.0,2.5,3.0,3.5,4.0],id:\.self){Text($0.formatted()).tag($0)}
-                }.pickerStyle(.menu)
-                Spacer()
-                Picker("线型",selection:Binding(get:{draft.averageLineTypes[key] ?? "solid"},set:{draft.averageLineTypes[key]=$0})) {
-                    Text("实线").tag("solid"); Text("虚线").tag("dash"); Text("点线").tag("dot")
-                }.pickerStyle(.segmented).frame(maxWidth:175)
+        } else {
+            let used=Set(draft.additionalAverages.filter{$0.type==type}.map(\.period))
+            if let p=([5,10,20,30,50,60,100,120,200]+Array(2...500)).first(where:{!used.contains($0)}) {
+                draft.additionalAverages.append(AdditionalMovingAverage(type:type,period:p))
             }
         }
+    }
+    private func averageRow(_ average:Binding<AdditionalMovingAverage>)->some View {
+        let id=average.wrappedValue.id
+        let key=id.uuidString
+        let t=average.wrappedValue.type
+        let period=average.wrappedValue.period
+        return HStack(spacing:8) {
+            Button { average.wrappedValue.enabled.toggle() } label:{
+                Image(systemName:average.wrappedValue.enabled ? "checkmark.square.fill":"square").foregroundStyle(MarketPalette.accent).frame(width:34,height:32)
+            }.buttonStyle(.plain)
+            if t == .dma {
+                TextField("权重",value:average.dynamicAlpha,format:.number).keyboardType(.decimalPad).multilineTextAlignment(.center)
+            } else {
+                TextField("周期",value:average.period,format:.number).keyboardType(.numberPad).multilineTextAlignment(.center)
+            }
+            if t == .smoothSMA {
+                TextField("M",value:average.smoothingWeight,format:.number).keyboardType(.numberPad).multilineTextAlignment(.center).frame(width:30)
+            }
+            ColorPicker("颜色",selection:Binding(get:{
+                let c=draft.averageStyle(key:key,type:t,period:max(2,min(500,period))).color ?? ChartDisplaySettings.averageColor(type:t,period:20)
+                return Color(red:c.red,green:c.green,blue:c.blue)
+            },set:{if let n=CandleAppearance.rgb($0){draft.averageColors[key]=String(format:"%06X",n)}}),supportsOpacity:false).labelsHidden().frame(width:34)
+            Menu {
+                ForEach([0.5,1.0,1.5,1.7,2.0,2.5,3.0,3.5,4.0],id:\.self){w in Button(w.formatted()){draft.averageWidths[key]=w}}
+            } label:{Text((draft.averageWidths[key] ?? 1.7).formatted()).frame(width:42)}.foregroundStyle(MarketPalette.accent)
+            Menu {
+                Button("实线"){draft.averageLineTypes[key]="solid"}
+                Button("虚线"){draft.averageLineTypes[key]="dash"}
+                Button("点线"){draft.averageLineTypes[key]="dot"}
+            } label:{
+                Image(systemName:draft.averageLineTypes[key]=="dot" ? "ellipsis":draft.averageLineTypes[key]=="dash" ? "line.horizontal.3":"minus").frame(width:42)
+            }.foregroundStyle(MarketPalette.accent)
+            Button(role:.destructive) {
+                IndicatorKeyboard.dismiss()
+                draft.additionalAverages.removeAll{$0.id==id}
+                draft.averageColors.removeValue(forKey:key);draft.averageWidths.removeValue(forKey:key);draft.averageLineTypes.removeValue(forKey:key)
+            } label:{Image(systemName:"minus.circle").frame(width:24)}.buttonStyle(.plain)
+        }.font(.subheadline.monospacedDigit()).padding(.vertical,8)
     }
     @ViewBuilder private var parameters:some View {
         switch kind {
@@ -123,12 +121,11 @@ struct BuiltInIndicatorEditor: View {
         default: Text("无需额外参数").font(.caption).foregroundStyle(.secondary)
         }
     }
-    private func averagePreview(_ type:MovingAverageType)->some View {
-        // Use the same native indicator implementation and style as the chart.
-        var only=draft
-        only.enabled=only.enabled.intersection(Set(slots))
-        only.additionalAverages=only.additionalAverages.filter{$0.type==type}
-        only.formulas=[]
-        return IndicatorWorkspacePreview(bars:bars,settings:only).frame(height:145)
+
+    private var previewSettings:ChartDisplaySettings {
+        var only=draft;only.enabled=[];only.toolbarKinds=[];only.toolbarAverages=[];only.activeAverages=[];only.formulas=[]
+        if let type {only.toolbarAverages=[type];only.activeAverages=[type]}
+        if let kind {only.enabled=[kind];only.toolbarKinds=[kind]}
+        return only
     }
 }

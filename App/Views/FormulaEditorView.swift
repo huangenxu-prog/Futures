@@ -8,6 +8,7 @@ struct FormulaEditorView: View {
     @State var draft: FormulaDefinition
     let onSave: (FormulaDefinition) -> Void
     var previewBars: [FormulaBar] = []
+    var onExit: (() -> Void)? = nil
     @State private var result: String?
     @State private var passed = false
     @State private var showHelp = false
@@ -41,8 +42,7 @@ struct FormulaEditorView: View {
                             Text("副图").tag(false)
                         }.pickerStyle(.segmented)
                     }
-                    Divider()
-                    Toggle("显示指标",isOn:$draft.enabled)
+
                 }.font(.subheadline).padding(12).background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:10))
                 HStack {
                     Text("公式编辑").font(.subheadline.weight(.semibold)).foregroundStyle(MarketPalette.accent)
@@ -151,7 +151,8 @@ struct FormulaEditorView: View {
                            (try? composition.source()) != draft.source {
                             draft.composition = nil
                         }
-                        onSave(draft); dismiss()
+                        draft.composition=nil
+                        onSave(draft); if let onExit { onExit() } else { dismiss() }
                     }
                     .disabled(draft.source.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
                 }
@@ -162,8 +163,8 @@ struct FormulaEditorView: View {
     }
 
     private var previewSettings: ChartDisplaySettings {
-        var settings=ChartDisplaySettings(); settings.enabled=[]
-        var formula=draft; formula.enabled=true; settings.formulas=[formula]; return settings
+        var settings=ChartDisplaySettings(); settings.enabled=[]; settings.activeAverages=[]; settings.toolbarKinds=[]
+        var formula=draft; formula.enabled=true; settings.formulas=[formula]; settings.toolbarFormulas=[formula.id]; return settings
     }
     private func runCommand(_ value:String) { command=value;commandID += 1 }
     private func findNext() {

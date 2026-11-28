@@ -57,16 +57,17 @@ struct IndicatorSettingsView: View {
         }.padding(.top,8).padding(.bottom,12)
         .background(backgroundStyle.raised.ignoresSafeArea()).navigationTitle("指标管理").navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if !inPageStack { ToolbarItem(placement:.cancellationAction){Button("取消"){dismiss()}} }
-            ToolbarItem(placement:.confirmationAction){Button("保存"){onSave(draft);if let onExit {onExit()}else{dismiss()}}.disabled(!draft.isValid)}
+            if !inPageStack { ToolbarItem(placement:.cancellationAction){Button("关闭"){dismiss()}} }
+
         }
+        .onChange(of:draft){_,updated in if updated.isValid {onSave(updated)} }
         .navigationDestination(isPresented:Binding(get:{!route.isEmpty},set:{if !$0 {route=[]}})) {
             if let current=route.last {
                 switch current {
                 case .average(let type):
-                    BuiltInIndicatorEditor(settings:draft,type:type,kind:nil,bars:previewBars,onSave:{draft=$0;route=[]})
+                    BuiltInIndicatorEditor(settings:draft,type:type,kind:nil,bars:previewBars,onSave:{draft=$0})
                 case .builtIn(let kind):
-                    BuiltInIndicatorEditor(settings:draft,type:nil,kind:kind,bars:previewBars,onSave:{draft=$0;route=[]})
+                    BuiltInIndicatorEditor(settings:draft,type:nil,kind:kind,bars:previewBars,onSave:{draft=$0})
                 case .formula(let id):
                     if let formula=draft.formulas.first(where:{$0.id==id}) { formulaEditor(formula) }
                 case .newFormula:

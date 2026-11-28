@@ -17,9 +17,8 @@ struct QihuiSettingsView: View {
     @State private var marketConfigured = false
     @State private var marketKey = ""
     @State private var marketKeyError = false
-    @State private var strategy = false
-    @State private var indicators = false
-    @State private var period = false
+    private enum SettingsRoute:Hashable { case strategy,indicators,period }
+    @State private var route:SettingsRoute?
     @AppStorage("qihui.chart.period-order.v1") private var storedPeriodOrder = ""
     @AppStorage("qihui.chart.period-hidden.v1") private var hiddenPeriods = "3分,10分,120分"
     private var periods: [String] { QihuiPeriods.visible(storedPeriodOrder, hidden: hiddenPeriods) }
@@ -85,7 +84,7 @@ struct QihuiSettingsView: View {
                 groupHeader(.candle, "K线样式", icon: "chart.bar.xaxis")
                 if expandedGroup == .candle { CandleAppearanceFields() }
                 Section {
-                    Button { indicators = true } label: {
+                    Button { route = .indicators } label: {
                         HStack(spacing:12) {
                             Image(systemName:"chart.xyaxis.line").frame(width:24).foregroundStyle(MarketPalette.accent)
                             Text("指标管理").foregroundStyle(MarketPalette.ink)
@@ -96,10 +95,10 @@ struct QihuiSettingsView: View {
                 groupHeader(.chart, "图表与策略", icon: "chart.xyaxis.line")
                 if expandedGroup == .chart {
                 Section {
-                    Button { strategy = true } label: {
+                    Button { route = .strategy } label: {
                         HStack { Text("策略回测"); Spacer(); Image(systemName: "chevron.right") }
                     }
-                    Button("周期排序") { period = true }
+                    Button("周期排序") { route = .period }
                 }
                 }
                 groupHeader(.trade, "交易连接", icon: "wallet.bifold")
@@ -138,13 +137,20 @@ struct QihuiSettingsView: View {
             }
             .onAppear { marketConfigured = !MarketAccessKey.load().isEmpty }
             .onDisappear { marketKey = "" }
-            .navigationDestination(isPresented: $strategy) { StrategyCenterView(instruments: instruments, favoriteIDs: favoriteIDs, mainCodes: mainCodes).environment(\.qihuiInPageStack,true) }
-            .navigationDestination(isPresented: $indicators) { IndicatorSettingsView(settings: ChartDisplaySettings.load()) { $0.save() }.environment(\.qihuiInPageStack,true) }
-            .navigationDestination(isPresented: $period) {
-                PeriodOrderView(order: periods, label: { QihuiPeriods.labels[$0] ?? $0 }) { updated in
-                    storedPeriodOrder = updated.joined(separator: ",")
-                    hiddenPeriods = QihuiPeriods.all.filter { !updated.contains($0) }.joined(separator: ",")
-                }.environment(\.qihuiInPageStack,true)
+            .navigationDestination(item:$route) { destination in
+                switch destination {
+                case .strategy:
+                    StrategyCenterView(instruments:instruments,favoriteIDs:favoriteIDs,mainCodes:mainCodes)
+                        .environment(\.qihuiInPageStack,true)
+                case .indicators:
+                    IndicatorSettingsView(settings:ChartDisplaySettings.load(),onExit:{route=nil}) { $0.save() }
+                        .environment(\.qihuiInPageStack,true)
+                case .period:
+                    PeriodOrderView(order:periods,label:{QihuiPeriods.labels[$0] ?? $0}) { updated in
+                        storedPeriodOrder=updated.joined(separator:",")
+                        hiddenPeriods=QihuiPeriods.all.filter{!updated.contains($0)}.joined(separator:",")
+                    }.environment(\.qihuiInPageStack,true)
+                }
             }
         }.tint(MarketPalette.accent)
     }
