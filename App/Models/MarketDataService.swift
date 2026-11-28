@@ -497,7 +497,7 @@ enum MarketDataService {
         return Array(indexed.values.sorted { $0.time < $1.time }.suffix(wanted))
     }
 
-    static func fetch(symbol: String, period: Int, count: Int = 100, mergeCached: Bool = true) async throws -> [MarketBar] {
+    static func fetch(symbol: String, period: Int, count: Int = 100, mergeCached: Bool = true, localOnly: Bool = false) async throws -> [MarketBar] {
         let url = try baseURL().appendingPathComponent("v1/klines")
         guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             throw MarketDataError.invalidResponse
@@ -507,9 +507,10 @@ enum MarketDataService {
             URLQueryItem(name: "period", value: String(period)),
             URLQueryItem(name: "count", value: String(count))
         ]
+        if localOnly { parts.queryItems?.append(URLQueryItem(name: "local", value: "1")) }
         guard let endpoint = parts.url else { throw MarketDataError.invalidResponse }
         var request = authorizedRequest(url: endpoint)
-        request.timeoutInterval = 25
+        request.timeoutInterval = localOnly ? 4 : 25
         let (data, response) = try await httpSession.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw MarketDataError.invalidResponse

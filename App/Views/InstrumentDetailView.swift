@@ -360,7 +360,7 @@ private struct InstrumentDetailPage: View {
             if !isActive {
                 // Adjacent pages own their own rendered chart, but no live stream.
                 // Their single HTTP history request is cancelled on activation.
-                if rawBars.isEmpty, let fetched = try? await MarketDataService.fetch(symbol: symbol, period: seconds, count: KlineStartupMerge.initialCount, mergeCached: false),
+                if rawBars.isEmpty, let fetched = try? await MarketDataService.fetch(symbol: symbol, period: seconds, count: KlineStartupMerge.initialCount, mergeCached: false, localOnly: true),
                    !Task.isCancelled, chartKey == key, !fetched.isEmpty {
                     rawBars = fetched
                     chartFeed.publish(key: key, snapshot: fetched)
@@ -372,8 +372,15 @@ private struct InstrumentDetailPage: View {
             // The SSE handshake already contains an authoritative history page.
             // Only hydrate by HTTP if it is incomplete or the stream fails.
             // Never put that request in the live update's critical path.
+            // Local history is an optional, non-blocking preview. The existing
+            // SSE subscription and authoritative full-frame path are unchanged.
+            let localHydration = Task { @MainActor in
+                if rawBars.count < KlineStartupMerge.initialCount {
+                    await loadLocalHistory(symbol: symbol, period: seconds, key: key)
+                }
+            }
             var hydration: Task<Void, Never>?
-            defer { hydration?.cancel() }
+            defer { hydration?.cancel(); localHydration.cancel() }
             var retryDelay = 1.0
             while !Task.isCancelled {
                 do {
@@ -449,6 +456,22 @@ private struct InstrumentDetailPage: View {
         selectedCandleTime = nil
         loadError = nil
         loading = rawBars.isEmpty
+    }
+
+    @MainActor private func loadLocalHistory(symbol: String, period: Int, key: String) async {
+        guard let bars = try? await MarketDataService.fetch(symbol: symbol, period: period,
+                count: KlineStartupMerge.initialCount, mergeCached: false, localOnly: true),
+              !Task.isCancelled, chartKey == key, displayedKey == key,
+              lastStreamCandleKey != key, !bars.isEmpty else { return }
+        // A completed SSE frame always wins. Never mix an archive preview
+        // into an already-authoritative live window.
+        let merged = KlineStartupMerge.combine(server: bars, existing: rawBars,
+            live: Optional<MarketBar>.none, timestamp: { $0.time })
+        if rawBars != merged {
+            rawBars = merged
+            chartFeed.publish(key: key, snapshot: merged)
+        }
+        loading = false
     }
 
     @MainActor private func loadCandles() async {
