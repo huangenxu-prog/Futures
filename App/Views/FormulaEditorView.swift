@@ -10,6 +10,8 @@ struct FormulaEditorView: View {
     @State private var passed = false
     @State private var showHelp = false
     @State private var showColors = false
+    @State private var errorRange: NSRange?
+    @State private var jump = 0
 
     var body: some View {
         NavigationStack {
@@ -25,12 +27,7 @@ struct FormulaEditorView: View {
                 }
                 Section("公式源码") {
                     ZStack(alignment:.topLeading) {
-                        TextEditor(text:$draft.source)
-                            .focused($focusedField,equals:"source")
-                            .font(.system(size:13,design:.monospaced))
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                            .scrollContentBackground(.hidden)
+                        NativeFormulaTextView(text:$draft.source,errorRange:errorRange,jump:jump)
                             .frame(minHeight:340)
                         if draft.source.isEmpty {
                             Text("在此输入或粘贴期汇公式")
@@ -46,8 +43,9 @@ struct FormulaEditorView: View {
                         Button { dismissInput(); showColors = true } label: { Image(systemName:"paintpalette") }.buttonStyle(.borderless).accessibilityLabel("颜色代码")
                     }
                     if let result {
-                        Text(result).font(.caption)
-                            .foregroundStyle(passed ? Color.green : Color.red)
+                        Button { if errorRange != nil { jump += 1 } } label: {
+                            Text(result).font(.caption).foregroundStyle(passed ? Color.green : Color.red)
+                        }.buttonStyle(.plain)
                     }
                 }
                 Section("原生语法") {
@@ -117,7 +115,7 @@ struct FormulaEditorView: View {
                     .disabled(draft.source.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
                 }
             }
-            .onChange(of:draft.source) { _,_ in result = nil }
+            .onChange(of:draft.source) { _,_ in result = nil; errorRange = nil }
             .onChange(of:draft.name) { _,_ in result = nil }
         }
     }
@@ -133,11 +131,95 @@ struct FormulaEditorView: View {
             guard !name.isEmpty, name.count <= 24 else { throw FormulaFailure("指标名称长度需为1～24字") }
             guard !draft.source.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { throw FormulaFailure("请输入公式") }
             _ = try FormulaProgram(draft.source)
-            passed = true; result = "公式检查通过。"
+            errorRange = nil; passed = true; result = "公式检查通过。"
             return true
         } catch {
             passed = false; result = error.localizedDescription
+            errorRange = (error as? FormulaFailure)?.range
+            if let range = errorRange {
+                let prefix = (draft.source as NSString).substring(to:min(range.location,(draft.source as NSString).length))
+                let lines = prefix.components(separatedBy:.newlines)
+                result = "第\(lines.count)行，第\((lines.last ?? "").count+1)列：\(error.localizedDescription)"
+                jump += 1
+            }
             return false
+        }
+    }
+}
+
+private struct NativeFormulaTextView: UIViewRepresentable {
+    @Binding var text: String
+    let errorRange: NSRange?
+    let jump: Int
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.backgroundColor = .clear
+        view.font = .monospacedSystemFont(ofSize:13,weight:.regular)
+        view.textColor = .label
+        view.autocorrectionType = .no
+        view.autocapitalizationType = .none
+        view.smartQuotesType = .no
+        view.smartDashesType = .no
+        view.delegate = context.coordinator
+        view.accessibilityLabel = "公式源码"
+        view.text = text
+        return view
+    }
+    func updateUIView(_ view: UITextView, context: Context) {
+        context.coordinator.parent = self
+        if view.markedTextRange != nil { return }
+        if view.text != text { view.text = text }
+        context.coordinator.paint(view)
+        if context.coordinator.lastJump != jump {
+            context.coordinator.lastJump = jump
+            if let range = errorRange, NSMaxRange(range) <= view.textStorage.length {
+                view.scrollRangeToVisible(range)
+            }
+        }
+    }
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: NativeFormulaTextView
+        var lastJump = 0
+        var paintedText: String?
+        var paintedRange: NSRange?
+        init(_ parent: NativeFormulaTextView) { self.parent = parent }
+        func textViewDidChange(_ view: UITextView) {
+            guard view.markedTextRange == nil else { return }
+            parent.text = view.text ?? ""
+            paint(view,editing:true)
+        }
+        func paint(_ view: UITextView,editing:Bool = false) {
+            let source = view.text ?? ""
+            let range = editing ? nil : parent.errorRange
+            guard paintedText != source || paintedRange != range else { return }
+            paintedText = source; paintedRange = range
+            let storage = view.textStorage
+            let full = NSRange(location:0,length:storage.length)
+            guard full.length > 0 else { return }
+            storage.beginEditing()
+            storage.setAttributes([.font:UIFont.monospacedSystemFont(ofSize:13,weight:.regular),.foregroundColor:UIColor.label],range:full)
+            let rules: [(String,UIColor)] = [
+                (#"\b[A-Za-z_][A-Za-z_0-9]*(?=\s*\()"#,.systemTeal),
+                (#"\b(?:COLOR[A-Za-z0-9]+|LINETHICK[0-9]+|FONTSIZE[0-9]+|DOT|DASHLINE|NODRAW)\b"#,.systemPurple),
+                (#"\b[0-9]+(?:\.[0-9]+)?\b"#,.systemOrange),
+                (#"'[^'\n]*'|"[^"\n]*""#,.systemYellow),
+                (#"//[^\n]*|\{[^}]*\}"#,.secondaryLabel)
+            ]
+            for (pattern,color) in rules {
+                guard let regex = try? NSRegularExpression(pattern:pattern,options:[.caseInsensitive]) else { continue }
+                for match in regex.matches(in:source,range:full) {
+                    storage.addAttribute(.foregroundColor,value:color,range:match.range)
+                }
+            }
+            if let range, range.location <= full.length, NSMaxRange(range) <= full.length {
+                let visible = range.length == 0 && range.location > 0 ? NSRange(location:range.location-1,length:1) : range
+                if visible.length > 0 {
+                    storage.addAttributes([.foregroundColor:UIColor.systemRed,.underlineColor:UIColor.systemRed,.underlineStyle:NSUnderlineStyle.single.rawValue],range:visible)
+                }
+            }
+            storage.endEditing()
+            view.typingAttributes = [.font:UIFont.monospacedSystemFont(ofSize:13,weight:.regular),.foregroundColor:UIColor.label]
         }
     }
 }

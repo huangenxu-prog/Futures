@@ -237,6 +237,13 @@ struct FormulaEngineSelfTest {
             FormulaBar(open:1,high:1,low:1,close:1,volume:nil)])
         precondition(candleStates[0].values == [1,0,0] && candleStates[1].values == [0,1,0] && candleStates[2].values == [0,0,1])
         precondition(FormulaDefinition().source.isEmpty)
+        for (source, expected) in [("甲:C;\n乙:EMAA(C,20);","EMAA"),("甲:C;\n乙:未知;","未知"),("甲:C,COLORNOPE;","COLORNOPE")] {
+            do { _ = try FormulaProgram(source); preconditionFailure("expected failure") }
+            catch let failure as FormulaFailure {
+                guard let range = failure.range else { preconditionFailure("missing error range") }
+                precondition((source as NSString).substring(with:range) == expected)
+            }
+        }
         let layers = (0..<20).map { _ in "STICKLINE(C>0,0,C,1,0),COLORFF0000;" }.joined()
         let layered = try FormulaProgram(layers).evaluate(bars)
         precondition(layered.count == 20)

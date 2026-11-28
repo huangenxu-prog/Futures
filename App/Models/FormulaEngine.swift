@@ -5,7 +5,8 @@ import Foundation
 struct FormulaFailure: LocalizedError {
     let message: String
     var errorDescription: String? { message }
-    init(_ message: String) { self.message = message }
+    let range: NSRange?
+    init(_ message: String, range: NSRange? = nil) { self.message = message; self.range = range }
 }
 
 struct FormulaBar: Sendable {
@@ -65,6 +66,8 @@ private struct FormulaStatement: Sendable {
     let fontSize: Double?
     var dash: [Double] = []
     var legendOnly: Bool = false
+    var sourceRange: NSRange = NSRange(location:0,length:0)
+    var sourceNames: [String:[NSRange]] = [:]
 }
 
 struct FormulaSegment: Sendable, Equatable {
@@ -131,6 +134,7 @@ struct FormulaProgram: Sendable {
         var results: [FormulaOutput] = []
         var constants: [String: Double] = [:]
         for statement in statements {
+            do {
             let expr = Self.substitute(statement.expr, constants)
             if statement.drawing {
                 let resolved = FormulaStatement(name:statement.name,expr:expr,visible:statement.visible,color:statement.color,width:statement.width,histogram:statement.histogram,drawing:true,fontSize:statement.fontSize,dash:statement.dash,legendOnly:statement.legendOnly)
@@ -149,6 +153,12 @@ struct FormulaProgram: Sendable {
                 results.append(FormulaOutput(name: statement.name, values: values,
                     color: statement.color, width: statement.width, histogram: statement.histogram,
                     dash: statement.dash, legendOnly: statement.legendOnly))
+            }
+            } catch let failure as FormulaFailure {
+                if failure.range != nil { throw failure }
+                let name = failure.message.components(separatedBy:"：").last ?? ""
+                let matches = statement.sourceNames[name] ?? []
+                throw FormulaFailure(failure.message,range:matches.count == 1 ? matches[0] : statement.sourceRange)
             }
         }
         return results
@@ -544,6 +554,7 @@ struct FormulaProgram: Sendable {
 
 private struct FormulaParser {
     private var tokens: [FormulaToken]
+    private var ranges: [NSRange]
     private var index = 0
     private var token: FormulaToken { tokens[index] }
 
@@ -551,25 +562,30 @@ private struct FormulaParser {
         guard source.utf8.count <= 32768 else { throw FormulaFailure("公式过长，上限32768字节") }
         let chars = Array(source)
         var result: [FormulaToken] = [], i = 0
+        var locations: [NSRange] = []
+        var offsets = [0]
+        for c in chars { offsets.append(offsets.last! + String(c).utf16.count) }
+        func span(_ a:Int,_ b:Int) -> NSRange { NSRange(location:offsets[a],length:offsets[b]-offsets[a]) }
         while i < chars.count {
             let c = chars[i]
             if c.isWhitespace { i += 1; continue }
             if c == "/", i+1 < chars.count, chars[i+1] == "/" {
                 i += 2; while i < chars.count, !chars[i].isNewline { i += 1 }; continue
             }
+            let startToken = i
             if c == "{" {
                 i += 1; while i < chars.count, chars[i] != "}" { i += 1 }
-                guard i < chars.count else { throw FormulaFailure("注释未闭合") }; i += 1; continue
+                guard i < chars.count else { throw FormulaFailure("注释未闭合",range:span(startToken,i)) }; i += 1; continue
             }
             if c == "'" || c == "\"" {
                 let quote = c
                 i += 1
                 let start = i
                 while i < chars.count, chars[i] != quote {
-                    guard !chars[i].isNewline else { throw FormulaFailure("文字不能跨行") }
+                    guard !chars[i].isNewline else { throw FormulaFailure("文字不能跨行",range:span(startToken,i)) }
                     i += 1
                 }
-                guard i < chars.count else { throw FormulaFailure("文字引号未闭合") }
+                guard i < chars.count else { throw FormulaFailure("文字引号未闭合",range:span(startToken,i)) }
                 result.append(.text(String(chars[start..<i])))
                 i += 1
             } else if FormulaIdentifier.isStart(c) {
@@ -581,7 +597,7 @@ private struct FormulaParser {
                 let start = i; i += 1
                 while i < chars.count, chars[i].isASCII && (chars[i].isNumber || chars[i] == ".") { i += 1 }
                 guard let value = Double(String(chars[start..<i])), value.isFinite else {
-                    throw FormulaFailure("无效数字")
+                    throw FormulaFailure("无效数字",range:span(startToken,i))
                 }
                 result.append(.number(value))
             } else {
@@ -595,11 +611,13 @@ private struct FormulaParser {
                     result.append(.symbol(pair)); i += 2
                 } else if "+-*/(),;:><=".contains(c) {
                     result.append(.symbol(String(c))); i += 1
-                } else { throw FormulaFailure("不支持的字符：\(c)") }
+                } else { throw FormulaFailure("不支持的字符：\(c)",range:span(i,i+1)) }
             }
+            locations.append(span(startToken,i))
             guard result.count <= 4096 else { throw FormulaFailure("公式表达式过于复杂") }
         }
         tokens = result + [.end]
+        ranges = locations + [span(chars.count,chars.count)]
     }
 
     private mutating func take() -> FormulaToken {
@@ -612,13 +630,14 @@ private struct FormulaParser {
         index += 1; return true
     }
     private mutating func expect(_ s: String) throws {
-        guard accept(s) else { throw FormulaFailure("缺少符号 \(s)，位置 \(index+1)") }
+        guard accept(s) else { throw FormulaFailure("缺少符号 \(s)",range:ranges[index]) }
     }
 
     mutating func parse() throws -> [FormulaStatement] {
         var statements: [FormulaStatement] = []
         while token != .end {
-            guard case .name(let name) = take() else { throw FormulaFailure("每条公式必须以变量名开头") }
+            let statementStart = index
+            guard case .name(let name) = take() else { throw FormulaFailure("每条公式必须以变量名开头",range:ranges[statementStart]) }
             let drawing = ["STICKLINE","DRAWICON","DRAWTEXT","DRAWLINE"].contains(name) && token == .symbol("(")
             var visible: Bool
             let expr: FormulaExpr
@@ -632,7 +651,7 @@ private struct FormulaParser {
             } else {
                 if accept(":") { visible = true }
                 else if accept(":=") { visible = false }
-                else { throw FormulaFailure("\(name) 后需要 : 或 :=") }
+                else { throw FormulaFailure("\(name) 后需要 : 或 :=",range:ranges[index]) }
                 expr = try expression()
             }
             var color: String?, width = 1.5, histogram = false
@@ -640,7 +659,8 @@ private struct FormulaParser {
             var dash: [Double] = []
             var legendOnly = false
             while accept(",") {
-                guard case .name(let style) = take() else { throw FormulaFailure("绘图属性格式不正确") }
+                let styleIndex = index
+                guard case .name(let style) = take() else { throw FormulaFailure("绘图属性格式不正确",range:ranges[styleIndex]) }
                 let colors = ["COLORRED":"FF5B5B","COLORGREEN":"23C6C8","COLORBLUE":"4C8DFF",
                               "COLORYELLOW":"F5A623","COLORWHITE":"FFFFFF","COLORMAGENTA":"D77DFF",
                               "COLORCYAN":"23C6C8","COLORBLACK":"000000"]
@@ -653,11 +673,14 @@ private struct FormulaParser {
                 else if style.hasPrefix("LINETHICK"), let value = Double(style.dropFirst(9)),
                         (1...5).contains(value) { width = value }
                 else if style == "COLORSTICK" || style == "STICK" { histogram = true }
-                else { throw FormulaFailure("暂不支持绘图属性：\(style)") }
+                else { throw FormulaFailure("暂不支持绘图属性：\(style)",range:ranges[styleIndex]) }
             }
             if token != .end { try expect(";") }
             if drawing && histogram { throw FormulaFailure("绘图函数不能再加柱状图属性") }
-            statements.append(.init(name:name,expr:expr,visible:visible,color:color,width:width,histogram:histogram,drawing:drawing,fontSize:fontSize,dash:dash,legendOnly:legendOnly))
+            var names: [String:[NSRange]] = [:]
+            for j in statementStart..<index { if case .name(let word) = tokens[j] { names[word,default:[]].append(ranges[j]) } }
+            let statementRange = NSUnionRange(ranges[statementStart],ranges[max(statementStart,index-1)])
+            statements.append(.init(name:name,expr:expr,visible:visible,color:color,width:width,histogram:histogram,drawing:drawing,fontSize:fontSize,dash:dash,legendOnly:legendOnly,sourceRange:statementRange,sourceNames:names))
             guard statements.count <= 96, statements.filter({ $0.visible || $0.legendOnly }).count <= 48 else {
                 throw FormulaFailure("最多96条语句、48条绘图输出")
             }
@@ -695,6 +718,7 @@ private struct FormulaParser {
             try expect(")")
             return expr
         }
+        let atomIndex = index
         switch take() {
         case .number(let value): return .constant(value)
         case .text(let value): return .text(value)
@@ -706,7 +730,7 @@ private struct FormulaParser {
                 try expect(")")
             }
             return .call(name,args)
-        default: throw FormulaFailure("缺少有效表达式，位置 \(index+1)")
+        default: throw FormulaFailure("缺少有效表达式",range:ranges[atomIndex])
         }
     }
 }
