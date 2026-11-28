@@ -117,3 +117,31 @@ class UnifiedTests(unittest.TestCase):
         api = Mock()
         self.hub._install_pending(api, {}, [self.key], -1)
         api.get_kline_serial.assert_not_called()
+
+    def test_expanded_capacity_keeps_warm_budget_and_memory_guard(self):
+        from unittest.mock import patch
+        hub = g.UnifiedKlineHub(max_series=128)
+        hub.start = lambda: None
+        symbols = ["DCE.a%04d" % n for n in range(2701, 2717)]
+        with patch.object(g, "favorite_warm_memory_ok", return_value=True):
+            hub.warm_symbols(symbols)
+            self.assertEqual(len(hub.entries), 30)
+            for symbol in symbols:
+                for period in (60, 300, 900, 1800, 3600, 7200, 86400, 604800):
+                    hub.reserve(symbol, period)
+        self.assertEqual(len(hub.entries), 128)
+        self.assertEqual(hub.generation, 0)
+        self.assertEqual(hub.status()["max_memory_series"], 256)
+        with patch.object(g, "favorite_warm_memory_ok", return_value=False):
+            hub.reserve(symbols[0], 60)
+            with self.assertRaises(g.KlineCapacityError):
+                hub.reserve("DCE.c2701", 300)
+        self.assertEqual(hub.generation, 0)
+
+    def test_capacity_environment_validation(self):
+        from unittest.mock import patch
+        with patch.dict(g.os.environ, {"QIHUI_UNIFIED_MAX_SERIES": "128"}):
+            self.assertEqual(g.unified_capacity(), 128)
+        with patch.dict(g.os.environ, {"QIHUI_UNIFIED_MAX_SERIES": "129"}):
+            with self.assertRaises(ValueError):
+                g.unified_capacity()

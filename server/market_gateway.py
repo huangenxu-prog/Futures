@@ -1103,8 +1103,12 @@ class SharedKlineHub:
         self.connected = False
         self.error = None
 
+    @property
+    def max_memory_series(self):
+        return KLINE_MAX_MEMORY_SERIES
+
     def _trim_cache_locked(self, protect=None):
-        while len(self.cache) > KLINE_MAX_MEMORY_SERIES:
+        while len(self.cache) > self.max_memory_series:
             evictable = [(self.cached_used.get(old, 0), old)
                          for old in self.cache if old != protect
                          and old not in self.entries
@@ -1405,7 +1409,7 @@ class SharedKlineHub:
                     "ready": len(self.cache), "data_length": KLINE_DATA_LENGTH,
                     "history_length": KLINE_HISTORY_LENGTH,
                     "max_live_series": self.max_series,
-                    "max_memory_series": KLINE_MAX_MEMORY_SERIES,
+                    "max_memory_series": self.max_memory_series,
                     "favorite_warm_periods": FAVORITE_WARM_PERIODS,
                     "pending_history": len(self.pending_history),
                     "disk_enabled": self.store is not None}
@@ -1591,7 +1595,14 @@ class SharedKlineHub:
                     reclaim_sdk_memory("kline-live")
 
 
-UNIFIED_MAX_SERIES = 32
+def unified_capacity():
+    value = int(os.environ.get("QIHUI_UNIFIED_MAX_SERIES", "32"))
+    if not 32 <= value <= 128:
+        raise ValueError("QIHUI_UNIFIED_MAX_SERIES must be between 32 and 128")
+    return value
+
+
+UNIFIED_MAX_SERIES = unified_capacity()
 
 
 class UnifiedKlineHub(SharedKlineHub):
@@ -1608,6 +1619,10 @@ class UnifiedKlineHub(SharedKlineHub):
         self.sdk_sessions = 0
         self.sdk_subscriptions = 0
 
+    @property
+    def max_memory_series(self):
+        return max(KLINE_MAX_MEMORY_SERIES, self.max_series * 2)
+
     def start(self):
         with self.condition:
             if self.thread is None or not self.thread.is_alive():
@@ -1623,6 +1638,9 @@ class UnifiedKlineHub(SharedKlineHub):
         key = (quote_symbol(symbol), period)
         with self.condition:
             if key not in self.entries:
+                if (self.max_series > 32 and len(self.entries) >= 32
+                        and not favorite_warm_memory_ok()):
+                    raise KlineCapacityError("kline_subscription_limit")
                 if len(self.entries) >= self.max_series:
                     candidates = [(row["used"], old) for old, row in self.entries.items()
                                   if not row["listeners"] and not row["waiters"]]
@@ -1744,7 +1762,7 @@ class UnifiedKlineHub(SharedKlineHub):
             return 0
         accepted = 0
         with self.condition:
-            limit = max(0, self.max_series - 2)
+            limit = min(30, max(0, self.max_series - 2))
             for symbol in dict.fromkeys(symbols):
                 added = False
                 for period in FAVORITE_WARM_PERIODS:
