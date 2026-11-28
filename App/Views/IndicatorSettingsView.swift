@@ -5,7 +5,7 @@ struct IndicatorSettingsView: View {
     @Environment(\.qihuiInPageStack) private var inPageStack
     @State private var draft:ChartDisplaySettings
     @State private var main=true
-    @State private var route:[Route]=[]
+    @State private var route:Route?
     private var backgroundStyle=MarketBackgroundStyle()
     let previewBars:[FormulaBar]
     let onSave:(ChartDisplaySettings)->Void
@@ -35,22 +35,22 @@ struct IndicatorSettingsView: View {
                 Section {
                     if main {
                         ForEach(MovingAverageType.allCases) { type in
-                            row(type.title,detail:description(type),visible:Binding(get:{draft.toolbarAverages.contains(type)},set:{draft.setToolbarAverage(type,$0)})) { route=[.average(type)] }
+                            row(type.title,detail:description(type),visible:Binding(get:{draft.toolbarAverages.contains(type)},set:{draft.setToolbarAverage(type,$0)})) { route = .average(type) }
                         }
                     }
                     ForEach(main ? ChartDisplaySettings.mainKinds : ChartDisplaySettings.subKinds) { kind in
-                        row(kind.title,detail:"",visible:Binding(get:{draft.toolbarKinds.contains(kind)},set:{draft.setToolbarKind(kind,$0)})) { route=[.builtIn(kind)] }
+                        row(kind.title,detail:"",visible:Binding(get:{draft.toolbarKinds.contains(kind)},set:{draft.setToolbarKind(kind,$0)})) { route = .builtIn(kind) }
                     }
                 } header:{Text("内置指标")} footer:{Text("开关仅控制K线底栏入口，绘制状态由底栏控制。")}
                 Section("公式指标") {
                     ForEach(draft.formulas.filter{$0.overlay==main}) { formula in
-                        row(formula.name,detail:"公式",visible:Binding(get:{draft.toolbarFormulas.contains(formula.id)},set:{draft.setToolbarFormula(formula.id,$0)})) { route=[.formula(formula.id)] }
+                        row(formula.name,detail:"公式",visible:Binding(get:{draft.toolbarFormulas.contains(formula.id)},set:{draft.setToolbarFormula(formula.id,$0)})) { route = .formula(formula.id) }
                             .swipeActions { Button("删除",role:.destructive) { draft.formulas.removeAll{$0.id==formula.id};draft.toolbarFormulas.remove(formula.id) } }
                     }
                     if !draft.formulas.contains(where:{$0.overlay==main}) { Text("暂无公式指标").foregroundStyle(MarketPalette.muted) }
                 }
             }.listStyle(.insetGrouped).scrollContentBackground(.hidden)
-            Button { route=[.newFormula] } label:{
+            Button { route = .newFormula } label:{
                 Label("新建公式指标",systemImage:"plus").foregroundStyle(.white).frame(maxWidth:.infinity).padding(13)
                     .background(MarketPalette.accent,in:RoundedRectangle(cornerRadius:10))
             }.buttonStyle(.plain).disabled(draft.formulas.count>=12).padding(.horizontal,16)
@@ -60,29 +60,34 @@ struct IndicatorSettingsView: View {
             if !inPageStack { ToolbarItem(placement:.cancellationAction){Button("关闭"){dismiss()}} }
 
         }
-        .onChange(of:draft){_,updated in if updated.isValid {onSave(updated)} }
-        .navigationDestination(isPresented:Binding(get:{!route.isEmpty},set:{if !$0 {route=[]}})) {
-            if let current=route.last {
+        .onChange(of:draft){_,updated in if updated.isValid { updated.save(); onSave(updated) } }
+        .navigationDestination(item:$route) { current in
                 switch current {
                 case .average(let type):
-                    BuiltInIndicatorEditor(settings:draft,type:type,kind:nil,bars:previewBars,onSave:{draft=$0})
+                    BuiltInIndicatorEditor(settings:draft,type:type,kind:nil,bars:previewBars,onSave:{ commit($0) })
                 case .builtIn(let kind):
-                    BuiltInIndicatorEditor(settings:draft,type:nil,kind:kind,bars:previewBars,onSave:{draft=$0})
+                    BuiltInIndicatorEditor(settings:draft,type:nil,kind:kind,bars:previewBars,onSave:{ commit($0) })
                 case .formula(let id):
                     if let formula=draft.formulas.first(where:{$0.id==id}) { formulaEditor(formula) }
                 case .newFormula:
                     formulaEditor(newFormula)
                 }
-            }
         }.tint(MarketPalette.accent)
+    }
+    private func commit(_ updated:ChartDisplaySettings) {
+        guard updated.isValid else { return }
+        updated.save()
+        draft=updated
+        onSave(updated)
     }
     private var newFormula:FormulaDefinition { var f=FormulaDefinition();f.overlay=main;return f }
     private func formulaEditor(_ formula:FormulaDefinition)->some View {
         FormulaEditorView(draft:formula,onSave:{updated in
             if let i=draft.formulas.firstIndex(where:{$0.id==updated.id}) { draft.formulas[i]=updated }
             else if draft.formulas.count<12 { draft.formulas.append(updated);draft.toolbarFormulas.insert(updated.id) }
-            route=[]
-        },previewBars:previewBars,onExit:{route=[]}).environment(\.qihuiInPageStack,true)
+            commit(draft)
+            route=nil
+        },previewBars:previewBars,onExit:{route=nil}).environment(\.qihuiInPageStack,true)
     }
     private func row(_ name:String,detail:String,visible:Binding<Bool>,action:@escaping()->Void)->some View {
         HStack(spacing:10) {

@@ -46,7 +46,7 @@ struct BuiltInIndicatorEditor:View {
         .navigationTitle(type?.title ?? kind?.title ?? "指标参数").navigationBarTitleDisplayMode(.inline)
         .scrollDismissesKeyboard(.interactively)
         .toolbar { ToolbarItemGroup(placement:.keyboard){Spacer();Button("完成"){IndicatorKeyboard.dismiss()}} }
-        .onChange(of:draft) { _,updated in if updated.isValid {onSave(updated)} }
+        .onChange(of:draft) { _,updated in if updated.isValid {updated.save();onSave(updated)} }
     }
     private func add(_ type:MovingAverageType) {
         if type == .dma {

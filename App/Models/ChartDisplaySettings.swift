@@ -28,7 +28,7 @@ enum ChartIndicatorKind: String, Codable, CaseIterable, Hashable, Identifiable {
 }
 
 struct ChartDisplaySettings: Codable, Equatable {
-    // Keep the original four moving averages and their saved visibility intact.
+    // Toolbar availability and chart drawing are independent.
     var enabled: Set<ChartIndicatorKind> = [.macd]
     var toolbarKinds: Set<ChartIndicatorKind> = [.boll,.macd,.volume]
     var toolbarAverages: Set<MovingAverageType> = [.sma,.ema,.wma]
@@ -57,13 +57,12 @@ struct ChartDisplaySettings: Codable, Equatable {
     var sarStep = 0.02
     var sarMaximum = 0.2
 
-    // Preserve the existing key so upgrades retain the old parameters.
+    // New indicator schema; reset of previous indicator preferences was approved.
     private static let key = "qihui.chart.custom-indicator-settings.v2"
 
     init() {}
 
-    // The original saved JSON lacks additionalAverages. Decode it optionally
-    // instead of discarding the user's saved settings on upgrade.
+    // Decode new-schema preferences, allowing missing optional fields.
     init(from decoder: Decoder) throws {
         self.init()
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -79,7 +78,7 @@ struct ChartDisplaySettings: Codable, Equatable {
         averageColors = try c.decodeIfPresent([String: String].self, forKey: .averageColors) ?? [:]
         averageWidths = try c.decodeIfPresent([String: Double].self, forKey: .averageWidths) ?? [:]
         averageLineTypes = try c.decodeIfPresent([String: String].self, forKey: .averageLineTypes) ?? [:]
-        additionalAverages = try c.decodeIfPresent([AdditionalMovingAverage].self, forKey: .additionalAverages) ?? []
+        additionalAverages = try c.decodeIfPresent([AdditionalMovingAverage].self, forKey: .additionalAverages) ?? additionalAverages
         formulas = try c.decodeIfPresent([FormulaDefinition].self, forKey: .formulas) ?? []
         bollPeriod = try c.decodeIfPresent(Int.self, forKey: .bollPeriod) ?? bollPeriod
         bollMultiplier = try c.decodeIfPresent(Double.self, forKey: .bollMultiplier) ?? bollMultiplier
