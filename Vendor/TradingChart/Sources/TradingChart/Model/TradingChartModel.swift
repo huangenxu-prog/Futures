@@ -504,7 +504,7 @@ public final class TradingChartModel {
         for indicator in indicators {
             guard let output = indicatorOutputs[indicator.id] else { continue }
             let base = paletteBases[indicator.id] ?? 0
-            for line in output.lines {
+            for line in output.lines + output.legendValues {
                 guard let value = IndicatorRendering.value(in: line.values, at: time) else { continue }
                 result.append(CrosshairIndicatorValue(
                     indicatorID: indicator.id,

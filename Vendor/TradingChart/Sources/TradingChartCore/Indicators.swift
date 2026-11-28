@@ -319,6 +319,8 @@ public struct IndicatorOutput: Sendable, Equatable {
     public var segmentSeries: [IndicatorSegmentSeries]
     /// Optional presentation-only status, independent of drawable values.
     public var statusText: String?
+    /// Numeric legend series, never drawn or included in the price domain.
+    public var legendValues: [IndicatorLine]
 
     /// Creates an output.
     public init(
@@ -330,7 +332,8 @@ public struct IndicatorOutput: Sendable, Equatable {
         sticks: [IndicatorStick] = [],
         signals: [IndicatorSignal] = [],
         segmentSeries: [IndicatorSegmentSeries] = [],
-        statusText: String? = nil
+        statusText: String? = nil,
+        legendValues: [IndicatorLine] = []
     ) {
         self.lines = lines
         self.bands = bands
@@ -341,6 +344,7 @@ public struct IndicatorOutput: Sendable, Equatable {
         self.signals = signals
         self.segmentSeries = segmentSeries
         self.statusText = statusText
+        self.legendValues = legendValues
     }
 
     /// An output with nothing to draw.
@@ -416,7 +420,7 @@ public struct IndicatorOutput: Sendable, Equatable {
     /// Band edges are not reported. Lines come first, then histograms, in output order.
     public func values(at time: Date) -> [(name: String, value: Double, color: ChartColor?)] {
         var result: [(name: String, value: Double, color: ChartColor?)] = []
-        for line in lines {
+        for line in lines + legendValues {
             let index = line.values.partitionPoint { $0.time >= time }
             if index < line.values.count, line.values[index].time == time {
                 result.append((line.name, line.values[index].value, line.style.color))

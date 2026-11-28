@@ -63,6 +63,8 @@ private struct FormulaStatement: Sendable {
     let histogram: Bool
     let drawing: Bool
     let fontSize: Double?
+    var dash: [Double] = []
+    var legendOnly: Bool = false
 }
 
 struct FormulaSegment: Sendable, Equatable {
@@ -86,6 +88,8 @@ struct FormulaOutput: Sendable {
     let histogram: Bool
     var drawing: FormulaDrawing? = nil
     var fontSize: Double? = nil
+    var dash: [Double] = []
+    var legendOnly: Bool = false
 }
 
 struct FormulaProgram: Sendable {
@@ -110,6 +114,9 @@ struct FormulaProgram: Sendable {
         env["O"] = env["OPEN"]; env["H"] = env["HIGH"]
         env["L"] = env["LOW"]; env["C"] = env["CLOSE"]; env["V"] = env["VOL"]
         env["VOLUME"] = env["VOL"]
+        env["ISUP"] = bars.map { $0.close > $0.open ? 1.0 : 0.0 }
+        env["ISDOWN"] = bars.map { $0.close < $0.open ? 1.0 : 0.0 }
+        env["ISEQUAL"] = bars.map { $0.close == $0.open ? 1.0 : 0.0 }
         env["DRAWNULL"] = Array(repeating: nil, count: n)
         env["OPEN_OI"] = bars.map { $0.openInterest }
         env["OPI"] = bars.map { $0.closeInterest }
@@ -126,8 +133,10 @@ struct FormulaProgram: Sendable {
         for statement in statements {
             let expr = Self.substitute(statement.expr, constants)
             if statement.drawing {
-                let resolved = FormulaStatement(name:statement.name,expr:expr,visible:statement.visible,color:statement.color,width:statement.width,histogram:statement.histogram,drawing:true,fontSize:statement.fontSize)
-                results.append(try Self.draw(resolved, env, n))
+                let resolved = FormulaStatement(name:statement.name,expr:expr,visible:statement.visible,color:statement.color,width:statement.width,histogram:statement.histogram,drawing:true,fontSize:statement.fontSize,dash:statement.dash,legendOnly:statement.legendOnly)
+                var output = try Self.draw(resolved, env, n)
+                output.dash = statement.dash
+                results.append(output)
                 continue
             }
             guard env[statement.name] == nil else {
@@ -136,9 +145,10 @@ struct FormulaProgram: Sendable {
             let values = try Self.eval(expr, env, n)
             if case .constant(let value) = expr { constants[statement.name] = value }
             env[statement.name] = values
-            if statement.visible {
+            if statement.visible || statement.legendOnly {
                 results.append(FormulaOutput(name: statement.name, values: values,
-                    color: statement.color, width: statement.width, histogram: statement.histogram))
+                    color: statement.color, width: statement.width, histogram: statement.histogram,
+                    dash: statement.dash, legendOnly: statement.legendOnly))
             }
         }
         return results
@@ -315,7 +325,7 @@ struct FormulaProgram: Sendable {
                 }
             }
         case .call(let rawName, let args):
-            let aliases = ["EMA2":"WMA","CROSSUP":"CROSS","IFN":"IF"]
+            let aliases = ["EMA2":"WMA","CROSSUP":"CROSS","IFN":"IF","IFELSE":"IF"]
             if rawName == "CROSSDOWN", args.count == 2 { return try eval(.call("CROSS",[args[1],args[0]]),env,n) }
             let fn = aliases[rawName] ?? rawName
             let arity: [String:Int] = [
@@ -627,6 +637,8 @@ private struct FormulaParser {
             }
             var color: String?, width = 1.5, histogram = false
             var fontSize: Double? = nil
+            var dash: [Double] = []
+            var legendOnly = false
             while accept(",") {
                 guard case .name(let style) = take() else { throw FormulaFailure("绘图属性格式不正确") }
                 let colors = ["COLORRED":"FF5B5B","COLORGREEN":"23C6C8","COLORBLUE":"4C8DFF",
@@ -634,7 +646,9 @@ private struct FormulaParser {
                               "COLORCYAN":"23C6C8","COLORBLACK":"000000"]
                 if let value = colors[style] { color = value }
                 else if style.hasPrefix("COLOR"), style.count == 11, UInt32(style.dropFirst(5),radix:16) != nil { color = String(style.dropFirst(5)) }
-                else if style == "NODRAW" { visible = false }
+                else if style == "NODRAW" { legendOnly = visible && !drawing; visible = false }
+                else if style == "DOT" || style == "POINTDOT" { dash = [1, 3] }
+                else if style == "DASHLINE" { dash = [5, 3] }
                 else if style.hasPrefix("FONTSIZE"), let size = Double(style.dropFirst(8)), (6...40).contains(size) { fontSize = size }
                 else if style.hasPrefix("LINETHICK"), let value = Double(style.dropFirst(9)),
                         (1...5).contains(value) { width = value }
@@ -643,12 +657,12 @@ private struct FormulaParser {
             }
             if token != .end { try expect(";") }
             if drawing && histogram { throw FormulaFailure("绘图函数不能再加柱状图属性") }
-            statements.append(.init(name:name,expr:expr,visible:visible,color:color,width:width,histogram:histogram,drawing:drawing,fontSize:fontSize))
-            guard statements.count <= 96, statements.filter(\.visible).count <= 48 else {
+            statements.append(.init(name:name,expr:expr,visible:visible,color:color,width:width,histogram:histogram,drawing:drawing,fontSize:fontSize,dash:dash,legendOnly:legendOnly))
+            guard statements.count <= 96, statements.filter { $0.visible || $0.legendOnly }.count <= 48 else {
                 throw FormulaFailure("最多96条语句、48条绘图输出")
             }
         }
-        guard statements.contains(where: \.visible) else { throw FormulaFailure("至少需要一条绘图输出") }
+        guard statements.contains(where: { $0.visible || $0.legendOnly }) else { throw FormulaFailure("至少需要一条绘图输出") }
         return statements
     }
 

@@ -14,13 +14,21 @@ struct QihuiFormulaIndicator: ChartIndicator {
         }
         guard let outputs = try? program.evaluate(bars) else { return .empty }
         var lines: [IndicatorLine] = []
+        var legendValues: [IndicatorLine] = []
         var histograms: [IndicatorHistogram] = []
         var sticks: [IndicatorStick] = []
         var signals: [IndicatorSignal] = []
         var segmentSeries: [IndicatorSegmentSeries] = []
         for (index,output) in outputs.enumerated() {
             let color = output.color.flatMap { ChartColor(hex:$0) }
-            if let drawing = output.drawing {
+            if output.legendOnly {
+                let values = zip(input.candles, output.values).compactMap { bar, value -> IndicatorValue? in
+                    guard let value, value.isFinite else { return nil }
+                    return IndicatorValue(time: bar.time, value: value)
+                }
+                legendValues.append(IndicatorLine(id:"output.\(index)",name:output.name,values:values,
+                    style:IndicatorLineStyle(color:color,width:output.width,dash:output.dash),paletteSlot:index))
+            } else if let drawing = output.drawing {
                 switch drawing {
                 case .stick(let starts,let width,let hollow):
                     for i in bars.indices {
@@ -34,7 +42,7 @@ struct QihuiFormulaIndicator: ChartIndicator {
                                          end:IndicatorValue(time:input.candles[segment.endIndex].time,value:segment.endValue))
                     }
                     segmentSeries.append(IndicatorSegmentSeries(segments:plotted,
-                        style:IndicatorLineStyle(color:color,width:output.width)))
+                        style:IndicatorLineStyle(color:color,width:output.width,dash:output.dash)))
                 case .signal(let label):
                     for (bar,value) in zip(input.candles,output.values) {
                         guard let value else { continue }
@@ -55,12 +63,12 @@ struct QihuiFormulaIndicator: ChartIndicator {
                     if let value, value.isFinite { values.append(IndicatorValue(time:bar.time,value:value)) }
                 }
                 lines.append(IndicatorLine(id:"output.\(index)",name:output.name,values:values,
-                    style:IndicatorLineStyle(color:color,width:output.width),paletteSlot:index))
+                    style:IndicatorLineStyle(color:color,width:output.width,dash:output.dash),paletteSlot:index))
             }
         }
         return IndicatorOutput(lines:lines,histograms:histograms,
                                sticks:sticks.enumerated().sorted { a,b in a.element.time == b.element.time ? a.offset < b.offset : a.element.time < b.element.time }.map(\.element),
                                signals:signals.sorted { $0.time < $1.time },
-                               segmentSeries:segmentSeries)
+                               segmentSeries:segmentSeries,legendValues:legendValues)
     }
 }

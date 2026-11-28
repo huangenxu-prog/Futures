@@ -223,10 +223,19 @@ struct FormulaEngineSelfTest {
         DRAWTEXT(C>3,H,'☼'),FONTSIZE18,COLOR00FF00;
         STICKLINE(C>3,0,C,1,0),COLOR0000CC;
         """).evaluate(bars)
-        precondition(compatible.count == 7 && compatible[0].color == "FF8D1E")
+        precondition(compatible.count == 8 && compatible[0].color == "FF8D1E")
         near(compatible[1].values[5],7); near(compatible[2].values[5],1)
         near(compatible[3].values[3],1); near(compatible[4].values[5],1)
-        precondition(compatible[5].fontSize == 18 && compatible[6].color == "0000CC")
+        precondition(compatible[5].legendOnly && compatible[5].name == "HIDDEN")
+        precondition(compatible[6].fontSize == 18 && compatible[7].color == "0000CC")
+        let styles = try FormulaProgram("X:IFELSE(ISUP,C,O),COLORFF00FF,LINETHICK1,DOT; Y:IF(ISDOWN,1,ISEQUAL),DASHLINE; Z:C,NODRAW;").evaluate(bars)
+        precondition(styles[0].dash == [1,3] && styles[0].width == 1 && styles[0].color == "FF00FF")
+        precondition(styles[1].dash == [5,3] && styles[2].legendOnly)
+        let states = try FormulaProgram("U:ISUP;D:ISDOWN;E:ISEQUAL;").evaluate([
+            FormulaBar(open:1,high:2,low:1,close:2,volume:nil),
+            FormulaBar(open:2,high:2,low:1,close:1,volume:nil),
+            FormulaBar(open:1,high:1,low:1,close:1,volume:nil)])
+        precondition(states[0].values == [1,0,0] && states[1].values == [0,1,0] && states[2].values == [0,0,1])
         let layers = (0..<20).map { _ in "STICKLINE(C>0,0,C,1,0),COLORFF0000;" }.joined()
         let layered = try FormulaProgram(layers).evaluate(bars)
         precondition(layered.count == 20)
