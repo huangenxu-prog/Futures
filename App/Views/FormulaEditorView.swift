@@ -3,6 +3,7 @@ import UIKit
 
 struct FormulaEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.qihuiInPageStack) private var inPageStack
     @FocusState private var focusedField: String?
     @State var draft: FormulaDefinition
     let onSave: (FormulaDefinition) -> Void
@@ -112,7 +113,9 @@ struct FormulaEditorView: View {
                     Spacer()
                     Button("完成") { dismissInput() }.fontWeight(.semibold)
                 }
-                ToolbarItem(placement:.cancellationAction) { Button("取消") { dismissInput(); dismiss() } }
+                if !inPageStack {
+                    ToolbarItem(placement:.cancellationAction) { Button("取消") { dismissInput(); dismiss() } }
+                }
                 ToolbarItem(placement:.confirmationAction) {
                     Button("保存") {
                         dismissInput()

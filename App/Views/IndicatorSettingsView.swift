@@ -4,6 +4,7 @@ import TradingChart
 /// Edit visibility and period independently for every moving average.
 struct IndicatorSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.qihuiInPageStack) private var inPageStack
     @FocusState private var focusedField: String?
     @State private var draft: ChartDisplaySettings
     @State private var customTab = false
@@ -175,8 +176,8 @@ struct IndicatorSettingsView: View {
                     Spacer()
                     Button("完成") { dismissInput() }.fontWeight(.semibold)
                 }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("取消") { dismissInput(); dismiss() }
+                if !inPageStack {
+                    ToolbarItem(placement: .topBarLeading) { Button("取消") { dismissInput(); dismiss() } }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("保存") {

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FormulaComposerView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.qihuiInPageStack) private var inPageStack
     @FocusState private var focusedField: String?
     @State private var draft: FormulaDefinition
     @State private var composition: FormulaComposition
@@ -48,8 +49,8 @@ struct FormulaComposerView: View {
                     Spacer()
                     Button("完成") { dismissInput() }.fontWeight(.semibold)
                 }
-                ToolbarItem(placement:.cancellationAction) {
-                    Button("取消") { dismissInput(); dismiss() }
+                if !inPageStack {
+                    ToolbarItem(placement:.cancellationAction) { Button("取消") { dismissInput(); dismiss() } }
                 }
                 ToolbarItem(placement:.confirmationAction) {
                     Button("保存") {

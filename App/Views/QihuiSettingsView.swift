@@ -4,6 +4,7 @@ import UIKit
 struct QihuiSettingsView: View {
     var backgroundStyle = MarketBackgroundStyle()
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.qihuiInPageStack) private var inPageStack
     @AppStorage("qihui.appearance.mode.v1") private var appearance = AppAppearanceMode.dark.rawValue
     @AppStorage("qihui.change.basis.v1") private var changeBasis = "settlement"
     let instruments: [FuturesInstrument]
@@ -124,7 +125,9 @@ struct QihuiSettingsView: View {
             .background(backgroundStyle.isCustom ? backgroundStyle.surface : Color.clear)
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+            .toolbar {
+                if !inPageStack { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+            }
             .onAppear { marketConfigured = !MarketAccessKey.load().isEmpty }
             .onDisappear { marketKey = "" }
             .navigationDestination(isPresented: $strategy) { StrategyCenterView(instruments: instruments, favoriteIDs: favoriteIDs, mainCodes: mainCodes) }

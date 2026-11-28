@@ -3,6 +3,7 @@ import Charts
 
 struct StrategyBacktestView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.qihuiInPageStack) private var inPageStack
     @FocusState private var focusedField: String?
     let instruments: [FuturesInstrument]
     let favoriteIDs: [String]
@@ -156,7 +157,9 @@ struct StrategyBacktestView: View {
             .navigationTitle("策略中心")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement:.cancellationAction) { Button("关闭") { dismissInput(); dismiss() } }
+                if !inPageStack {
+                    ToolbarItem(placement:.cancellationAction) { Button("关闭") { dismissInput(); dismiss() } }
+                }
                 ToolbarItemGroup(placement:.keyboard) {
                     Spacer()
                     Button("完成") { dismissInput() }.fontWeight(.semibold)

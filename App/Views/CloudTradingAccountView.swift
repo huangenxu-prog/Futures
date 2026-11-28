@@ -405,6 +405,7 @@ private final class TradeRedirectGuard: NSObject, URLSessionTaskDelegate {
 }
 
 struct TradingCenterView: View {
+    @Environment(\.qihuiInPageStack) private var inPageStack
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var session = CloudTradeSession.shared
@@ -506,7 +507,9 @@ struct TradingCenterView: View {
             .navigationTitle(quickOnly ? "快捷开仓" : (session.signedIn ? (session.isLive ? "实盘交易" : "模拟交易") : (defaultMode == "live_readonly" ? "实盘交易" : "模拟交易")))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
+                if !inPageStack && !quickOnly {
+                    ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
+                }
                 if !quickOnly && session.signedIn {
                     ToolbarItem(placement: .topBarTrailing) { connectionIndicator }
                 }
@@ -539,7 +542,7 @@ struct TradingCenterView: View {
                         }.disabled(session.busy)
                     }
                     .navigationTitle(session.isLive ? "实盘只读账户" : "模拟账户")
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showAccount = false } } }
+
                 }
             }
             .task(id: quickFilledID) {
@@ -1757,12 +1760,15 @@ struct TradingCenterView: View {
 
 
 struct TradeConnectionSettingsView: View {
+    @Environment(\.qihuiInPageStack) private var inPageStack
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         QihuiPageStack {
             Form { TradeConnectionFields() }
                 .navigationTitle("交易设置").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+                .toolbar {
+                    if !inPageStack { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+                }
         }.tint(MarketPalette.accent)
     }
 }

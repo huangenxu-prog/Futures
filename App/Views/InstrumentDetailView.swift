@@ -850,6 +850,7 @@ enum QihuiPeriods {
 }
 
 struct PeriodOrderView: View {
+    @Environment(\.qihuiInPageStack) private var inPageStack
     @Environment(\.dismiss) private var dismiss
     @State var order: [String]
     let label: (String) -> String
@@ -878,8 +879,8 @@ struct PeriodOrderView: View {
             .navigationTitle("周期排序")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
+                if !inPageStack {
+                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { onSave(order); dismiss() }

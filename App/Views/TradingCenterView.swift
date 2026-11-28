@@ -9,6 +9,7 @@ struct QuickTradeSheet:View {
 
 struct PaperContractPicker:View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.qihuiInPageStack) private var inPageStack
     let instruments:[FuturesInstrument]
     let favoriteIDs:[String]
     let mainCodes:[String:String]
@@ -41,7 +42,7 @@ struct PaperContractPicker:View {
             .scrollDismissesKeyboard(.immediately)
             .navigationTitle("选择交易合约")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar{ToolbarItem(placement:.cancellationAction){Button("取消"){dismiss()}}}
+            .toolbar { if !inPageStack { ToolbarItem(placement:.cancellationAction) { Button("取消") { dismiss() } } } }
         }
     }
 }
