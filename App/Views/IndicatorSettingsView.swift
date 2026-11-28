@@ -33,7 +33,7 @@ struct IndicatorSettingsView: View {
                                 if kind != (main ? .sar : .intraday) { Divider().padding(.leading,46) }
                             }
                             if main {
-                                ForEach(MovingAverageType.allCases.filter { ![.sma,.ema,.wma].contains($0) && draft.additionalAverages.contains(where: { a in a.type == $0 }) }) { type in
+                                ForEach(MovingAverageType.allCases.filter { type in ![.sma,.ema,.wma].contains(type) && draft.additionalAverages.contains(where: { a in a.type == type }) }) { type in
                                     Divider()
                                     Button { builtIn = .sma } label: {
                                         HStack { Text(type.title); Spacer(); Text("扩展均线").font(.caption).foregroundStyle(MarketPalette.muted); Image(systemName:"chevron.right") }
