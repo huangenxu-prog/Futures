@@ -14,9 +14,17 @@ class OrderTests(unittest.TestCase):
             ("FINISHED", 1, 1, "资金不足", True, "", "REJECTED"),
             ("FINISHED", 1, 1, "撤单失败", False, "X", "FINISHED"),
             ("FINISHED", 1, 1, "", None, "", "FINISHED"),
-            ("FINISHED", 1, 1, "", False, "X", "CANCELED"),
+            ("FINISHED", 1, 1, "", False, "X", "FINISHED"),
         ]:
             self.assertEqual(order_state(status, qty, left, msg, error, exchange_id), expected)
+    def test_structured_terminal_flags_and_ambiguous_results(self):
+        self.assertEqual(order_state("ALIVE", 2, 0, "", False, "X", is_dead=True), "FILLED")
+        self.assertEqual(order_state("FINISHED", 2, 1, "", False, "X", is_dead=True), "FINISHED")
+        self.assertEqual(order_state("FINISHED", 2, 1, "撤单成功", True, "X", is_dead=True), "FINISHED")
+        self.assertEqual(order_state("FINISHED", 2, 0, "", False, "X", is_dead=False), "UNKNOWN")
+        self.assertEqual(order_state("FINISHED", 2, -1, "", False, "X"), "UNKNOWN")
+        self.assertEqual(order_state("FINISHED", 2, 1, "撤单成功", False, "X", is_dead=True), "PARTIAL_CANCELED")
+
     def test_external_cancel_included_and_sorted(self):
         def order(price, ns):
             return SimpleNamespace(exchange_id="DCE", instrument_id="p2701", direction="SELL",

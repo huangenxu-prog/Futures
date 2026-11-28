@@ -79,23 +79,27 @@ def number(v):
     except (TypeError, ValueError, OverflowError):
         return None
 
-def order_state(status, quantity, remaining, message, is_error, exchange_order_id):
-    if status == "ALIVE":
-        return "PARTIAL" if 0 < remaining < quantity else "ALIVE"
-    if status != "FINISHED":
+def order_state(status, quantity, remaining, message, is_error, exchange_order_id,
+                *, is_dead=None, is_online=None):
+    # SDK certainty flags are tri-state: None is not evidence of success.
+    if quantity <= 0 or remaining < 0 or remaining > quantity:
         return "UNKNOWN"
-    if quantity > 0 and remaining == 0:
+    if is_dead is False and status == "FINISHED":
+        return "UNKNOWN"
+    if is_dead is not True and status == "ALIVE":
+        return "PARTIAL" if 0 < remaining < quantity else "ALIVE"
+    if status != "FINISHED" and is_dead is not True:
+        return "UNKNOWN"
+    if remaining == 0:
         return "FILLED"
     if is_error is True:
-        return "REJECTED"
-    # Do not confuse cancellation rejection with successful cancellation.
+        return "REJECTED" if remaining == quantity else "FINISHED"
+    # An explicit SDK terminal flag proves completion, not its cause.
+    # Keep unknown causes distinct from successful cancellation.
     if any(x in message for x in ("撤单失败", "撤单拒绝", "撤单错误", "无法撤单", "不能撤单")):
         return "FINISHED"
-    if any(x in message for x in ("已撤", "撤单成功", "撤单完成", "撤单已完成", "撤销成功", "已撤销", "部成部撤", "全部撤单")):
-        return "PARTIAL_CANCELED" if 0 < remaining < quantity else "CANCELED"
-    # A finished, incompletely filled order with an exchange order ID was accepted.
-    # Keep ambiguous terminal results distinct when the SDK supplies no evidence.
-    if is_error is False and exchange_order_id and remaining > 0:
+    if is_error is not True and any(x in message for x in
+            ("已撤", "撤单成功", "撤单完成", "撤单已完成", "撤销成功", "已撤销", "部成部撤", "全部撤单")):
         return "PARTIAL_CANCELED" if remaining < quantity else "CANCELED"
     return "FINISHED"
 
@@ -103,6 +107,8 @@ def order_row(oid, o):
     message = str(o.last_msg or "")
     is_error = getattr(o, "is_error", None)
     exchange_order_id = str(getattr(o, "exchange_order_id", "") or "")
+    is_dead = getattr(o, "is_dead", None)
+    is_online = getattr(o, "is_online", None)
     return {"id": oid, "symbol": str(o.exchange_id) + "." + str(o.instrument_id),
             "direction": str(o.direction), "offset": str(o.offset),
             "price": number(o.limit_price), "quantity": int(o.volume_orign),
@@ -111,7 +117,9 @@ def order_row(oid, o):
             "message": message[:200], "time_ns": int(getattr(o, "insert_date_time", 0) or 0),
             "exchange_order_id": exchange_order_id,
             "is_error": is_error if isinstance(is_error, bool) else None,
-            "display_state": order_state(str(o.status), int(o.volume_orign), int(o.volume_left), message, is_error, exchange_order_id)}
+            "is_dead": is_dead if isinstance(is_dead, bool) else None,
+            "is_online": is_online if isinstance(is_online, bool) else None,
+            "display_state": order_state(str(o.status), int(o.volume_orign), int(o.volume_left), message, is_error, exchange_order_id, is_dead=is_dead, is_online=is_online)}
 
 def fill_row(tid, t):
     fee = number(getattr(t, "commission", None))
