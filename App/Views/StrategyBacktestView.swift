@@ -177,9 +177,9 @@ struct StrategyBacktestView: View {
                 restoreParameters(for: value)
                 result = nil; error = nil
             }
-            .onChange(of: risk) { _, _ in result = nil; error = nil }
-            .onChange(of: target) { _, _ in result = nil; error = nil }
-            .onChange(of: protectProfit) { _, _ in result = nil; error = nil }
+            .onChange(of: risk) { _, _ in result = nil; error = nil; persistParameters(for:strategyID) }
+            .onChange(of: target) { _, _ in result = nil; error = nil; persistParameters(for:strategyID) }
+            .onChange(of: protectProfit) { _, _ in result = nil; error = nil; persistParameters(for:strategyID) }
             .onChange(of: source) { _, _ in result = nil; error = nil }
             .onChange(of: symbol) { _, _ in result = nil; error = nil }
             .onChange(of: period) { _, _ in result = nil; error = nil }
@@ -200,7 +200,7 @@ struct StrategyBacktestView: View {
         guard risk.isFinite, risk > 0, target.isFinite, (0...100).contains(target) else { return }
         var all = (try? JSONDecoder().decode([String: StrategyParameters].self, from: savedParameters)) ?? [:]
         all[id] = StrategyParameters(risk: risk, target: target, protectProfit: protectProfit,
-                                     customSource: id == "custom" ? source : nil)
+                                     customSource: id == "custom" ? ((try? FormulaProgram(source)) != nil ? source : all[id]?.customSource) : nil)
         if let data = try? JSONEncoder().encode(all) { savedParameters = data }
     }
 

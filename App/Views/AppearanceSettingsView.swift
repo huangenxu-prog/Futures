@@ -34,6 +34,7 @@ enum AppAppearanceMode: String, CaseIterable, Identifiable {
 }
 
 struct AppearanceSettingsView: View {
+    @Environment(\.qihuiInPageStack) private var inPageStack
     private var backgroundStyle = MarketBackgroundStyle()
     @AppStorage("qihui.appearance.mode.v1") private var selectedMode = AppAppearanceMode.dark.rawValue
     @Environment(\.dismiss) private var dismiss
@@ -76,9 +77,7 @@ struct AppearanceSettingsView: View {
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
-                }
+                if !inPageStack { ToolbarItem(placement: .topBarTrailing) { Button("关闭") { dismiss() } } }
             }
         }
         .tint(MarketPalette.accent)
@@ -113,6 +112,7 @@ enum CandleAppearance {
 }
 
 struct CandleAppearanceView: View {
+    @Environment(\.qihuiInPageStack) private var inPageStack
     @Environment(\.dismiss) private var dismiss
     @AppStorage(CandleAppearance.hollowKey) private var hollow = true
     @AppStorage(CandleAppearance.upKey) private var up = CandleAppearance.automatic
@@ -123,7 +123,7 @@ struct CandleAppearanceView: View {
         NavigationStack {
             Form { CandleAppearanceFields() }
                 .navigationTitle("K线样式").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
+                .toolbar { if !inPageStack { ToolbarItem(placement: .topBarTrailing) { Button("关闭") { dismiss() } } } }
         }.tint(MarketPalette.accent)
     }
 }
