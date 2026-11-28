@@ -20,6 +20,18 @@ struct StrategyBacktestView: View {
         var target: Double = 2
         var protectProfit: Bool = true
         var customSource: String? = nil
+        var longSignal: String? = nil
+        var shortSignal: String? = nil
+        var stopSeries: String? = nil
+        var crossA: String? = nil
+        var crossB: String? = nil
+        var crossMode: Bool? = nil
+        var reverse: Bool? = nil
+        var reverseCross: Bool? = nil
+        var capital: Double? = nil
+        var contracts: Int? = nil
+        var history: Int? = nil
+        var sourceSnapshot: String? = nil
     }
     @State private var contracts: [MarketDataService.ContractQuote] = []
     @State private var loadingContracts = false
@@ -34,12 +46,24 @@ struct StrategyBacktestView: View {
         }
     }
     @State private var source = "LONG:CROSS(EMA(C,20),EMA(C,50));\nSHORT:CROSS(EMA(C,50),EMA(C,20));"
-    private let initial = 50_000.0
-    private let lots = 1
+    @State private var initial = 50_000.0
+    @State private var lots = 1
+    @State private var longSignal = ""
+    @State private var shortSignal = ""
+    @State private var stopSeries = ""
+    @State private var crossA = ""
+    @State private var crossB = ""
+    @State private var crossMode = false
+    @State private var reverse = false
+    @State private var reverseCross = false
+    private var mapped: Bool { strategyID != "default" && strategyID != "custom" }
+    private var program: FormulaProgram? { try? FormulaProgram(source) }
+    private var signalChoices: [FormulaSignalChoice] { program?.signalChoices ?? [] }
+    private var seriesChoices: [FormulaSignalChoice] { program?.seriesChoices ?? [] }
     @State private var risk = 1000.0
     @State private var target = 2.0
     @State private var protectProfit = true
-    private let historyCount = 500
+    @State private var historyCount = 500
     private let warmupCount = 500
     @State private var resultTimes: [Int64] = []
     @State private var phase = ""
@@ -82,7 +106,7 @@ struct StrategyBacktestView: View {
                             Text(seconds == 86400 ? "日线" : seconds == 604800 ? "周线" : "\(seconds/60)分钟").tag(seconds)
                         }
                     }
-                    Text("本金5万元 · 最近500根已收盘K线 · 固定1手").font(.caption).foregroundStyle(.secondary)
+
                 }.disabled(running)
                 if strategyID == "custom" {
                     Section("自定义策略") {
@@ -92,8 +116,9 @@ struct StrategyBacktestView: View {
                         Text("LONG / SHORT：入场；EXIT：平仓；STOP：结构止损。").font(.caption)
                     }.disabled(running)
                 }
-                Section {
-                    DisclosureGroup("策略参数") {
+                if mapped { mappingSection }
+                Section("策略参数") {
+                    Group {
                         HStack {
                             Text("计划净亏损上限")
                             Spacer()
@@ -107,6 +132,14 @@ struct StrategyBacktestView: View {
                                 .multilineTextAlignment(.trailing).frame(width:90)
                         }
                         Toggle("盈利回撤归零离场", isOn: $protectProfit)
+                        Toggle("反向信号平仓后反手",isOn:$reverse)
+                    }
+                }.disabled(running)
+                Section("资金与历史数据") {
+                    LabeledContent("初始本金") { TextField("本金",value:$initial,format:.number).keyboardType(.decimalPad).multilineTextAlignment(.trailing) }
+                    LabeledContent("交易手数") { TextField("手数",value:$lots,format:.number).keyboardType(.numberPad).multilineTextAlignment(.trailing) }
+                    Picker("历史K线",selection:$historyCount) {
+                        ForEach([100,200,500],id:\.self){Text("\($0) 根").tag($0)}
                     }
                 }.disabled(running)
                 Section {
@@ -185,9 +218,54 @@ struct StrategyBacktestView: View {
             .onChange(of: target) { _, _ in result = nil; error = nil; persistParameters(for:strategyID) }
             .onChange(of: protectProfit) { _, _ in result = nil; error = nil; persistParameters(for:strategyID) }
             .onChange(of: source) { _, _ in result = nil; error = nil }
+            .onChange(of:longSignal) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
+            .onChange(of:shortSignal) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
+            .onChange(of:stopSeries) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
+            .onChange(of:crossA) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
+            .onChange(of:crossB) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
+            .onChange(of:crossMode) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
+            .onChange(of:reverse) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
+            .onChange(of:reverseCross) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
+            .onChange(of:initial) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
+            .onChange(of:lots) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
+            .onChange(of:historyCount) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
             .onChange(of: symbol) { _, _ in result = nil; error = nil }
             .onChange(of: period) { _, _ in result = nil; error = nil }
             .onDisappear { persistParameters(for: strategyID); task?.cancel() }
+        }
+    }
+
+    private var mappingSection: some View {
+        Section("交易信号") {
+            Picker("信号类型",selection:$crossMode) {
+                Text("指标信号").tag(false)
+                Text("输出线交叉").tag(true)
+            }
+            if crossMode {
+                seriesPicker("第一条线",selection:$crossA)
+                seriesPicker("第二条线",selection:$crossB)
+                Picker("开多方向",selection:$reverseCross) {
+                    Text("第一条上穿第二条").tag(false)
+                    Text("第一条下穿第二条").tag(true)
+                }
+            } else {
+                Picker("开多信号",selection:$longSignal) {
+                    Text("不使用").tag("")
+                    ForEach(signalChoices){Text($0.label).tag($0.id)}
+                }
+                Picker("开空信号",selection:$shortSignal) {
+                    Text("不使用").tag("")
+                    ForEach(signalChoices){Text($0.label).tag($0.id)}
+                }
+            }
+            seriesPicker("结构止损（可选）",selection:$stopSeries)
+            Text("反向信号平仓；结构止损只在入场时取值，并受金额上限约束。").font(.caption).foregroundStyle(.secondary)
+        }.disabled(running)
+    }
+    private func seriesPicker(_ title:String,selection:Binding<String>)->some View {
+        Picker(title,selection:selection) {
+            Text("不使用").tag("")
+            ForEach(seriesChoices){Text($0.label).tag($0.id)}
         }
     }
 
@@ -195,6 +273,10 @@ struct StrategyBacktestView: View {
         let all = (try? JSONDecoder().decode([String: StrategyParameters].self, from: savedParameters)) ?? [:]
         let p = all[id] ?? StrategyParameters()
         risk = p.risk; target = p.target; protectProfit = p.protectProfit
+        initial=p.capital ?? 50000;lots=p.contracts ?? 1;historyCount=p.history ?? 500;reverse=p.reverse ?? false;reverseCross=p.reverseCross ?? false
+        let unchanged = p.sourceSnapshot == source
+        longSignal=unchanged ? (p.longSignal ?? "") : "";shortSignal=unchanged ? (p.shortSignal ?? "") : "";stopSeries=unchanged ? (p.stopSeries ?? "") : ""
+        crossA=unchanged ? (p.crossA ?? "") : "";crossB=unchanged ? (p.crossB ?? "") : "";crossMode=unchanged ? (p.crossMode ?? false) : false
         if id == "custom" {
             source = p.customSource ?? "LONG:CROSS(EMA(C,20),EMA(C,50));\nSHORT:CROSS(EMA(C,50),EMA(C,20));"
         }
@@ -204,7 +286,8 @@ struct StrategyBacktestView: View {
         guard risk.isFinite, risk > 0, target.isFinite, (0...100).contains(target) else { return }
         var all = (try? JSONDecoder().decode([String: StrategyParameters].self, from: savedParameters)) ?? [:]
         all[id] = StrategyParameters(risk: risk, target: target, protectProfit: protectProfit,
-                                     customSource: id == "custom" ? ((try? FormulaProgram(source)) != nil ? source : all[id]?.customSource) : nil)
+                                     customSource: id == "custom" ? ((try? FormulaProgram(source)) != nil ? source : all[id]?.customSource) : nil,
+            longSignal:longSignal,shortSignal:shortSignal,stopSeries:stopSeries,crossA:crossA,crossB:crossB,crossMode:crossMode,reverse:reverse,reverseCross:reverseCross,capital:initial,contracts:lots,history:historyCount,sourceSnapshot:source)
         if let data = try? JSONEncoder().encode(all) { savedParameters = data }
     }
 
@@ -246,11 +329,14 @@ struct StrategyBacktestView: View {
                                    slippageTicks:1,lots:lots,stopRisk:risk,targetR:target)
         parameters.ignoreMargin = true
         parameters.breakEvenAfterProfit = protectProfit
+        parameters.reverseOnSignal = reverse
         let p = parameters
         let requested = historyCount, warmup = warmupCount
         guard p.valid else { error = "回测参数无效"; return }
         persistParameters(for: strategyID)
         let code = source, executionPeriod = period, executionSymbol = symbol
+        let useMapping=mapped, useCross=crossMode, long=longSignal, short=shortSignal, stop=stopSeries, a=crossA,b=crossB, direction=reverseCross
+        if useMapping && (useCross ? (a.isEmpty || b.isEmpty || a==b) : (long.isEmpty && short.isEmpty)) { error="请选择交易信号";return }
         running = true; error = nil; result = nil; resultTimes = []; phase = "获取历史K线"
         task = Task {
             defer { running = false }
@@ -268,7 +354,7 @@ struct StrategyBacktestView: View {
                     volume:Double($0.volume),openInterest:$0.openInterest,closeInterest:$0.closeInterest) }
                 phase = "计算信号与模拟成交"
                 let calculation = Task.detached(priority:.userInitiated) {
-                    let signals = try FuturesBacktest.formulaSignals(code,bars:bars)
+                    let signals = try useMapping ? FuturesBacktest.mappedSignals(code,bars:bars,long:useCross ? "":long,short:useCross ? "":short,stop:stop,crossA:useCross ? a:"",crossB:useCross ? b:"",reverseCross:direction) : FuturesBacktest.formulaSignals(code,bars:bars)
                     return (try FuturesBacktest.run(bars:bars,signals:signals,p:p,startIndex:startIndex),"")
                 }
                 let (value,researchNote) = try await withTaskCancellationHandler {

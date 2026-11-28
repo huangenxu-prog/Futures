@@ -12,6 +12,7 @@ struct BacktestParameters: Sendable {
     var targetR: Double
     var breakEvenAfterProfit = false
     var ignoreMargin = false
+    var reverseOnSignal = false
     var valid: Bool {
         [initial,multiplier,tick,marginRate,feePerSide,stopRisk,targetR].allSatisfy(\.isFinite)
         && initial > 0 && multiplier > 0 && tick > 0 && marginRate > 0 && marginRate <= 1
@@ -72,6 +73,29 @@ enum FuturesBacktest {
         var breakEvenArmed = false
     }
 
+    static func mappedSignals(_ source:String,bars:[FormulaBar],long:String,short:String,stop:String, crossA:String="",crossB:String="",reverseCross:Bool=false) throws -> [BacktestSignal] {
+        let program = try FormulaProgram(source)
+        let outputs = try program.evaluate(bars,signalConditions:true)
+        let named = Dictionary(uniqueKeysWithValues:outputs.filter{$0.drawing == nil}.map{($0.name,$0.values)})
+        let crossing = !crossA.isEmpty && !crossB.isEmpty
+        guard crossing ? (crossA != crossB && named[crossA] != nil && named[crossB] != nil) : (!long.isEmpty || !short.isEmpty) else { throw FormulaFailure("请选择有效的交易信号") }
+        for name in [long,short,stop] where !name.isEmpty {
+            guard named[name] != nil else { throw FormulaFailure("映射已失效，请重新选择信号") }
+        }
+        func yes(_ key:String,_ i:Int)->Bool { guard let v=named[key]?[i] else {return false};return v.isFinite && v != 0 }
+        func cross(_ a:String,_ b:String,_ i:Int)->Bool {
+            guard i>0, let x=named[a]?[i],let y=named[b]?[i],let px=named[a]?[i-1],let py=named[b]?[i-1] else {return false}
+            return x>y && px<=py
+        }
+        return try bars.indices.map { i in
+            let l = crossing ? cross(reverseCross ? crossB:crossA,reverseCross ? crossA:crossB,i) : yes(long,i)
+            let sh = crossing ? cross(reverseCross ? crossA:crossB,reverseCross ? crossB:crossA,i) : yes(short,i)
+            let price = stop.isEmpty ? nil : named[stop]?[i]
+            // Missing structural stop must not silently become a fixed-risk entry.
+            return BacktestSignal(long:l,short:sh,stopPrice:stop.isEmpty ? nil : (price ?? Double.nan))
+        }
+    }
+
     static func formulaSignals(_ source: String, bars: [FormulaBar]) throws -> [BacktestSignal] {
         let outputs = try FormulaProgram(source).evaluate(bars)
         let named = Dictionary(uniqueKeysWithValues:outputs.filter { $0.drawing == nil }.map { ($0.name,$0.values) })
@@ -124,16 +148,18 @@ enum FuturesBacktest {
             if i > startIndex {
                 let signal = signals[i-1] // observed only at previous close
                 var exitedAtOpen = false
+                var reverseAllowed = false
                 if let pos = position {
                     let gapStop = pos.side > 0 ? bar.open <= pos.stop : bar.open >= pos.stop
                     if gapStop { close(pos,bar.open,i,pos.breakEvenArmed ? "跳空保本止损" : "跳空止损"); exitedAtOpen = true }
                     else if pos.side > 0 ? signal.exitLong : signal.exitShort {
                         close(pos,bar.open,i,"结构失效"); exitedAtOpen = true
                     } else if signal.exit || (pos.side > 0 ? signal.short : signal.long) {
+                        reverseAllowed = !signal.exit && (pos.side > 0 ? signal.short && !signal.long : signal.long && !signal.short)
                         close(pos,bar.open,i,"信号平仓"); exitedAtOpen = true
                     }
                 }
-                if position == nil && !exitedAtOpen && i < bars.count-1 && !signal.exit {
+                if position == nil && (!exitedAtOpen || (p.reverseOnSignal && reverseAllowed)) && i < bars.count-1 && !signal.exit {
                     if signal.long && signal.short { rejected += 1 }
                     else if signal.long || signal.short {
                         let side = signal.long ? 1 : -1
@@ -141,6 +167,7 @@ enum FuturesBacktest {
                         let intended = signal.stopPrice ?? (entry-Double(side)*riskDistance)
                         // Structural stops round outward; a default budget stop
                         // rounds inward, to the nearest exchange-valid tick.
+                        guard intended.isFinite else { rejected += 1; equity.append(cash); continue }
                         let stop = tickRound(intended,up:signal.stopPrice == nil ? side > 0 : side < 0)
                         let risk = (entry-stop)*Double(side)
                         let netRisk = (risk+slip)*unit+2*cost

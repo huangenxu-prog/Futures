@@ -95,6 +95,11 @@ struct FormulaOutput: Sendable {
     var legendOnly: Bool = false
 }
 
+struct FormulaSignalChoice: Identifiable, Sendable {
+    let id: String
+    let label: String
+}
+
 struct FormulaProgram: Sendable {
     private let statements: [FormulaStatement]
 
@@ -106,7 +111,23 @@ struct FormulaProgram: Sendable {
         _ = try evaluate([])
     }
 
-    func evaluate(_ bars: [FormulaBar]) throws -> [FormulaOutput] {
+    var signalChoices: [FormulaSignalChoice] {
+        statements.enumerated().compactMap { index, statement in
+            guard statement.drawing, case .call(let fn, let args) = statement.expr, args.count == 3 else { return nil }
+            if fn == "DRAWTEXT", case .text(let label) = args[2] {
+                return FormulaSignalChoice(id:"draw:\(index)",label:"\(label) · 第\(index+1)条")
+            }
+            if fn == "DRAWICON" {
+                return FormulaSignalChoice(id:"draw:\(index)",label:"图标 · 第\(index+1)条")
+            }
+            return nil
+        }
+    }
+    var seriesChoices: [FormulaSignalChoice] {
+        statements.filter { !$0.drawing && ($0.visible || $0.legendOnly) }.map { FormulaSignalChoice(id:$0.name,label:$0.name) }
+    }
+
+    func evaluate(_ bars: [FormulaBar], signalConditions: Bool = false) throws -> [FormulaOutput] {
         guard bars.count <= 20_000 else { throw FormulaFailure("K线数量超出公式计算上限") }
         let n = bars.count
         var env: [String: [Double?]] = [
@@ -133,12 +154,16 @@ struct FormulaProgram: Sendable {
         env["OHLC4"] = bars.map { ($0.open+$0.high+$0.low+$0.close)/4 }
         var results: [FormulaOutput] = []
         var constants: [String: Double] = [:]
-        for statement in statements {
+        for (statementIndex,statement) in statements.enumerated() {
             do {
             let expr = Self.substitute(statement.expr, constants)
             if statement.drawing {
                 let resolved = FormulaStatement(name:statement.name,expr:expr,visible:statement.visible,color:statement.color,width:statement.width,histogram:statement.histogram,drawing:true,fontSize:statement.fontSize,dash:statement.dash,legendOnly:statement.legendOnly)
                 var output = try Self.draw(resolved, env, n)
+                if signalConditions, case .call(let fn,let args) = expr, ["DRAWTEXT","DRAWICON"].contains(fn) {
+                    let conditions = try Self.eval(args[0],env,n)
+                    results.append(FormulaOutput(name:"draw:\(statementIndex)",values:conditions,color:nil,width:1,histogram:false))
+                }
                 output.dash = statement.dash
                 results.append(output)
                 continue
