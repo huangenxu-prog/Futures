@@ -1578,7 +1578,246 @@ class SharedKlineHub:
                     reclaim_sdk_memory("kline-live")
 
 
-KLINE_HUB = SharedKlineHub(store=KlineFileCache())
+class UnifiedKlineHub(SharedKlineHub):
+    """Experimental single-source SDK window; disk is an archive, not a live source.
+
+    Every active key is installed once per SDK session with HISTORY_LENGTH.
+    HTTP and SSE read the same immutable snapshot. There is no two-bar merge,
+    no historical worker and no quote-based inference of K-line freshness.
+    """
+
+    def __init__(self, max_series=KLINE_MAX_SERIES, store=None):
+        super().__init__(max_series=max_series, store=store)
+        self.ready_generation = {}
+        self.sdk_sessions = 0
+        self.sdk_subscriptions = 0
+
+    def start(self):
+        with self.condition:
+            if self.thread is None or not self.thread.is_alive():
+                self.thread = threading.Thread(target=self.run, name="kline-unified", daemon=True)
+                self.thread.start()
+
+    def _invalidate_locked(self):
+        self.ready_generation.clear()
+        self.connected = False
+        self.condition.notify_all()
+
+    def reserve(self, symbol, period, *, listener=False, waiter=False):
+        key = (quote_symbol(symbol), period)
+        with self.condition:
+            if key not in self.entries:
+                if len(self.entries) >= self.max_series:
+                    candidates = [(row["used"], old) for old, row in self.entries.items()
+                                  if not row["listeners"] and not row["waiters"]]
+                    if not candidates:
+                        raise KlineCapacityError("kline_subscription_limit")
+                    del self.entries[min(candidates)[1]]
+                    # SDK subscriptions cannot simply be deleted from a DataFrame.
+                    # Rebuild the bounded session rather than accumulating serials.
+                    self.generation += 1
+                    self._invalidate_locked()
+                self.entries[key] = {"used": time.monotonic(), "listeners": 0, "waiters": 0}
+            entry = self.entries[key]
+            entry["used"] = time.monotonic()
+            entry["listeners"] += int(listener)
+            entry["waiters"] += int(waiter)
+            self.condition.notify_all()
+        self.start()
+        return key
+
+    def _publish_sdk(self, key, bars, generation, received_at=None):
+        if not bars:
+            return False
+        times = [row["time"] for row in bars]
+        if times != sorted(set(times)) or times[0] <= 0:
+            return False
+        with self.condition:
+            if generation != self.generation or key not in self.entries or not self.connected:
+                return False
+            previous, version = self.cache.get(key, ([], 0))
+            if previous and times[-1] < previous[-1]["time"]:
+                # A reconnect may initially replay old observations.
+                self.ready_generation.pop(key, None)
+                self.condition.notify_all()
+                return False
+            current = list(bars[-KLINE_HISTORY_LENGTH:])
+            newly_ready = self.ready_generation.get(key) != generation
+            changed = previous != current
+            self.ready_generation[key] = generation
+            self.last_history[key] = time.time()
+            self.cached_used[key] = time.monotonic()
+            if newly_ready or changed:
+                self.cache[key] = (current, version + 1)
+                if received_at is not None:
+                    self.live_timing[key] = (version + 1, received_at)
+                self.condition.notify_all()
+            now = time.monotonic()
+            save = self.store is not None and (newly_ready or
+                    changed and now - self.last_saved.get(key, 0) >= KLINE_SAVE_INTERVAL)
+            if save:
+                self.last_saved[key] = now
+            self._trim_cache_locked(protect=key)
+        if save:
+            self._queue_live_write(key, current)
+        return True
+
+    def _refresh_serial(self, api, key, serial, generation, received_at=None):
+        if not api.is_serial_ready(serial):
+            with self.condition:
+                if generation == self.generation:
+                    self.ready_generation.pop(key, None)
+                    self.condition.notify_all()
+            return False
+        # Ignore only leading SDK padding. An internal missing SDK row must
+        # not be silently treated as a valid complete recent window.
+        valid = []
+        for row in serial.itertuples(index=False):
+            stamp = int(row.datetime) if math.isfinite(float(row.datetime)) else 0
+            finite = all(math.isfinite(float(x)) for x in
+                         (row.open, row.high, row.low, row.close))
+            if stamp <= 0 or not finite:
+                if valid:
+                    return self._reject_serial(key, generation)
+                continue
+            if not math.isfinite(float(row.id)):
+                return self._reject_serial(key, generation)
+            valid.append(int(row.id))
+        if not valid or any(b != a + 1 for a, b in zip(valid, valid[1:])):
+            return self._reject_serial(key, generation)
+        return self._publish_sdk(key, bars_from_serial(serial), generation, received_at)
+
+    def _reject_serial(self, key, generation):
+        with self.condition:
+            if generation == self.generation:
+                self.ready_generation.pop(key, None)
+                self.condition.notify_all()
+        return False
+
+    def read(self, key, after_version=-1, timeout=10):
+        deadline = time.monotonic() + timeout
+        with self.condition:
+            while True:
+                bars, version = self.cache.get(key, ([], 0))
+                ready = (self.connected and key in self.entries
+                         and self.ready_generation.get(key) == self.generation)
+                if ready and bars and (after_version < 0 or version != after_version):
+                    self.cached_used[key] = time.monotonic()
+                    return list(bars), version
+                # Do not continue an existing SSE stream on a disconnected or
+                # invalid generation; client already knows how to reconnect.
+                if after_version >= 0 and not ready:
+                    return [], version
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return (list(bars) if ready else []), version
+                self.condition.wait(timeout=remaining)
+
+    def snapshot(self, symbol, period, count, timeout=11):
+        key = self.reserve(symbol, period, waiter=True)
+        try:
+            bars, _ = self.read(key, timeout=timeout)
+            return bars[-count:]
+        finally:
+            self.release(key, waiter=True)
+
+    def warm_symbols(self, symbols):
+        # Keep two spare slots for interactive requests. The separate existing
+        # disk-prefetch service remains responsible for broad historical coverage.
+        if not favorite_warm_memory_ok():
+            return 0
+        accepted = 0
+        with self.condition:
+            limit = max(0, self.max_series - 2)
+            for symbol in dict.fromkeys(symbols):
+                added = False
+                for period in FAVORITE_WARM_PERIODS:
+                    if len(self.entries) >= limit:
+                        break
+                    key = (quote_symbol(symbol), period)
+                    if key not in self.entries:
+                        self.entries[key] = {"used": time.monotonic(), "listeners": 0, "waiters": 0}
+                        added = True
+                accepted += int(added)
+                if len(self.entries) >= limit:
+                    break
+            self.condition.notify_all()
+        if accepted:
+            self.start()
+        return accepted
+
+    def status(self):
+        with self.condition:
+            result = super().status()
+            result.update(mode="unified-sdk", data_length=KLINE_HISTORY_LENGTH,
+                          ready=len(self.ready_generation), sdk_sessions=self.sdk_sessions,
+                          sdk_subscriptions=self.sdk_subscriptions)
+            return result
+
+    def run(self):
+        while True:
+            api = None
+            installed = {}
+            try:
+                with self.condition:
+                    while not self.entries:
+                        self.condition.wait()
+                    generation = self.generation
+                with open(AUTH_PATH, encoding="utf-8") as handle:
+                    credentials = json.load(handle)
+                api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+                with self.condition:
+                    if generation != self.generation:
+                        continue
+                    self.connected = True
+                    self.error = None
+                    self.sdk_sessions += 1
+                    self.condition.notify_all()
+                while True:
+                    with self.condition:
+                        if generation != self.generation:
+                            break
+                        targets = sorted(self.entries, key=lambda key: (
+                            not (self.entries[key]["listeners"] or self.entries[key]["waiters"]),
+                            -self.entries[key]["used"]))
+                    for key in targets:
+                        if key not in installed:
+                            installed[key] = api.get_kline_serial(
+                                key[0], key[1], data_length=KLINE_HISTORY_LENGTH)
+                            with self.condition:
+                                self.sdk_subscriptions += 1
+                            # Install at most one new serial per loop; process
+                            # every already-installed serial before the next.
+                            break
+                    updated = api.wait_update(deadline=time.time() + 0.3)
+                    received_at = time.time()
+                    for key, serial in list(installed.items()):
+                        with self.condition:
+                            ready = self.ready_generation.get(key) == generation
+                        if not ready or not api.is_serial_ready(serial) or (
+                                updated and api.is_changing(serial)):
+                            self._refresh_serial(api, key, serial, generation, received_at)
+            except Exception as exc:
+                with self.condition:
+                    self.error = type(exc).__name__ + ": " + str(exc)[:140]
+                print("统一K线连接异常:", type(exc).__name__, flush=True)
+            finally:
+                with self.condition:
+                    self._invalidate_locked()
+                if api is not None:
+                    try:
+                        api.close()
+                    except Exception:
+                        pass
+                    installed.clear()
+                    reclaim_sdk_memory("kline-unified")
+            if self.error:
+                time.sleep(3)
+
+
+# Explicit opt-in only; the production path is unchanged on this branch.
+UNIFIED_KLINES = os.environ.get("QIHUI_UNIFIED_KLINES", "0") == "1"
+KLINE_HUB = (UnifiedKlineHub if UNIFIED_KLINES else SharedKlineHub)(store=KlineFileCache())
 
 
 # This lock serializes only cold historical pagination. It never blocks
@@ -1761,6 +2000,9 @@ class Handler(BaseHTTPRequestHandler):
             last_trace = float('-inf')
             while True:
                 bars, next_version = KLINE_HUB.read(key, after_version=version, timeout=12)
+                if isinstance(KLINE_HUB, UnifiedKlineHub) and not bars:
+                    self.close_connection = True
+                    return
                 now = time.monotonic()
                 if bars and next_version != version:
                     event = next_kline_stream_event(

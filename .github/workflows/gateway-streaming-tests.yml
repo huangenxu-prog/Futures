@@ -18,6 +18,7 @@ jobs:
         run: |
           python3 -m py_compile server/market_gateway.py server/upgrade_gateway.py server/diagnose_kline.py server/benchmark_cold_kline.py server/prefetch_main_history.py
           python3 -m unittest discover -s server -p 'test_gateway_stream.py' -v
+          python3 -m unittest discover -s server -p 'test_unified_kline.py' -v
       - name: Check full-market historical cache planner
         run: python3 -m unittest discover -s server -p 'test_prefetch_main_history.py' -v
       - name: Verify Ubuntu 24.04 bootstrap
