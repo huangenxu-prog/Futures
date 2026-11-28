@@ -23,6 +23,7 @@ struct FormulaEditorView: View {
     @State private var query = ""
     @State private var showPreview = false
     @State private var previewSource: String?
+    @State private var editorHeight: CGFloat = 320
 
     var body: some View {
         QihuiPageStack {
@@ -61,12 +62,12 @@ struct FormulaEditorView: View {
                 Divider()
                 if showFind { HStack { TextField("查找代码",text:$query).textFieldStyle(.roundedBorder); Button("下一个") { findNext() } }.padding(8) }
                 ZStack(alignment:.topLeading) {
-                    NativeFormulaTextView(text:$draft.source,errorRange:errorRange,jump:jump,selection:$selection,insertion:insertion,command:command,commandID:commandID)
+                    NativeFormulaTextView(text:$draft.source,errorRange:errorRange,jump:jump,selection:$selection,insertion:insertion,command:command,commandID:commandID,contentHeight:$editorHeight)
                     if draft.source.isEmpty {
                         Text("在此输入或粘贴期汇公式").font(.system(size:13)).foregroundStyle(.secondary)
                             .padding(.top,8).padding(.leading,38).allowsHitTesting(false)
                     }
-                }.frame(height:320)
+                }.frame(height:max(320,editorHeight))
                 Divider()
                 HStack {
                     if let result {
@@ -226,9 +227,11 @@ private struct NativeFormulaTextView: UIViewRepresentable {
     let insertion: Int
     let command:String
     let commandID:Int
+    @Binding var contentHeight: CGFloat
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> UITextView {
         let view = FormulaGutterTextView()
+        view.isScrollEnabled = false
         view.textContainerInset.left=35
         view.backgroundColor = .clear
         view.font = .monospacedSystemFont(ofSize:13,weight:.regular)
@@ -240,6 +243,7 @@ private struct NativeFormulaTextView: UIViewRepresentable {
         view.delegate = context.coordinator
         view.accessibilityLabel = "公式源码"
         view.text = text
+        view.onHeightChanged = { height in context.coordinator.reportHeight(height) }
         return view
     }
     func updateUIView(_ view: UITextView, context: Context) {
@@ -268,6 +272,13 @@ private struct NativeFormulaTextView: UIViewRepresentable {
         var lastJump = 0
         var lastInsertion = 0
         var lastCommand = 0
+        func reportHeight(_ height:CGFloat) {
+            guard height.isFinite, height > 0 else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, abs(self.parent.contentHeight-height)>1 else { return }
+                self.parent.contentHeight=height
+            }
+        }
         var paintedText: String?
         var paintedRange: NSRange?
         init(_ parent: NativeFormulaTextView) { self.parent = parent }
@@ -319,6 +330,13 @@ private struct NativeFormulaTextView: UIViewRepresentable {
 
 private final class FormulaGutterTextView: UITextView {
     var errorRange:NSRange?
+    var onHeightChanged: ((CGFloat)->Void)?
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0 else { return }
+        let height = ceil(sizeThatFits(CGSize(width:bounds.width,height:CGFloat.greatestFiniteMagnitude)).height)
+        onHeightChanged?(height)
+    }
     override func draw(_ rect:CGRect) {
         super.draw(rect)
         let source=(text ?? "") as NSString
