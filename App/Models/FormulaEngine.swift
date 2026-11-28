@@ -171,7 +171,9 @@ struct FormulaProgram: Sendable {
             guard env[statement.name] == nil else {
                 throw FormulaFailure("变量重复定义：\(statement.name)")
             }
-            let values = try Self.eval(expr, env, n)
+            let values = try Self.contains(expr, variable:statement.name)
+                ? Self.evaluateRecursive(expr,name:statement.name,env:env,n:n)
+                : Self.eval(expr,env,n)
             if case .constant(let value) = expr { constants[statement.name] = value }
             env[statement.name] = values
             if statement.visible || statement.legendOnly {
@@ -187,6 +189,82 @@ struct FormulaProgram: Sendable {
             }
         }
         return results
+    }
+
+    private static func contains(_ expr:FormulaExpr, variable name:String)->Bool {
+        switch expr {
+        case .variable(let v): return v == name
+        case .unary(_,let a): return contains(a,variable:name)
+        case .binary(_,let a,let b): return contains(a,variable:name) || contains(b,variable:name)
+        case .call(_,let args): return args.contains { contains($0,variable:name) }
+        default: return false
+        }
+    }
+
+    // Compile independent series once, then evaluate the recursive expression
+    // one bar at a time. No whole-history reevaluation or future references.
+    private static func evaluateRecursive(_ expr:FormulaExpr,name:String,env:[String:[Double?]],n:Int) throws -> [Double?] {
+        var inputs:[String:[Double?]] = [:]
+        var lags:[String:[Double?]] = [:]
+        var counter=0
+        func slot()->String { counter += 1; return "#recursive\(counter)" }
+        func compile(_ node:FormulaExpr) throws -> FormulaExpr {
+            if !contains(node,variable:name) {
+                let key=slot()
+                inputs[key]=try eval(node,env,n)
+                return .variable(key)
+            }
+            switch node {
+            case .variable:
+                throw FormulaFailure("自引用必须使用 REF(\(name),正整数)")
+            case .unary(let op,let a):
+                return .unary(op,try compile(a))
+            case .binary(let op,let a,let b):
+                return .binary(op,try compile(a),try compile(b))
+            case .call(let fn,let args):
+                if fn == "REF", args.count == 2, case .variable(let v)=args[0], v==name {
+                    guard !contains(args[1],variable:name) else { throw FormulaFailure("自引用偏移不能依赖自身") }
+                    if case .constant(let offset)=args[1] {
+                        guard offset.isFinite,offset.rounded()==offset,offset>=1,offset<=20000 else {
+                            throw FormulaFailure("自引用 REF 偏移必须为1～20000的整数")
+                        }
+                    } else if case .unary("-",.constant)=args[1] {
+                        throw FormulaFailure("自引用 REF 不支持未来引用")
+                    }
+                    let offsets=try eval(args[1],env,n)
+                    let key=slot();lags[key]=offsets
+                    return .variable(key)
+                }
+                // Stateful functions may be used in independent subexpressions.
+                // On the recursive path only pointwise functions are supported.
+                guard ["IF","IFN","IFELSE","ABS","MAX","MIN","NOT","RANGE"].contains(fn) else {
+                    throw FormulaFailure("递归表达式暂不支持在自身历史值外嵌套函数：\(fn)")
+                }
+                return .call(fn,try args.map { try compile($0) })
+            default: throw FormulaFailure("无效自引用表达式")
+            }
+        }
+        let compiled=try compile(expr)
+        var row:[String:[Double?]]=[:]
+        for key in inputs.keys { row[key]=[] }
+        for key in lags.keys { row[key]=[] }
+        _ = try eval(compiled,row,0)
+        var output=[Double?](repeating:nil,count:n)
+        for i in 0..<n {
+            for (key,values) in inputs { row[key]=[values[i]] }
+            for (key,offsets) in lags {
+                var value:Double?
+                if let offset=offsets[i] {
+                    guard offset.isFinite,offset.rounded()==offset,offset>=1,offset<=20000 else {
+                        throw FormulaFailure("自引用 REF 偏移必须为1～20000的整数")
+                    }
+                    if offset<=Double(i) { value=output[i-Int(offset)] }
+                }
+                row[key]=[value]
+            }
+            output[i]=try eval(compiled,row,1).first ?? nil
+        }
+        return output
     }
 
     private static func substitute(_ expr: FormulaExpr, _ constants: [String:Double]) -> FormulaExpr {

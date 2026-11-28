@@ -288,6 +288,18 @@ struct FormulaEngineSelfTest {
         for i in fullTrend.indices {
             precondition(Array(fullTrend[i].values.prefix(350)) == prefixTrend[i].values)
         }
+        let recursive = try FormulaProgram("A:IF(BARSCOUNT(C)=1,C,REF(A,1)+C); B:IF(BARSCOUNT(C)<=2,C,REF(B,2)+C); D:IF(C=1,C,REF(D,1)*0.9+C*0.1);").evaluate(bars)
+        precondition(recursive[0].values == [1,3,6,10,15,21])
+        precondition(recursive[1].values == [1,2,4,6,9,12])
+        near(recursive[2].values[1],1.1)
+        let held = try FormulaProgram("A:IF(C<=2,C,REF(A,1));").evaluate(bars)
+        precondition(held[0].values == [1,2,2,2,2,2])
+        let recursivePrefix = try FormulaProgram("A:IF(BARSCOUNT(C)=1,C,REF(A,1)+C);").evaluate(Array(bars.prefix(4)))
+        precondition(recursivePrefix[0].values == Array(recursive[0].values.prefix(4)))
+        for bad in ["A:A+1;","A:REF(A,0);","A:REF(A,-1);","A:REF(A,A);","A:EMA(REF(A,1),3);"] {
+            do { _ = try FormulaProgram(bad); preconditionFailure("accepted invalid recursive formula") }
+            catch is FormulaFailure {}
+        }
         print("Formula engine: causal state, dynamic references, confirmed segments and previous fixtures passed")
     }
 }
