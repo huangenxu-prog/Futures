@@ -1,6 +1,7 @@
 """Read-only TqSdk K-line HTTP gateway. Bind to loopback; expose only behind authenticated HTTPS reverse proxy."""
 import fcntl
 import gc
+import hashlib
 import hmac
 import json
 import math
@@ -923,6 +924,28 @@ def merge_kline_bars(older, newer, limit=KLINE_HISTORY_LENGTH):
     return [indexed[key] for key in sorted(indexed)[-limit:]]
 
 
+def first_frame_wait_seconds():
+    try:
+        value = float(os.environ.get("QIHUI_FIRST_FRAME_WAIT_SECONDS", "3"))
+        return value if math.isfinite(value) and value >= 0 else 3.0
+    except ValueError:
+        return 3.0
+
+
+def quote_witness(key):
+    # Only the exact delivery contract's in-process SDK quote qualifies.
+    # A board restored from disk, continuous symbol or reconnected session
+    # cannot attest that trading has stayed unchanged since a history query.
+    with LIVE_QUOTES.condition:
+        quote = LIVE_QUOTES.exact_quotes.get(key[0])
+        if (not quote or quote.get("code") != key[0] or not quote.get("time")
+                or quote.get("volume") is None or quote.get("last") is None
+                or LIVE_QUOTES.connection_state != "polling"
+                or time.monotonic() - LIVE_QUOTES.last_poll > 3):
+            return None
+        return (LIVE_QUOTES.sdk_creations, quote["time"], quote["volume"], quote["last"])
+
+
 def next_kline_stream_event(symbol, previous, incoming, count, force_full=False):
     """Return a full correction whenever an earlier candle changed.
 
@@ -934,11 +957,21 @@ def next_kline_stream_event(symbol, previous, incoming, count, force_full=False)
     if not current:
         return None
     before = previous[-count:]
-    if force_full or len(current) != len(before) or current[:-1] != before[:-1]:
+    if (not force_full and before and current[-1]["time"] > before[-1]["time"]
+            and incoming[-len(before)-1:-1] == before
+            and current == (before + current[-1:])[-count:]):
+        return {"symbol": symbol, "bar": current[-1]}
+    if (force_full or len(current) != len(before) or current[:-1] != before[:-1]
+            or current[-1]["time"] != before[-1]["time"]):
         return {"symbol": symbol, "bars": current}
     if current[-1] != before[-1]:
         return {"symbol": symbol, "bar": current[-1]}
     return None
+
+
+def kline_frame_digest(bars):
+    # Only the exchange sequence certifies coverage; OHLCV can be corrected.
+    return hashlib.sha256(",".join(str(row["time"]) for row in bars).encode()).hexdigest()
 
 
 class KlineFileCache:
@@ -984,12 +1017,16 @@ class KlineFileCache:
                 valid.append(row)
             rows = merge_kline_bars([], valid, limit=KLINE_DISK_HISTORY_LENGTH)
             if frame:
-                first, last, synced = payload.get("history_frame", [0, 0, 0])
-                if synced and rows:
-                    # Other writers (older pages / prefetch) do not certify a frame.
-                    newer_on_disk = rows[-1]["time"] > last
-                    rows = [row for row in rows if first <= row["time"] <= last]
-                    return rows, 0 if newer_on_disk else synced
+                marker = payload.get("history_frame")
+                if isinstance(marker, list) and len(marker) == 3 and rows:
+                    first, last, synced = marker
+                    if (type(first) is int and type(last) is int and 0 < first <= last
+                            and type(synced) in (float, int) and 0 < synced <= time.time()):
+                        window = [row for row in rows if first <= row["time"] <= last]
+                        if window and window[0]["time"] == first and window[-1]["time"] == last:
+                            valid_frame = (last == rows[-1]["time"]
+                                           and payload.get("history_digest") == kline_frame_digest(window))
+                            return window, synced if valid_frame else 0
                 return rows, 0
             return rows, float(payload.get("saved_at", 0))
         except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
@@ -1025,9 +1062,12 @@ class KlineFileCache:
             # older pages; pagination backfills must not overwrite recent
             # candles with a stale historical snapshot.
             certified_write = history_frame is not None and history_frame[2] > 0
+            digest = kline_frame_digest(bars) if certified_write else None
             if history_frame is None and target.exists():
                 try:
-                    history_frame = json.loads(target.read_bytes()).get("history_frame")
+                    old = json.loads(target.read_bytes())
+                    history_frame = old.get("history_frame")
+                    digest = old.get("history_digest")
                 except (ValueError, AttributeError):
                     pass
             persisted, _ = self.read(key)
@@ -1040,7 +1080,7 @@ class KlineFileCache:
                             persisted, bars, limit=KLINE_DISK_HISTORY_LENGTH))
             content = json.dumps({
                 "symbol": key[0], "period": key[1], "saved_at": time.time(),
-                "history_frame": history_frame or [0, 0, 0], "bars": combined
+                "history_digest": digest, "history_frame": history_frame or [0, 0, 0], "bars": combined
             }, allow_nan=False, separators=(",", ":")).encode("utf-8")
             with tempfile.NamedTemporaryFile(dir=self.directory, prefix=".tmp-",
                                              delete=False) as handle:
@@ -1088,6 +1128,7 @@ class SharedKlineHub:
         self.file_write_lock = threading.Lock()
         self.pending_disk_writes = OrderedDict()
         self.disk_writer = None
+        self.history_witness = {}
         self.last_history = {}
         self.pending_history = set()
         self.history_enqueued = {}
@@ -1119,6 +1160,7 @@ class SharedKlineHub:
             self.live_timing.pop(oldest, None)
             self.history_completed.discard(oldest)
             self.last_history.pop(oldest, None)
+            self.history_witness.pop(oldest, None)
 
     def _restore_locked(self, key):
         if key in self.cache or self.store is None:
@@ -1140,7 +1182,8 @@ class SharedKlineHub:
         if key in self.history_running:
             return
         if key in self.pending_history:
-            if urgent and key not in self.urgent_history:
+            if urgent and key in self.background_history:
+                self.background_history.remove(key)
                 self.urgent_history.append(key)  # one priority upgrade only
             return
         # The foreground chart must not lose backfill priority to a backlog
@@ -1149,9 +1192,11 @@ class SharedKlineHub:
             if urgent and self.background_history:
                 dropped = self.background_history.pop()
                 self.pending_history.discard(dropped)
+                self.history_enqueued.pop(dropped, None)
             else:
                 return
         self.pending_history.add(key)
+        self.history_enqueued[key] = time.monotonic()
         (self.urgent_history if urgent else self.background_history).append(key)
         self.condition.notify_all()
 
@@ -1209,7 +1254,7 @@ class SharedKlineHub:
                 entry["used"] = time.monotonic()
             self.condition.notify_all()
 
-    def publish(self, key, bars, *, history=False, received_at=None, history_started=None):
+    def publish(self, key, bars, *, history=False, received_at=None, history_started=None, witness=None):
         if not bars:
             return
         to_save = None
@@ -1220,8 +1265,10 @@ class SharedKlineHub:
             if history:
                 live = self.live_tail.get(key, [])
                 end = bars[-1]["time"]
-                if (live and live[0]["time"] > end) or cache_end > max(
-                        end, live[-1]["time"] if live else 0):
+                live_end = live[-1]["time"] if live else 0
+                disjoint = live_end > end and end not in {row["time"] for row in live}
+                regresses = key in self.history_completed and cache_end > max(end, live_end)
+                if disjoint or regresses:
                     # The history worker has not caught the retained live pair.
                     self.history_retry_after[key] = time.monotonic() + 3
                     print(f"QIHUI_FIRST_FRAME event=history gap=unbridged key={key} "
@@ -1235,6 +1282,7 @@ class SharedKlineHub:
                                    or self.live_observed.get(key, 0) >= history_started)
                 if live and (live[-1]["time"] > end or live[-1]["time"] == end and concurrent_live):
                     combined = merge_kline_bars(combined, live[-1:])
+                self.history_witness[key] = witness
                 self.last_history[key] = time.time()
                 self.history_completed.add(key)
                 self.condition.notify_all()
@@ -1247,10 +1295,18 @@ class SharedKlineHub:
                     self.live_observed[key] = time.monotonic()
                 self.live_tail[key] = list(live)
                 times = {bar["time"] for bar in live}
-                if not previous or (live[-1]["time"] > cache_end and cache_end not in times):
+                if received_at is not None and key in self.entries and self.connected:
+                    entry = self.entries[key]
+                    now = time.monotonic()
+                    if now - entry.get("confirmed", float("-inf")) > 30:
+                        self.condition.notify_all()
+                    entry["confirmed"] = now
+                if (key not in self.history_completed or not previous
+                        or live[-1]["time"] > cache_end and cache_end not in times):
                     self._schedule_locked(key, urgent=True)
                     if not prior_live or prior_live[-1]["time"] != live[-1]["time"]:
-                        print(f"QIHUI_FIRST_FRAME event=hold gap=no_overlap key={key} "
+                        reason = "unverified" if previous and cache_end in times else "no_overlap"
+                        print(f"QIHUI_FIRST_FRAME event=hold gap={reason} key={key} "
                               f"cache_tail={cache_end} live_tail={live[-1]['time']}", flush=True)
                     return
                 if live[-1]["time"] < cache_end:
@@ -1327,21 +1383,28 @@ class SharedKlineHub:
             record = self.live_timing.get(key)
             return record[1] if record and record[0] == version else None
 
-    def read(self, key, after_version=-1, timeout=10):
+    def read(self, key, after_version=-1, timeout=10, *, with_sync=False, after_sync=None):
         started = time.monotonic()
         deadline = started + timeout
+        first_deadline = min(deadline, started + first_frame_wait_seconds())
         with self.condition:
             self._restore_locked(key)
             while True:
                 bars, version = self.cache.get(key, ([], 0))
+                live = self.live_tail.get(key, [])
+                tail = bars[-1]["time"] if bars else 0
+                gap = bool(live and live[-1]["time"] > tail)
+                age = time.time() - self.last_history.get(key, 0)
+                confirmed = self.entries.get(key, {}).get("confirmed", float("-inf"))
+                live_current = (self.connected and live and live[-1]["time"] == tail
+                                and time.monotonic() - confirmed <= 30)
+                witness = self.history_witness.get(key)
+                ready = bool(bars and key in self.history_completed and not gap
+                             and (0 <= age <= KLINE_HISTORY_REFRESH_SECONDS or live_current
+                                  or witness is not None and witness == quote_witness(key)))
+                syncing = not ready
                 if after_version < 0:
-                    live = self.live_tail.get(key, [])
-                    tail = bars[-1]["time"] if bars else 0
-                    gap = bool(live and live[-1]["time"] > tail)
-                    synced = self.last_history.get(key, 0)
-                    ready = bool(bars and not gap and 0 <= time.time() - synced
-                                 <= KLINE_HISTORY_REFRESH_SECONDS)
-                    remaining = (min(deadline, started + 2) if bars else deadline) - time.monotonic()
+                    remaining = first_deadline - time.monotonic()
                     waiting = key in self.pending_history or key in self.history_running
                     if ready or remaining <= 0 or (bars and not waiting):
                         wait_ms = (time.monotonic() - started) * 1000
@@ -1350,14 +1413,15 @@ class SharedKlineHub:
                               f"ready={int(ready)} wait_ms={wait_ms:.1f}", flush=True)
                         if bars:
                             self.cached_used[key] = time.monotonic()
-                        return list(bars), version
+                        return (list(bars), version, syncing) if with_sync else (list(bars), version)
                 else:
                     remaining = deadline - time.monotonic()
-                    if (bars and version != after_version) or remaining <= 0:
-                        return list(bars), version
+                    changed = version != after_version or after_sync is not None and after_sync != syncing
+                    if (bars and changed) or remaining <= 0:
+                        return (list(bars), version, syncing) if with_sync else (list(bars), version)
                 self.condition.wait(timeout=remaining)
 
-    def snapshot(self, symbol, period, count, timeout=11):
+    def snapshot(self, symbol, period, count, timeout=11, *, with_sync=False):
         # HTTP previews never consume a live subscription slot.
         key = (quote_symbol(symbol), period)
         with self.condition:
@@ -1367,8 +1431,8 @@ class SharedKlineHub:
                     > KLINE_HISTORY_REFRESH_SECONDS):
                 self._schedule_locked(key, urgent=True)
         self.start()
-        bars, _ = self.read(key, timeout=timeout)
-        return bars[-count:]
+        bars, _, syncing = self.read(key, timeout=timeout, with_sync=True)
+        return (bars[-count:], syncing) if with_sync else bars[-count:]
 
     def warm_symbols(self, symbols):
         if not favorite_warm_memory_ok():
@@ -1392,7 +1456,7 @@ class SharedKlineHub:
                         bars, saved = self.store.read(key, frame=True)
                     else:
                         bars, saved = [], 0
-                    if bars and time.time() - saved < KLINE_WARM_HISTORY_FRESH_SECONDS:
+                    if bars and 0 < saved and 0 <= time.time() - saved < KLINE_WARM_HISTORY_FRESH_SECONDS:
                         continue
                     self._schedule_locked(key)
         if accepted:
@@ -1455,6 +1519,7 @@ class SharedKlineHub:
                 continue
             try:
                 sdk_started = time.monotonic()
+                witness = quote_witness(key)
                 if api is None:
                     with open(AUTH_PATH, encoding="utf-8") as handle:
                         credentials = json.load(handle)
@@ -1468,7 +1533,7 @@ class SharedKlineHub:
                 sdk_ms = (time.monotonic() - sdk_started) * 1000
                 if bars:
                     publish_started = time.monotonic()
-                    accepted = self.publish(key, bars, history=True, history_started=sdk_started)
+                    accepted = self.publish(key, bars, history=True, history_started=sdk_started, witness=witness)
                     publish_ms = (time.monotonic() - publish_started) * 1000
                     with self.condition:
                         if accepted:
@@ -1560,6 +1625,8 @@ class SharedKlineHub:
                 with self.condition:
                     self.error = type(exc).__name__ + ": " + str(exc)[:140]
                     self.connected = False
+                    for entry in self.entries.values():
+                        entry.pop("confirmed", None)
                     self.condition.notify_all()
                 print("K线实时连接异常，准备重连:", self.error, flush=True)
                 time.sleep(3)
@@ -1750,23 +1817,26 @@ class Handler(BaseHTTPRequestHandler):
             # A first-time contract takes time to subscribe. Delay HTTP 200
             # until an actual full K-line frame exists so the phone can recover
             # from cold-start / disconnected feeds instead of spinning forever.
-            bars, version = KLINE_HUB.read(key, timeout=11)
+            bars, version, syncing = KLINE_HUB.read(key, timeout=11, with_sync=True)
             if not bars:
-                self.reply(503, {"error": "kline_not_ready"})
+                self.reply(503, {"error": "kline_not_ready", "syncing": True})
                 return
             self.begin_stream()
-            self.push_event({"symbol": symbol, "bars": bars[-count:]})
+            self.push_event({"symbol": symbol, "bars": bars[-count:], "syncing": syncing})
             previous_frame = bars[-count:]
             last_full = time.monotonic()
             last_trace = float('-inf')
             while True:
-                bars, next_version = KLINE_HUB.read(key, after_version=version, timeout=12)
+                bars, next_version, next_sync = KLINE_HUB.read(
+                    key, after_version=version, timeout=12, with_sync=True, after_sync=syncing)
                 now = time.monotonic()
-                if bars and next_version != version:
+                if bars and (next_version != version or next_sync != syncing):
                     event = next_kline_stream_event(
                         symbol, previous_frame, bars, count,
-                        force_full=(now - last_full >= 60))
+                        force_full=(now - last_full >= 60 or next_sync != syncing))
+                    syncing = next_sync
                     if event is not None:
+                        event["syncing"] = syncing
                         received_at = KLINE_HUB.timing_for(key, next_version) if now - last_trace >= 2 else None
                         if received_at is not None:
                             sent_at = time.time()
@@ -1971,10 +2041,10 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(400, {"error": str(exc)})
             return
         try:
-            bars = KLINE_HUB.snapshot(symbol, period, count)
+            bars, syncing = KLINE_HUB.snapshot(symbol, period, count, with_sync=True)
             self.reply(200 if bars else 503, {
                 "symbol": symbol, "period": period, "bars": bars,
-                "error": None if bars else "no_data",
+                "error": None if bars else "no_data", "syncing": syncing,
             })
         except KlineCapacityError:
             self.reply(503, {"error": "kline_subscription_limit"})

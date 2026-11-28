@@ -26,6 +26,44 @@ class FinalFrameTests(unittest.TestCase):
         self.hub = g.SharedKlineHub(store=self.store)
         self.hub.start = lambda: None
 
+    def test_live_confirmed_complete_history_does_not_wait_for_periodic_refresh(self):
+        self.hub.reserve(*self.key)
+        self.hub.connected = True
+        self.hub.publish(self.key, rows(11, 21), history=True)
+        self.hub.last_history[self.key] -= 601
+        self.hub.publish(self.key, rows(21, 31), received_at=time.time())
+        with patch.object(self.hub.condition, "wait", side_effect=AssertionError("unnecessary wait")):
+            self.assertEqual(self.hub.snapshot(*self.key, 20), rows(11, 21, 31))
+
+    def test_full_source_candidate_includes_constants_and_module_functions(self):
+        baseline = "LIMIT = 1\n"
+        updated = "LIMIT = 2\n\ndef helper():\n    return LIMIT\n"
+        import hashlib
+        with patch.object(deploy, "PRODUCTION_SHA256", hashlib.sha256(baseline.encode()).hexdigest()):
+            self.assertEqual(deploy.candidate(baseline, updated, baseline), updated)
+            self.assertEqual(deploy.candidate(baseline, updated, updated), updated)
+            with self.assertRaises(RuntimeError):
+                deploy.candidate(baseline, updated, baseline+"# drift")
+
+    def test_empty_cache_respects_first_frame_deadline(self):
+        with patch.dict(os.environ, QIHUI_FIRST_FRAME_WAIT_SECONDS="0"):
+            with patch.object(self.hub.condition, "wait", side_effect=AssertionError):
+                self.assertEqual(self.hub.read(self.key, timeout=11, with_sync=True), ([], 0, True))
+
+    def test_witness_requires_current_exact_sdk_quote_and_connection(self):
+        quote = {"code": self.key[0], "time": "2026-11-27 22:59:59", "volume": 120, "last": 123}
+        board = g.LiveQuoteHub()
+        board.exact_quotes[self.key[0]] = quote
+        with patch.object(g, "LIVE_QUOTES", board):
+            self.assertIsNone(g.quote_witness(self.key))
+            board.record_poll(True)
+            first = g.quote_witness(self.key)
+            self.assertIsNotNone(first)
+            board.sdk_creations += 1
+            self.assertNotEqual(g.quote_witness(self.key), first)
+            board.last_poll -= 4
+            self.assertIsNone(g.quote_witness(self.key))
+
     def test_queue_stamp_on_first_enqueue_only(self):
         with self.hub.condition:
             self.hub._schedule_locked(self.key)
@@ -67,6 +105,33 @@ class FinalFrameTests(unittest.TestCase):
             self.assertIn(self.key, self.hub.pending_history)
         with patch.object(g, "quote_witness", return_value=None):
             self.assertTrue(self.hub.read(self.key, timeout=0, with_sync=True)[2])
+
+    def test_legacy_ahead_does_not_block_verified_history_forever(self):
+        self.store.write(self.key, rows(10, 999))
+        self.assertTrue(self.hub.publish(self.key, rows(10, 20, 30), history=True))
+        self.assertEqual(self.hub.read(self.key, timeout=0, with_sync=True),
+                         (rows(10, 20, 30), 2, False))
+        self.assertFalse(self.hub.publish(self.key, rows(10, 20), history=True))
+
+    def test_old_three_field_marker_requires_real_history_once(self):
+        self.hub.publish(self.key, rows(10, 20, 30), history=True)
+        path = self.store.path(self.key)
+        payload = json.loads(path.read_text())
+        del payload["history_digest"]
+        path.write_text(json.dumps(payload))
+        old_bytes = path.read_bytes()
+        restored = g.SharedKlineHub(store=self.store)
+        restored.start = lambda: None
+        self.assertEqual(restored.snapshot(*self.key, 20, timeout=0, with_sync=True),
+                         (rows(10, 20, 30), True))
+        self.assertEqual(path.read_bytes(), old_bytes)
+        restored.publish(self.key, rows(10, 20, 30), history=True)
+        self.assertGreater(self.store.read(self.key, frame=True)[1], 0)
+        restarted = g.SharedKlineHub(store=self.store)
+        restarted.start = lambda: None
+        self.assertEqual(restarted.snapshot(*self.key, 20, timeout=0, with_sync=True),
+                         (rows(10, 20, 30), False))
+        self.assertFalse(restarted.pending_history)
 
     def test_wait_config(self):
         for raw, expected in (("3",3),("0.25",.25),("not-a-number",3),("inf",3),("-5",3)):
