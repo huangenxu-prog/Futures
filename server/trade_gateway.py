@@ -84,8 +84,6 @@ def order_state(status, quantity, remaining, message, is_error, exchange_order_i
     # SDK certainty flags are tri-state: None is not evidence of success.
     if quantity <= 0 or remaining < 0 or remaining > quantity:
         return "UNKNOWN"
-    if is_dead is False and status == "FINISHED":
-        return "UNKNOWN"
     if is_dead is not True and status == "ALIVE":
         return "PARTIAL" if 0 < remaining < quantity else "ALIVE"
     if status != "FINISHED" and is_dead is not True:
@@ -716,7 +714,8 @@ class Handler(BaseHTTPRequestHandler):
         if not done.wait(12):
             audit("command_wait_timeout", action=action, id=payload[0] if action == "order" else payload)
             return self.reply(503)
-        return self.reply(result.get("status", 503))
+        status = result.get("status", 503)
+        return self.reply(status, {"broker_acknowledged": False, "local_request_processed": True} if status == 200 else None)
 
 def drain_session(timeout=30):
     """Stop admission, wait for local command processing, then close SDK worker.
@@ -789,6 +788,12 @@ class RecoverySupervisor:
         return start_configured_session()
 
 
+def scheduled_restart_allowed(enabled, sdk_first, session):
+    # A live SDK worker owns reconnects. Absence of business changes is
+    # not a disconnect signal, especially outside trading hours.
+    return enabled and (not sdk_first or session is None or not session.worker.is_alive())
+
+
 def scheduled_restart_slot(now):
     """Return a unique Beijing-time slot only during its scheduled minute."""
     local = now.astimezone(timezone(timedelta(hours=8)))
@@ -839,12 +844,13 @@ def main():
         if auto_login_enabled:
             recovery.tick(time.monotonic())
         restart_enabled = os.environ.get("QIHUI_TRADE_SCHEDULED_RESTART", "0") == "1"
+        sdk_first = os.environ.get("QIHUI_TRADE_SDK_FIRST_RECOVERY", "0") == "1"
         restart_path = "live-readonly-restarts.sqlite3" if TRADE_MODE == "live_readonly" else "trade-restarts.sqlite3"
         while not MAINTENANCE.is_set():
             server.handle_request()
             if auto_login_enabled and not MAINTENANCE.is_set():
                 recovery.tick(time.monotonic())
-            if restart_enabled:
+            if scheduled_restart_allowed(restart_enabled, sdk_first, SESSION):
                 slot = scheduled_restart_slot(datetime.now(timezone.utc))
                 if slot is not None and claim_restart_slot(restart_path, slot):
                     audit("scheduled_restart_requested", slot=slot)

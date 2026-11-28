@@ -21,7 +21,7 @@ class OrderTests(unittest.TestCase):
         self.assertEqual(order_state("ALIVE", 2, 0, "", False, "X", is_dead=True), "FILLED")
         self.assertEqual(order_state("FINISHED", 2, 1, "", False, "X", is_dead=True), "FINISHED")
         self.assertEqual(order_state("FINISHED", 2, 1, "撤单成功", True, "X", is_dead=True), "FINISHED")
-        self.assertEqual(order_state("FINISHED", 2, 0, "", False, "X", is_dead=False), "UNKNOWN")
+        self.assertEqual(order_state("FINISHED", 2, 0, "", False, "X", is_dead=False), "FILLED")
         self.assertEqual(order_state("FINISHED", 2, -1, "", False, "X"), "UNKNOWN")
         self.assertEqual(order_state("FINISHED", 2, 1, "撤单成功", False, "X", is_dead=True), "PARTIAL_CANCELED")
 

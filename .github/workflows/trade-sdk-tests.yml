@@ -1,0 +1,16 @@
+name: Trade SDK offline tests
+on:
+  push:
+    branches: [experiment/trade-sdk-first]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile trade gateway
+        run: python3 -m py_compile server/trade_gateway.py
+      - name: Run trade tests without broker connection
+        run: python3 -m unittest discover -s server -p 'test_trade*.py' -v

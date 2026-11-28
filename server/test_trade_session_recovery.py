@@ -212,6 +212,18 @@ class RecoveryTests(unittest.TestCase):
             self.assertFalse(supervisor.tick(1000))
             self.assertEqual(start.call_count, 3)
 
+    def test_sdk_first_does_not_restart_running_worker(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        worker = Mock()
+        worker.is_alive.return_value = True
+        session = SimpleNamespace(worker=worker)
+        self.assertFalse(g.scheduled_restart_allowed(True, True, session))
+        self.assertTrue(g.scheduled_restart_allowed(True, False, session))
+        self.assertFalse(g.scheduled_restart_allowed(False, True, None))
+        worker.is_alive.return_value = False
+        self.assertTrue(g.scheduled_restart_allowed(True, True, session))
+
     def test_scheduled_restart_slots_and_deduplication(self):
         import os
         import tempfile
