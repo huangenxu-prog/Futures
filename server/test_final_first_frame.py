@@ -134,7 +134,7 @@ class FinalFrameTests(unittest.TestCase):
         self.assertFalse(restarted.pending_history)
 
     def test_wait_config(self):
-        for raw, expected in (("3",3),("0.25",.25),("not-a-number",3),("inf",3),("-5",3)):
+        for raw, expected in (("3",3),("0.25",.25),("not-a-number",3),("inf",3),("-5",3),("100",3)):
             with patch.dict(os.environ, QIHUI_FIRST_FRAME_WAIT_SECONDS=raw):
                 self.assertEqual(g.first_frame_wait_seconds(), expected)
 
@@ -151,6 +151,7 @@ class FinalFrameTests(unittest.TestCase):
                 with urllib.request.urlopen(url+"klines"+q, timeout=4) as r:
                     http = json.load(r)
                 self.assertTrue(http["syncing"])
+                self.assertIsNone(http["history_age_s"])
                 with urllib.request.urlopen(url+"stream/klines"+q, timeout=4) as r:
                     def event():
                         return json.loads(next(line for line in r if line.startswith(b"data:"))[5:])
@@ -158,7 +159,11 @@ class FinalFrameTests(unittest.TestCase):
                     self.assertEqual((first["bars"], first["syncing"]), (http["bars"], True))
                     self.hub.publish(self.key, rows(11, 21, 31), history=True)
                     final = event()
-                    self.assertEqual((final["bars"], final["syncing"]), (first["bars"], False))
+                    self.assertEqual(final["bar"], first["bars"][-1])
+                    self.assertNotIn("bars", final)
+                    self.assertFalse(final["syncing"])
+                    self.assertIsNone(first["history_age_s"])
+                    self.assertGreaterEqual(final["history_age_s"], 0)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -167,7 +172,7 @@ class FinalFrameTests(unittest.TestCase):
     def test_probe_rejects_auth_and_unavailable(self):
         for status in (401, 403, 503):
             error = urllib.error.HTTPError("http://localhost", status, "test", {}, None)
-            with self.subTest(status=status), patch.object(urllib.request, "urlopen", side_effect=error):
+            with self.subTest(status=status), patch.object(deploy, "reference_tails", return_value={}), patch.object(urllib.request, "urlopen", side_effect=error):
                 with self.assertRaises((urllib.error.HTTPError, RuntimeError)):
                     deploy.probe_chart()
 
@@ -178,6 +183,51 @@ class FinalFrameTests(unittest.TestCase):
             ts = range(2,202) if stream else range(1,201)
             data = json.dumps({"bars":rows(*ts), "syncing":False}).encode()
             return io.BytesIO(b"data: "+data+b"\n\n" if stream else data)
-        with patch.object(urllib.request, "urlopen", side_effect=response):
+        expected = {("DCE.a2701", 1800): 200, ("DCE.a2701", 3600): 200, ("DCE.c2701", 300): 200}
+        with patch.object(deploy, "reference_tails", return_value=expected), patch.object(urllib.request, "urlopen", side_effect=response):
             with self.assertRaises(RuntimeError):
                 deploy.probe_chart()
+
+
+    def test_identical_http_and_sse_wrong_exchange_tail_fails(self):
+        expected = {("DCE.a2701", 1800): 201, ("DCE.a2701", 3600): 201, ("DCE.c2701", 300): 201}
+        def response(req, **kw):
+            data = json.dumps({"bars": rows(*range(1, 201)), "syncing": False}).encode()
+            return io.BytesIO(b"data: "+data+b"\n\n" if "stream/klines" in req.full_url else data)
+        with patch.object(deploy, "reference_tails", return_value=expected), patch.object(urllib.request, "urlopen", side_effect=response):
+            with self.assertRaisesRegex(RuntimeError, "Independent exchange tail mismatch"):
+                deploy.probe_chart()
+
+    def test_pure_multiple_append_preserves_existing_protocol(self):
+        before = rows(11, 21, 31)
+        incoming = rows(11, 21, 31, 41, 51)
+        self.assertEqual(g.kline_stream_events("a", before, incoming, 3),
+                         [{"symbol": "a", "bar": row} for row in incoming[-2:]])
+        incoming[2]["close"] = 2
+        self.assertIn("bars", g.kline_stream_events("a", before, incoming, 3)[0])
+
+    def test_http_sse_timeout_then_append_without_full_replace(self):
+        self.store.write(self.key, rows(11, 21, 31))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), g.Handler)
+        url = f"http://127.0.0.1:{server.server_port}/v1/stream/klines?symbol=DCE.a2701&period=1800&count=200"
+        with patch.object(g, "KLINE_HUB", self.hub), patch.object(g, "supported_symbol", return_value=True), \
+             patch.object(g, "MARKET_ACCESS", ""), patch.dict(os.environ, QIHUI_FIRST_FRAME_WAIT_SECONDS="0"):
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with urllib.request.urlopen(url, timeout=4) as response:
+                    def event():
+                        return json.loads(next(line for line in response if line.startswith(b"data:"))[5:])
+                    first = event()
+                    self.assertTrue(first["syncing"])
+                    self.hub.publish(self.key, rows(11, 21, 31, 41, 51), history=True)
+                    one, two = event(), event()
+                    self.assertEqual([one["bar"]["time"], two["bar"]["time"]], [41, 51])
+                    self.assertTrue(one["syncing"])
+                    self.assertFalse(two["syncing"])
+                    self.assertNotIn("bars", one)
+                    self.assertNotIn("bars", two)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(2)

@@ -70,11 +70,39 @@ def metrics(data):
     return dict(pid=pid, established_tcp=connections, memory_kib=data.get("process_memory_kib"))
 
 
+def reference_tails(requests):
+    """Read exact exchange candles independently, using one temporary SDK session."""
+    from tqsdk import TqApi, TqAuth
+    auth_path = os.environ.get("TQ_AUTH_FILE", "/root/tq_test/auth.json")
+    with open(auth_path, encoding="utf-8") as handle:
+        credentials = json.load(handle)
+    api = TqApi(auth=TqAuth(credentials["username"], credentials["password"]))
+    try:
+        result = {}
+        for symbol, period in requests:
+            serial = api.get_kline_serial(symbol, period, data_length=3)
+            deadline = time.monotonic() + 15
+            while not api.is_serial_ready(serial):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(f"Independent history not ready: {symbol} {period}")
+                api.wait_update(deadline=time.time() + min(1, remaining))
+            times = [int(t) // 1_000_000_000 for t in serial["datetime"] if t > 0]
+            if not times:
+                raise RuntimeError(f"Independent history empty: {symbol} {period}")
+            result[(symbol, period)] = max(times)
+        return result
+    finally:
+        api.close()
+
+
 def probe_chart():
     paths = ("klines", "stream/klines")
     access = os.environ.get("QIHUI_MARKET_ACCESS_KEY")
     headers = {"X-Qihui-Market-Access": access} if access else {}
-    for symbol, period in (("DCE.a2701", 1800), ("DCE.a2701", 3600), ("DCE.c2701", 300)):
+    requests = (("DCE.a2701", 1800), ("DCE.a2701", 3600), ("DCE.c2701", 300))
+    expected = reference_tails(requests)
+    for symbol, period in requests:
         for attempt in (1, 2):
             reference = None
             for route in paths if attempt == 1 else reversed(paths):
@@ -95,7 +123,11 @@ def probe_chart():
                       "tail", times[-1], "ms", round((time.monotonic()-started)*1000), flush=True)
                 if reference is not None and times != reference:
                     raise RuntimeError(f"HTTP/SSE timestamps disagree: {symbol} {period}")
+                if times[-1] != expected[(symbol, period)]:
+                    raise RuntimeError(f"Independent exchange tail mismatch: {symbol} {period}")
                 reference = times
+    if reference_tails(requests) != expected:
+        raise RuntimeError("Exchange tail advanced during probe; retry in a stable window")
 
 
 def deploy(rev):
@@ -109,7 +141,9 @@ def deploy(rev):
         result = candidate(base, updated, original.decode())
         staged = work / TARGET.name
         shutil.copy2(TARGET, staged)
-        staged.write_text(result)
+        staged.write_bytes(result.encode("utf-8"))
+        if staged.read_bytes() != updated.encode("utf-8"):
+            raise RuntimeError("Staged source does not match immutable repository revision")
         subprocess.run([PYTHON, "-m", "py_compile", str(staged)], check=True)
         subprocess.run([PYTHON, "-c", "from tqsdk import TqApi; assert callable(TqApi.is_serial_ready)"], check=True)
         for name in ("test_first_frame.py", "test_final_first_frame.py", "deploy_first_frame.py"):

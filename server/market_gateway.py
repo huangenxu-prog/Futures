@@ -927,7 +927,7 @@ def merge_kline_bars(older, newer, limit=KLINE_HISTORY_LENGTH):
 def first_frame_wait_seconds():
     try:
         value = float(os.environ.get("QIHUI_FIRST_FRAME_WAIT_SECONDS", "3"))
-        return value if math.isfinite(value) and value >= 0 else 3.0
+        return min(value, 3.0) if math.isfinite(value) and value >= 0 else 3.0
     except ValueError:
         return 3.0
 
@@ -967,6 +967,29 @@ def next_kline_stream_event(symbol, previous, incoming, count, force_full=False)
     if current[-1] != before[-1]:
         return {"symbol": symbol, "bar": current[-1]}
     return None
+
+
+def kline_stream_events(symbol, previous, incoming, count, force_full=False):
+    """Append a verified unchanged overlap, otherwise send a correction frame.
+
+    Multiple new bars use the existing one-bar event format in timestamp order.
+    A changed or missing overlapping candle always requires a full correction.
+    """
+    before, current = previous[-count:], incoming[-count:]
+    if not force_full and before and current:
+        old_tail = before[-1]["time"]
+        split = next((i for i, row in enumerate(incoming)
+                      if row["time"] == old_tail), None)
+        if split is not None:
+            offset = max(0, split + 1 - len(before))
+            overlap = incoming[offset:split + 1]
+            extra = incoming[split + 1:]
+            if (extra and overlap == before[-len(overlap):]
+                    and current == (before + extra)[-count:]
+                    and len(extra) <= count):
+                return [{"symbol": symbol, "bar": row} for row in extra]
+    event = next_kline_stream_event(symbol, previous, incoming, count, force_full)
+    return [event] if event is not None else []
 
 
 def kline_frame_digest(bars):
@@ -1383,7 +1406,7 @@ class SharedKlineHub:
             record = self.live_timing.get(key)
             return record[1] if record and record[0] == version else None
 
-    def read(self, key, after_version=-1, timeout=10, *, with_sync=False, after_sync=None):
+    def read(self, key, after_version=-1, timeout=10, *, with_sync=False, after_sync=None, with_age=False):
         started = time.monotonic()
         deadline = started + timeout
         first_deadline = min(deadline, started + first_frame_wait_seconds())
@@ -1394,7 +1417,9 @@ class SharedKlineHub:
                 live = self.live_tail.get(key, [])
                 tail = bars[-1]["time"] if bars else 0
                 gap = bool(live and live[-1]["time"] > tail)
-                age = time.time() - self.last_history.get(key, 0)
+                synced_at = self.last_history.get(key, 0)
+                age = time.time() - synced_at
+                history_age_s = max(0.0, age) if synced_at > 0 else None
                 confirmed = self.entries.get(key, {}).get("confirmed", float("-inf"))
                 live_current = (self.connected and live and live[-1]["time"] == tail
                                 and time.monotonic() - confirmed <= 30)
@@ -1413,15 +1438,17 @@ class SharedKlineHub:
                               f"ready={int(ready)} wait_ms={wait_ms:.1f}", flush=True)
                         if bars:
                             self.cached_used[key] = time.monotonic()
-                        return (list(bars), version, syncing) if with_sync else (list(bars), version)
+                        return ((list(bars), version, syncing, history_age_s) if with_age
+                                else (list(bars), version, syncing) if with_sync else (list(bars), version))
                 else:
                     remaining = deadline - time.monotonic()
                     changed = version != after_version or after_sync is not None and after_sync != syncing
                     if (bars and changed) or remaining <= 0:
-                        return (list(bars), version, syncing) if with_sync else (list(bars), version)
+                        return ((list(bars), version, syncing, history_age_s) if with_age
+                                else (list(bars), version, syncing) if with_sync else (list(bars), version))
                 self.condition.wait(timeout=remaining)
 
-    def snapshot(self, symbol, period, count, timeout=11, *, with_sync=False):
+    def snapshot(self, symbol, period, count, timeout=11, *, with_sync=False, with_age=False):
         # HTTP previews never consume a live subscription slot.
         key = (quote_symbol(symbol), period)
         with self.condition:
@@ -1431,8 +1458,9 @@ class SharedKlineHub:
                     > KLINE_HISTORY_REFRESH_SECONDS):
                 self._schedule_locked(key, urgent=True)
         self.start()
-        bars, _, syncing = self.read(key, timeout=timeout, with_sync=True)
-        return (bars[-count:], syncing) if with_sync else bars[-count:]
+        bars, _, syncing, age = self.read(key, timeout=timeout, with_sync=True, with_age=True)
+        return ((bars[-count:], syncing, age) if with_age
+                else (bars[-count:], syncing) if with_sync else bars[-count:])
 
     def warm_symbols(self, symbols):
         if not favorite_warm_memory_ok():
@@ -1817,26 +1845,30 @@ class Handler(BaseHTTPRequestHandler):
             # A first-time contract takes time to subscribe. Delay HTTP 200
             # until an actual full K-line frame exists so the phone can recover
             # from cold-start / disconnected feeds instead of spinning forever.
-            bars, version, syncing = KLINE_HUB.read(key, timeout=11, with_sync=True)
+            bars, version, syncing, history_age_s = KLINE_HUB.read(key, timeout=11, with_sync=True, with_age=True)
             if not bars:
-                self.reply(503, {"error": "kline_not_ready", "syncing": True})
+                self.reply(503, {"error": "kline_not_ready", "syncing": True, "history_age_s": history_age_s})
                 return
             self.begin_stream()
-            self.push_event({"symbol": symbol, "bars": bars[-count:], "syncing": syncing})
+            self.push_event({"symbol": symbol, "bars": bars[-count:], "syncing": syncing, "history_age_s": history_age_s})
             previous_frame = bars[-count:]
             last_full = time.monotonic()
             last_trace = float('-inf')
             while True:
-                bars, next_version, next_sync = KLINE_HUB.read(
-                    key, after_version=version, timeout=12, with_sync=True, after_sync=syncing)
+                bars, next_version, next_sync, history_age_s = KLINE_HUB.read(
+                    key, after_version=version, timeout=12, with_sync=True, after_sync=syncing, with_age=True)
                 now = time.monotonic()
                 if bars and (next_version != version or next_sync != syncing):
-                    event = next_kline_stream_event(
+                    events = kline_stream_events(
                         symbol, previous_frame, bars, count,
-                        force_full=(now - last_full >= 60 or next_sync != syncing))
+                        force_full=(now - last_full >= 60 and next_sync == syncing))
+                    if not events and next_sync != syncing:
+                        # Re-send the unchanged last candle using the existing protocol.
+                        events = [{"symbol": symbol, "bar": bars[-1]}]
                     syncing = next_sync
-                    if event is not None:
-                        event["syncing"] = syncing
+                    for index, event in enumerate(events):
+                        event["syncing"] = syncing or index < len(events) - 1
+                        event["history_age_s"] = history_age_s
                         received_at = KLINE_HUB.timing_for(key, next_version) if now - last_trace >= 2 else None
                         if received_at is not None:
                             sent_at = time.time()
@@ -2041,10 +2073,11 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(400, {"error": str(exc)})
             return
         try:
-            bars, syncing = KLINE_HUB.snapshot(symbol, period, count, with_sync=True)
+            bars, syncing, history_age_s = KLINE_HUB.snapshot(symbol, period, count, with_sync=True, with_age=True)
             self.reply(200 if bars else 503, {
                 "symbol": symbol, "period": period, "bars": bars,
                 "error": None if bars else "no_data", "syncing": syncing,
+                "history_age_s": history_age_s,
             })
         except KlineCapacityError:
             self.reply(503, {"error": "kline_subscription_limit"})

@@ -108,9 +108,9 @@ class GatewayStreamingTests(unittest.TestCase):
                         headers={}, reply=lambda status, payload: output.append((status, payload)))
                     bars = [{"time": 100, "open": 1, "high": 2, "low": 1, "close": 2, "volume": 5}]
                     with patch.object(gateway, "MARKET_ACCESS", ""), patch.object(
-                            gateway.KLINE_HUB, "snapshot", return_value=(bars, False)) as snapshot:
+                            gateway.KLINE_HUB, "snapshot", return_value=(bars, False, 0.0)) as snapshot:
                         gateway.Handler.do_GET(handler)
-                        snapshot.assert_called_once_with(product, 1800, 200, with_sync=True)
+                        snapshot.assert_called_once_with(product, 1800, 200, with_sync=True, with_age=True)
                     self.assertEqual(output[0][0], 200)
                     self.assertEqual(output[0][1]["symbol"], product)
             self.assertFalse(gateway.supported_symbol("CZCE.UNKNOWN"))
@@ -702,10 +702,10 @@ class GatewayStreamingTests(unittest.TestCase):
             reply=lambda status, payload: output.append((status, payload)))
         bars = [{"time": i, "open": 1, "high": 1, "low": 1,
                  "close": 1, "volume": 1} for i in range(5)]
-        with patch.object(gateway.KLINE_HUB, "snapshot", return_value=(bars, False)) as cached:
+        with patch.object(gateway.KLINE_HUB, "snapshot", return_value=(bars, False, 0.0)) as cached:
             with patch.object(gateway, "load_bars") as old_api:
                 gateway.Handler.do_GET(handler)
-        cached.assert_called_once_with("CZCE.MA701", 900, 5, with_sync=True)
+        cached.assert_called_once_with("CZCE.MA701", 900, 5, with_sync=True, with_age=True)
         old_api.assert_not_called()
         self.assertEqual(output[0][0], 200)
         self.assertEqual(output[0][1]["bars"], bars)
