@@ -308,12 +308,14 @@ struct LightMarketView: View {
                         live, extra in live.last == nil && live.code == extra.code ? extra : live
                     })
             }
-            .fullScreenCover(isPresented:$showingTradingCenter) {
+            .navigationDestination(isPresented:$showingTradingCenter) {
                 TradingCenterView(favoriteIDs:favorites.ids,mainCodes:contracts.merging(onDemandQuotes) { live,extra in live.last == nil && live.code == extra.code ? extra : live }.mapValues(\.code))
+                    .environment(\.qihuiInPageStack,true)
             }
-            .sheet(isPresented:$showingStrategyCenter) {
+            .navigationDestination(isPresented:$showingStrategyCenter) {
                 QihuiSettingsView(instruments:catalog, favoriteIDs:favorites.ids,
                                    mainCodes:contracts.merging(onDemandQuotes) { live,extra in live.last == nil && live.code == extra.code ? extra : live }.mapValues(\.code))
+                    .environment(\.qihuiInPageStack,true)
             }
             .task(id: quoteRequestKey + "|" + String(describing: marketScenePhase)) {
                 guard marketScenePhase == .active else { return }

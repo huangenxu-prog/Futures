@@ -476,7 +476,7 @@ struct TradingCenterView: View {
     var quickOnly = false
 
     var body: some View {
-        NavigationStack {
+        QihuiPageStack {
             Group {
                 if session.signedIn {
                     if quickOnly {
@@ -511,18 +511,18 @@ struct TradingCenterView: View {
                     ToolbarItem(placement: .topBarTrailing) { connectionIndicator }
                 }
             }
-            .sheet(isPresented: $selecting) {
+            .navigationDestination(isPresented: $selecting) {
                 PaperContractPicker(instruments: catalog, favoriteIDs: favoriteIDs, mainCodes: mainCodes) { c in
                     choose(c); selecting = false
                 }
             }
-            .fullScreenCover(isPresented: $showHoldingChart) {
+            .navigationDestination(isPresented: $showHoldingChart) {
                 if let chartProduct, let chartQuote {
                     InstrumentDetailView(instrument: chartProduct, selectedContract: chartQuote)
                 }
             }
-            .sheet(isPresented: $showAccount) {
-                NavigationStack {
+            .navigationDestination(isPresented: $showAccount) {
+                QihuiPageStack {
                     Form {
                         if let a = session.snapshot?.account {
                             LabeledContent("账户权益", value: money(a.balance))
@@ -584,7 +584,7 @@ struct TradingCenterView: View {
                     recentTradeQuotes.removeAll(); expandedHolding = nil
                 }
             }
-            .sheet(isPresented: $showConnectionSettings) { TradeConnectionSettingsView() }
+            .navigationDestination(isPresented: $showConnectionSettings) { TradeConnectionSettingsView() }
             .task(id: "\(address)-\(scenePhase)") {
                 guard scenePhase == .active else { return }
                 while !Task.isCancelled {
@@ -1759,7 +1759,7 @@ struct TradingCenterView: View {
 struct TradeConnectionSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
-        NavigationStack {
+        QihuiPageStack {
             Form { TradeConnectionFields() }
                 .navigationTitle("交易设置").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }

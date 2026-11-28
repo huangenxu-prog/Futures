@@ -23,7 +23,7 @@ struct PaperContractPicker:View {
         }
     }
     var body:some View{
-        NavigationStack{
+        QihuiPageStack {
             List{
                 ForEach(matching){item in
                     NavigationLink {

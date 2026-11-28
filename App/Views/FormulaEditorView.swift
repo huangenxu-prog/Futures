@@ -16,7 +16,7 @@ struct FormulaEditorView: View {
     @State private var insertion = 0
 
     var body: some View {
-        NavigationStack {
+        QihuiPageStack {
             VStack(alignment:.leading,spacing:12) {
                 VStack(spacing:10) {
                     HStack {

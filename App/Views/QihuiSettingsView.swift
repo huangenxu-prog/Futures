@@ -45,7 +45,7 @@ struct QihuiSettingsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        QihuiPageStack {
             Form {
                 Section("临时性能诊断") {
                     Button(captureRunning ? "停止采样" : "开始采样") {
@@ -127,9 +127,9 @@ struct QihuiSettingsView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
             .onAppear { marketConfigured = !MarketAccessKey.load().isEmpty }
             .onDisappear { marketKey = "" }
-            .sheet(isPresented: $strategy) { StrategyCenterView(instruments: instruments, favoriteIDs: favoriteIDs, mainCodes: mainCodes) }
-            .sheet(isPresented: $indicators) { IndicatorSettingsView(settings: ChartDisplaySettings.load()) { $0.save() } }
-            .sheet(isPresented: $period) {
+            .navigationDestination(isPresented: $strategy) { StrategyCenterView(instruments: instruments, favoriteIDs: favoriteIDs, mainCodes: mainCodes) }
+            .navigationDestination(isPresented: $indicators) { IndicatorSettingsView(settings: ChartDisplaySettings.load()) { $0.save() } }
+            .navigationDestination(isPresented: $period) {
                 PeriodOrderView(order: periods, label: { QihuiPeriods.labels[$0] ?? $0 }) { updated in
                     storedPeriodOrder = updated.joined(separator: ",")
                     hiddenPeriods = QihuiPeriods.all.filter { !updated.contains($0) }.joined(separator: ",")

@@ -20,7 +20,7 @@ struct IndicatorSettingsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        QihuiPageStack {
             VStack(spacing:8) {
                 HStack(spacing:6) {
                     indicatorTab("内置指标",custom:false)
@@ -189,8 +189,8 @@ struct IndicatorSettingsView: View {
                     .disabled(!draft.isValid)
                 }
             }
-        }
-        .sheet(item: $editingFormula) { formula in
+        .navigationDestination(isPresented: Binding(get:{ editingFormula != nil },set:{ if !$0 { editingFormula = nil } })) {
+            if let formula = editingFormula {
             FormulaEditorView(draft: formula) { updated in
                 if let i = draft.formulas.firstIndex(where: { $0.id == updated.id }) {
                     draft.formulas[i] = updated
@@ -199,7 +199,9 @@ struct IndicatorSettingsView: View {
                 }
             }
         }
-        .sheet(item: $composingFormula) { formula in
+        }
+        .navigationDestination(isPresented: Binding(get:{ composingFormula != nil },set:{ if !$0 { composingFormula = nil } })) {
+            if let formula = composingFormula {
             FormulaComposerView(draft:formula,previewBars:previewBars) { updated in
                 if let i = draft.formulas.firstIndex(where:{$0.id == updated.id}) {
                     draft.formulas[i] = updated
@@ -207,6 +209,8 @@ struct IndicatorSettingsView: View {
                     draft.formulas.append(updated)
                 }
             }
+        }
+        }
         }
         .tint(MarketPalette.accent)
     }

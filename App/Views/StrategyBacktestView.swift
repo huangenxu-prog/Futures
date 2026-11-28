@@ -48,7 +48,7 @@ struct StrategyBacktestView: View {
     @State private var task: Task<Void,Never>?
 
     var body: some View {
-        NavigationStack {
+        QihuiPageStack {
             Form {
                 Section("回测条件") {
                     Picker("策略", selection: $strategyID) {

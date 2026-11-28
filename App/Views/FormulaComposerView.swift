@@ -27,7 +27,7 @@ struct FormulaComposerView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        QihuiPageStack {
             ScrollView {
                 VStack(alignment:.leading,spacing:12) {
                     metadataSection

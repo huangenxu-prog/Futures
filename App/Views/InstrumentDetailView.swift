@@ -856,7 +856,7 @@ struct PeriodOrderView: View {
     let onSave: ([String]) -> Void
 
     var body: some View {
-        NavigationStack {
+        QihuiPageStack {
             List {
                 ForEach(order, id: \.self) { item in
                     HStack {
