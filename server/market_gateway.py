@@ -1291,7 +1291,7 @@ class SharedKlineHub:
         with self.condition:
             self.pending_disk_writes[key] = bars
             self.pending_disk_writes.move_to_end(key)
-            while len(self.pending_disk_writes) > KLINE_MAX_SERIES:
+            while len(self.pending_disk_writes) > self.max_series:
                 dropped, _ = self.pending_disk_writes.popitem(last=False)
                 self.last_saved.pop(dropped, None)
             if self.disk_writer is None or not self.disk_writer.is_alive():
@@ -1578,6 +1578,9 @@ class SharedKlineHub:
                     reclaim_sdk_memory("kline-live")
 
 
+UNIFIED_MAX_SERIES = 32
+
+
 class UnifiedKlineHub(SharedKlineHub):
     """Experimental single-source SDK window; disk is an archive, not a live source.
 
@@ -1586,7 +1589,7 @@ class UnifiedKlineHub(SharedKlineHub):
     no historical worker and no quote-based inference of K-line freshness.
     """
 
-    def __init__(self, max_series=KLINE_MAX_SERIES, store=None):
+    def __init__(self, max_series=UNIFIED_MAX_SERIES, store=None):
         super().__init__(max_series=max_series, store=store)
         self.ready_generation = {}
         self.sdk_sessions = 0

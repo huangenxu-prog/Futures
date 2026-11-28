@@ -82,3 +82,17 @@ class UnifiedTests(unittest.TestCase):
         corrected[1]["close"] = 2
         self.assertTrue(self.hub._publish_sdk(self.key, corrected, 0))
         self.assertEqual(self.hub.read(self.key, timeout=0)[0], corrected)
+
+    def test_default_capacity_is_32_with_two_foreground_slots(self):
+        from unittest.mock import patch
+        hub = g.UnifiedKlineHub()
+        hub.start = lambda: None
+        with patch.object(g, "favorite_warm_memory_ok", return_value=True):
+            hub.warm_symbols(["DCE.a2701", "DCE.c2701", "DCE.m2701", "CZCE.SR701",
+                              "SHFE.rb2701", "SHFE.ag2701", "SHFE.au2701"])
+        self.assertEqual(hub.max_series, 32)
+        self.assertEqual(len(hub.entries), 30)
+        self.assertEqual(hub.status()["max_live_series"], 32)
+        hub.reserve("DCE.y2701", 300, listener=True)
+        hub.reserve("DCE.p2701", 300, waiter=True)
+        self.assertEqual(len(hub.entries), 32)
