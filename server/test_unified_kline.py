@@ -96,3 +96,24 @@ class UnifiedTests(unittest.TestCase):
         hub.reserve("DCE.y2701", 300, listener=True)
         hub.reserve("DCE.p2701", 300, waiter=True)
         self.assertEqual(len(hub.entries), 32)
+
+    def test_cold_batch_installs_all_before_wait_and_never_resubscribes(self):
+        hub = g.UnifiedKlineHub()
+        hub.start = lambda: None
+        keys = [hub.reserve(symbol, period, waiter=True)
+                for symbol in ("DCE.a2701", "DCE.c2701", "DCE.m2701", "CZCE.SR701")
+                for period in (60, 300, 900, 1800, 3600, 7200, 86400, 604800)]
+        api = Mock()
+        installed = {}
+        hub._install_pending(api, installed, keys, hub.generation)
+        self.assertEqual(list(installed), keys)
+        self.assertEqual(api.get_kline_serial.call_count, 32)
+        api.wait_update.assert_not_called()
+        hub._install_pending(api, installed, keys, hub.generation)
+        self.assertEqual(api.get_kline_serial.call_count, 32)
+        self.assertEqual(hub.sdk_subscriptions, 32)
+
+    def test_stale_generation_does_not_install(self):
+        api = Mock()
+        self.hub._install_pending(api, {}, [self.key], -1)
+        api.get_kline_serial.assert_not_called()

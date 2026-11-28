@@ -1508,6 +1508,19 @@ class SharedKlineHub:
                 batches = 0
                 reclaim_sdk_memory("history-batch")
 
+    def _install_pending(self, api, installed, targets, generation):
+        # Register the bounded batch before waiting for SDK updates. Preserve
+        # reservation order among active readers to avoid starving older calls.
+        for key in targets:
+            with self.condition:
+                if generation != self.generation:
+                    return
+            if key not in installed:
+                installed[key] = api.get_kline_serial(
+                    key[0], key[1], data_length=KLINE_HISTORY_LENGTH)
+                with self.condition:
+                    self.sdk_subscriptions += 1
+
     def run(self):
         while True:
             api = None
@@ -1782,16 +1795,8 @@ class UnifiedKlineHub(SharedKlineHub):
                             break
                         targets = sorted(self.entries, key=lambda key: (
                             not (self.entries[key]["listeners"] or self.entries[key]["waiters"]),
-                            -self.entries[key]["used"]))
-                    for key in targets:
-                        if key not in installed:
-                            installed[key] = api.get_kline_serial(
-                                key[0], key[1], data_length=KLINE_HISTORY_LENGTH)
-                            with self.condition:
-                                self.sdk_subscriptions += 1
-                            # Install at most one new serial per loop; process
-                            # every already-installed serial before the next.
-                            break
+                            ))
+                    self._install_pending(api, installed, targets, generation)
                     updated = api.wait_update(deadline=time.time() + 0.3)
                     received_at = time.time()
                     for key, serial in list(installed.items()):
