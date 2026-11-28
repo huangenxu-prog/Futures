@@ -15,7 +15,7 @@ struct StrategyBacktestView: View {
     @State private var period = 1800
     @State private var strategyID = "default"
     @AppStorage("qihui.backtest.strategy-parameters.v1") private var savedParameters = Data()
-    private struct StrategyParameters: Codable {
+    private struct StrategyParameters: Codable, Equatable {
         var risk: Double = 1000
         var target: Double = 2
         var protectProfit: Bool = true
@@ -79,6 +79,50 @@ struct StrategyBacktestView: View {
 
     var body: some View {
         QihuiPageStack {
+            backtestForm
+            .scrollContentBackground(.hidden)
+            .background(backgroundStyle.raised.ignoresSafeArea())
+            .scrollDismissesKeyboard(.immediately)
+            .onSubmit { dismissInput() }
+            .navigationTitle("策略中心")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if !inPageStack {
+                    ToolbarItem(placement:.cancellationAction) { Button("关闭") { dismissInput(); dismiss() } }
+                }
+                ToolbarItemGroup(placement:.keyboard) {
+                    Spacer()
+                    Button("完成") { dismissInput() }.fontWeight(.semibold)
+                }
+            }
+            .task(id: productID) { await loadContracts(productID) }
+            .onAppear { restoreParameters(for: strategyID) }
+            .onChange(of: strategyID) { old, value in
+                persistParameters(for: old)
+                if value == "default" { source = "LONG:CROSS(EMA(C,20),EMA(C,50));\nSHORT:CROSS(EMA(C,50),EMA(C,20));" }
+                else if let formula = formulas.first(where: { $0.id.uuidString == value }) { source = formula.source }
+                restoreParameters(for: value)
+                result = nil; error = nil
+            }
+            .onChange(of: parameterSnapshot) { _, _ in
+                result = nil; error = nil
+                persistParameters(for:strategyID)
+            }
+            .onChange(of: source) { _, _ in result = nil; error = nil }
+            .onChange(of: symbol) { _, _ in result = nil; error = nil }
+            .onChange(of: period) { _, _ in result = nil; error = nil }
+            .onDisappear { persistParameters(for: strategyID); task?.cancel() }
+        }
+    }
+
+    private var parameterSnapshot: StrategyParameters {
+        StrategyParameters(risk:risk,target:target,protectProfit:protectProfit,
+            longSignal:longSignal,shortSignal:shortSignal,stopSeries:stopSeries,
+            crossA:crossA,crossB:crossB,crossMode:crossMode,reverse:reverse,
+            reverseCross:reverseCross,capital:initial,contracts:lots,history:historyCount)
+    }
+
+    private var backtestForm: some View {
             Form {
                 Section("回测条件") {
                     Picker("策略", selection: $strategyID) {
@@ -190,49 +234,6 @@ struct StrategyBacktestView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(backgroundStyle.raised.ignoresSafeArea())
-            .scrollDismissesKeyboard(.immediately)
-            .onSubmit { dismissInput() }
-            .navigationTitle("策略中心")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if !inPageStack {
-                    ToolbarItem(placement:.cancellationAction) { Button("关闭") { dismissInput(); dismiss() } }
-                }
-                ToolbarItemGroup(placement:.keyboard) {
-                    Spacer()
-                    Button("完成") { dismissInput() }.fontWeight(.semibold)
-                }
-            }
-            .task(id: productID) { await loadContracts(productID) }
-            .onAppear { restoreParameters(for: strategyID) }
-            .onChange(of: strategyID) { old, value in
-                persistParameters(for: old)
-                if value == "default" { source = "LONG:CROSS(EMA(C,20),EMA(C,50));\nSHORT:CROSS(EMA(C,50),EMA(C,20));" }
-                else if let formula = formulas.first(where: { $0.id.uuidString == value }) { source = formula.source }
-                restoreParameters(for: value)
-                result = nil; error = nil
-            }
-            .onChange(of: risk) { _, _ in result = nil; error = nil; persistParameters(for:strategyID) }
-            .onChange(of: target) { _, _ in result = nil; error = nil; persistParameters(for:strategyID) }
-            .onChange(of: protectProfit) { _, _ in result = nil; error = nil; persistParameters(for:strategyID) }
-            .onChange(of: source) { _, _ in result = nil; error = nil }
-            .onChange(of:longSignal) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
-            .onChange(of:shortSignal) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
-            .onChange(of:stopSeries) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
-            .onChange(of:crossA) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
-            .onChange(of:crossB) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
-            .onChange(of:crossMode) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
-            .onChange(of:reverse) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
-            .onChange(of:reverseCross) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
-            .onChange(of:initial) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
-            .onChange(of:lots) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
-            .onChange(of:historyCount) { _,_ in result=nil;error=nil;persistParameters(for:strategyID) }
-            .onChange(of: symbol) { _, _ in result = nil; error = nil }
-            .onChange(of: period) { _, _ in result = nil; error = nil }
-            .onDisappear { persistParameters(for: strategyID); task?.cancel() }
-        }
     }
 
     private var mappingSection: some View {
