@@ -50,12 +50,19 @@ struct QihuiSAR: ChartIndicator {
     var displayName: String { "SAR" }
     var placement: IndicatorPlacement { .overlay }
     func calculate(_ input: IndicatorInput) -> IndicatorOutput {
-        IndicatorOutput(lines: [IndicatorLine(id: id+".line", name: "SAR",
-            values: plotted(FuturesIndicatorMath.sar(indicatorBars(input), step: step, maximum: maximum),input),
-            style: IndicatorLineStyle(color: ChartColor(hex: "B57CFF"), width: 1.2, dash: [2,2]))])
+        let values = plotted(FuturesIndicatorMath.sar(indicatorBars(input), step: step, maximum: maximum),input)
+        let lows = Dictionary(input.candles.map { ($0.time,$0.low) },uniquingKeysWith:{ _,latest in latest })
+        let signals = values.map { point in
+            let rising = lows[point.time].map { point.value <= $0 } ?? false
+            return IndicatorSignal(time:point.time,value:point.value,text:"●",
+                color:ChartColor(hex:rising ? "FF5B5B" : "23C6C8"),fontSize:8)
+        }
+        return IndicatorOutput(signals:signals,legendValues:[
+            IndicatorLine(id:id+".legend",name:"SAR",values:values,
+                style:IndicatorLineStyle(color:ChartColor(hex:"B57CFF")))
+        ])
     }
 }
-
 
 /// Actual closing open interest, never derived from price or volume.
 struct QihuiOpenInterest: ChartIndicator {
