@@ -282,3 +282,5 @@ struct ChartDisplaySettings: Codable, Equatable {
         return result
     }
 }
+
+// Indicator workspace build verification.
