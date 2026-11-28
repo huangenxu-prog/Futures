@@ -36,60 +36,42 @@ def segment(source, node):
     return "".join(source.splitlines(True)[node.lineno-1:node.end_lineno])
 
 
-def normalized_restore(node):
-    # Phase one may drop/zero just the cached history clock.
-    import copy
-    node = copy.deepcopy(node)
-    for parent in ast.walk(node):
-        if hasattr(parent, "body") and isinstance(parent.body, list):
-            parent.body[:] = [stmt for stmt in parent.body if not (
-                isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
-                and ast.unparse(stmt.targets[0]) == "self.last_history[key]")]
-    return ast.dump(node)
+# Exact method bodies reviewed from the November 28 production diff.
+# Only methods touched by this release are considered for replacement.
+REVIEWED_HUB = {
+    "__init__": "abd190a623a4da4959d984bf4a08e57ebf5220a1bf4dd643eb6921bdf9a12d9d",
+    "_restore_locked": "16f20a3d79f232f78c052a834b2dfbda75d21578eae41a75fee59d4f4920dcf2",
+    "_trim_cache_locked": "4d008931f0be2d0d503fc505b9da553dffc4a6bf0457c70c08c1f8a21e15a6c2",
+    "read": "0e6d50f1f8c451a4a263ec3a42751781c0f209de69479fb5d412b2d090233e6c",
+    "reserve": "cb373002050dfdde9188f16ae6ab75339af2952a9c9b7f7f7b91ae2a459fd9c2",
+    "run_history": "c03cca31dadc894ac8eabf3abb9f0f7e55a7adb3876b426648fdd81b035309be",
+    "snapshot": "fea45c851b57e0d09d1d36fa418d28c6d2ef9249d04948cff17559c7d9bfa726",
+    "warm_symbols": "f29cb4c688de87f793d2720b41d339927c6a7a3973f0d9e0a10dbbbd606da60f",
+}
 
 
-def phase_one_only(name, base, current, backup):
-    if not backup or ast.dump(base.args) != ast.dump(current.args):
-        return False
-    if name == "_restore_locked":
-        return normalized_restore(base) == normalized_restore(current)
-    # A recognized phase-one replacement may only read/wait/schedule. Unfamiliar
-    # server optimizations or changed interfaces need a source-specific review.
-    if name not in {"read", "snapshot"} or ast.dump(base) != ast.dump(backup):
-        return False
-    known = {n.attr for n in ast.walk(base) if isinstance(n, ast.Attribute)}
-    known.update("read pending_history history_running history_completed history_retry_after last_history condition notify_all monotonic wait get cache cached_used".split())
-    for n in ast.walk(current):
-        if isinstance(n, ast.Attribute) and n.attr not in known:
-            return False
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id not in {
-            "min", "max", "float", "list", "bool", "len", "quote_symbol"}:
-            return False
-    return True
-
-
-def candidate(base, new, live, backup, work):
+def candidate(base, new, live):
     old_methods, new_methods, live_methods = map(methods, (base, new, live))
-    backup_methods = methods(backup) if backup else {}
     lines = live.splitlines(True)
     edits = []
     for key, old in old_methods.items():
-        new_fn = new_methods[key]
-        before, after = segment(base, old), segment(new, new_fn)
+        before = segment(base, old)
+        after = segment(new, new_methods[key])
         if before == after:
             continue
         actual = live_methods[key]
         current = segment(live, actual)
-        if current != before and current != after:
-            for filename, value in (("live", current), ("base", before), ("new", after)):
-                (work / filename).write_text(value)
-            merged = subprocess.run(["git", "merge-file", "-p", "live", "base", "new"],
-                                    cwd=work, capture_output=True, text=True)
-            if merged.returncode == 0:
-                after = merged.stdout
-            elif not (key[0] == "SharedKlineHub" and phase_one_only(
-                    key[1], old, actual, backup_methods.get(key))):
-                raise RuntimeError(f"Unreviewed live difference in {key}; source unchanged")
+        digest = hashlib.sha256(current.encode()).hexdigest()
+        reviewed = key[0] == "SharedKlineHub" and REVIEWED_HUB.get(key[1]) == digest
+        if key == ("SharedKlineHub", "warm_symbols"):
+            # Retain the site's warm hint for a recently synced short history.
+            site_after = after.replace("if len(bars) > KLINE_DATA_LENGTH and", "if bars and")
+            if reviewed or current == site_after:
+                after = site_after
+        if current == after:
+            continue
+        if current != before and not reviewed:
+            raise RuntimeError(f"Unreviewed live difference in {key}; source unchanged")
         edits.append((actual.lineno-1, actual.end_lineno, after))
     for start, end, replacement in sorted(edits, reverse=True):
         lines[start:end] = [replacement]
@@ -171,10 +153,9 @@ def deploy(rev):
     with tempfile.TemporaryDirectory(dir=TARGET.parent, prefix=".first-frame-") as tmp:
         work = Path(tmp)
         original = TARGET.read_bytes()
-        prior = TARGET.with_suffix(".py.bak-first-sync")
         base = fetch(BASE, "market_gateway.py").decode()
         updated = fetch(rev, "market_gateway.py").decode()
-        result = candidate(base, updated, original.decode(), prior.read_text() if prior.exists() else "", work)
+        result = candidate(base, updated, original.decode())
         staged = work / TARGET.name
         shutil.copy2(TARGET, staged)
         staged.write_text(result)

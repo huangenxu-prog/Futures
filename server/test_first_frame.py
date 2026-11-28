@@ -9,7 +9,7 @@ import tempfile
 import time
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, mock_open, patch
 
 source = Path(os.environ.get("QIHUI_TEST_GATEWAY", Path(__file__).with_name("market_gateway.py")))
 spec = importlib.util.spec_from_file_location("first_frame_gateway", source)
@@ -31,6 +31,25 @@ class FirstFrameTests(unittest.TestCase):
         self.store = gateway.KlineFileCache(directory.name)
         self.hub = gateway.SharedKlineHub(store=self.store)
         self.hub.start = lambda: None
+
+    def test_history_worker_accepts_queue_without_enqueue_clock(self):
+        self.hub.pending_history.add(self.key)
+        self.hub.urgent_history.append(self.key)
+        api = Mock()
+        api.is_serial_ready.return_value = True
+        expected = rows(10, 20, 30)
+        credentials = mock_open(read_data='{"username":"test","password":"test"}')
+        with patch.object(gateway, "open", credentials, create=True), \
+             patch.object(gateway, "TqAuth"), patch.object(gateway, "TqApi", return_value=api) as connect, \
+             patch.object(gateway, "bars_from_serial", return_value=expected), \
+             patch.object(self.hub.condition, "wait", side_effect=StopIteration):
+            with self.assertRaises(StopIteration):
+                self.hub.run_history()
+        connect.assert_called_once()
+        api.get_kline_serial.assert_called_once()
+        self.assertIn(self.key, self.hub.history_completed)
+        self.assertEqual(self.hub.read(self.key, timeout=0)[0], expected)
+        self.assertFalse(self.hub.history_running)
 
     def test_live_first_cannot_escape_http_sse_or_disk(self):
         self.hub.publish(self.key, rows(51, 61))

@@ -1414,7 +1414,8 @@ class SharedKlineHub:
                     if candidate in self.pending_history:
                         self.pending_history.remove(candidate)
                         self.history_running.add(candidate)
-                        queue_ms = (time.monotonic() - self.history_enqueued.pop(candidate, time.monotonic())) * 1000
+                        queued = self.history_enqueued.pop(candidate, None)
+                        queue_ms = f"{(time.monotonic() - queued) * 1000:.1f}" if queued is not None else "unknown"
                         key = candidate
                         break
             if key is None:
@@ -1449,7 +1450,7 @@ class SharedKlineHub:
                         if accepted:
                             self.history_retry_after.pop(key, None)
                         self.condition.notify_all()
-                    print(f"QIHUI_FIRST_FRAME event=history accepted={int(bool(accepted))} history_tail={bars[-1]['time']} symbol={key[0]} period={key[1]} queue_ms={max(0, queue_ms):.1f} sdk_ms={sdk_ms:.1f} publish_ms={publish_ms:.1f} bars={len(bars)}", flush=True)
+                    print(f"QIHUI_FIRST_FRAME event=history accepted={int(bool(accepted))} history_tail={bars[-1]['time']} symbol={key[0]} period={key[1]} queue_ms={queue_ms} sdk_ms={sdk_ms:.1f} publish_ms={publish_ms:.1f} bars={len(bars)}", flush=True)
                 else:
                     with self.condition:
                         self.history_retry_after[key] = time.monotonic() + 60
