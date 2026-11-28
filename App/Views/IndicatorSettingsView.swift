@@ -6,6 +6,7 @@ struct IndicatorSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focusedField: String?
     @State private var draft: ChartDisplaySettings
+    @State private var customTab = false
     @State private var editingFormula: FormulaDefinition?
     @State private var composingFormula: FormulaDefinition?
     let previewBars: [FormulaBar]
@@ -20,6 +21,12 @@ struct IndicatorSettingsView: View {
 
     var body: some View {
         NavigationStack {
+            VStack(spacing:8) {
+                HStack(spacing:6) {
+                    indicatorTab("内置指标",custom:false)
+                    indicatorTab("自定义指标",custom:true)
+                }.padding(.horizontal,16)
+                if customTab { customWorkspace } else {
             Form {
                 Section {
                     averageRow("MA", kind: .sma, value: $draft.sma)
@@ -134,47 +141,6 @@ struct IndicatorSettingsView: View {
                     parameter("RSI 周期", value: $draft.rsi, id:"rsi")
                 }
                 }
-                Section("自定义指标") {
-                    ForEach(draft.formulas) { formula in
-                        HStack {
-                            Toggle(isOn: formulaEnabledBinding(formula)) {
-                                VStack(alignment:.leading,spacing:4) {
-                                    Text(formula.name).font(.headline)
-                                    Text(formula.overlay ? "主图 · 自定义" : "副图 · 自定义").font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            Menu {
-                                if formula.composition != nil {
-                                    Button("编辑组合",systemImage:"slider.horizontal.3") { dismissInput(); composingFormula = formula }
-                                }
-                                Button("编辑公式",systemImage:"pencil") { dismissInput(); editingFormula = formula }
-                            } label: {
-                                Image(systemName:"pencil")
-                            }
-                            .accessibilityLabel("编辑指标")
-                        }
-                    }
-                    .onDelete { dismissInput(); draft.formulas.remove(atOffsets: $0) }
-                    .onMove { from,to in draft.formulas.move(fromOffsets:from,toOffset:to) }
-                    Button {
-                        dismissInput()
-                        var formula = FormulaDefinition()
-                        formula.name = "组合指标"
-                        formula.enabled = true
-                        formula.composition = FormulaComposition()
-                        composingFormula = formula
-                    } label: {
-                        Label("新建组合指标", systemImage:"plus.circle")
-                    }
-                    .disabled(draft.formulas.count >= 12)
-                    Button {
-                        dismissInput()
-                        editingFormula = FormulaDefinition()
-                    } label: {
-                        Label("新建公式指标", systemImage: "plus.circle")
-                    }
-                    .disabled(draft.formulas.count >= 12)
-                }
                 Section {
                     Button("恢复默认参数") {
                         dismissInput()
@@ -195,6 +161,9 @@ struct IndicatorSettingsView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+                }
+            }
             .scrollDismissesKeyboard(.immediately)
             .onSubmit { dismissInput() }
             .scrollContentBackground(.hidden)
@@ -207,10 +176,7 @@ struct IndicatorSettingsView: View {
                     Button("完成") { dismissInput() }.fontWeight(.semibold)
                 }
                 ToolbarItem(placement: .topBarLeading) {
-                    HStack(spacing:12) {
-                        Button("取消") { dismissInput(); dismiss() }
-                        EditButton()
-                    }
+                    Button("取消") { dismissInput(); dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("保存") {
@@ -243,6 +209,84 @@ struct IndicatorSettingsView: View {
             }
         }
         .tint(MarketPalette.accent)
+    }
+
+    private func indicatorTab(_ title:String,custom:Bool) -> some View {
+        Button {
+            dismissInput(); customTab = custom
+        } label: {
+            Text(title).font(.subheadline.weight(.semibold))
+                .foregroundStyle(customTab == custom ? Color.white : MarketPalette.muted)
+                .frame(maxWidth:.infinity).padding(.vertical,11)
+                .background(customTab == custom ? MarketPalette.accent : Color.clear,in:RoundedRectangle(cornerRadius:8))
+        }.buttonStyle(.plain)
+    }
+
+    private var customWorkspace: some View {
+        VStack(spacing:12) {
+            ScrollView {
+                LazyVStack(spacing:8) {
+                    if draft.formulas.isEmpty {
+                        Text("尚无自定义指标").foregroundStyle(MarketPalette.muted).padding(32)
+                    }
+                    ForEach(draft.formulas) { formula in
+                        HStack(spacing:10) {
+                            Image(systemName:formula.composition == nil ? "function" : "waveform.path")
+                                .foregroundStyle(MarketPalette.accent).frame(width:28)
+                            Button {
+                                dismissInput()
+                                if formula.composition != nil { composingFormula = formula }
+                                else { editingFormula = formula }
+                            } label: {
+                                VStack(alignment:.leading,spacing:4) {
+                                    Text(formula.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                    Text((formula.overlay ? "主图" : "副图") + (formula.composition == nil ? " · 公式" : " · 组合"))
+                                        .font(.caption).foregroundStyle(MarketPalette.muted)
+                                }.frame(maxWidth:.infinity,alignment:.leading)
+                            }.buttonStyle(.plain)
+                            Button {
+                                let binding = formulaEnabledBinding(formula)
+                                binding.wrappedValue.toggle()
+                            } label: {
+                                Image(systemName:formula.enabled ? "checkmark.circle.fill" : "circle")
+                                    .font(.title3).foregroundStyle(formula.enabled ? MarketPalette.accent : MarketPalette.muted)
+                            }.buttonStyle(.plain).accessibilityLabel(formula.enabled ? "关闭指标" : "启用指标")
+                            Menu {
+                                Button("编辑公式",systemImage:"pencil") { editingFormula = formula }
+                                if formula.composition != nil {
+                                    Button("编辑组合",systemImage:"slider.horizontal.3") { composingFormula = formula }
+                                }
+                                Button("上移",systemImage:"arrow.up") { moveFormula(formula.id,by:-1) }
+                                Button("下移",systemImage:"arrow.down") { moveFormula(formula.id,by:1) }
+                                Button("删除",systemImage:"trash",role:.destructive) { draft.formulas.removeAll { $0.id == formula.id } }
+                            } label: {
+                                Image(systemName:"ellipsis").frame(width:28,height:36).foregroundStyle(MarketPalette.muted)
+                            }
+                        }.padding(12).background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:10))
+                    }
+                }.padding(.horizontal,16).padding(.top,6)
+            }
+            HStack(spacing:10) {
+                Button {
+                    var formula = FormulaDefinition()
+                    formula.name = "组合指标"; formula.enabled = true; formula.composition = FormulaComposition()
+                    composingFormula = formula
+                } label: {
+                    Label("新建组合",systemImage:"plus").frame(maxWidth:.infinity).padding(.vertical,12)
+                        .background(Color.primary.opacity(0.07),in:RoundedRectangle(cornerRadius:10))
+                }
+                Button { editingFormula = FormulaDefinition() } label: {
+                    Label("新建公式",systemImage:"plus").foregroundStyle(.white).frame(maxWidth:.infinity).padding(.vertical,12)
+                        .background(MarketPalette.accent,in:RoundedRectangle(cornerRadius:10))
+                }
+            }.buttonStyle(.plain).disabled(draft.formulas.count >= 12).padding(.horizontal,16).padding(.bottom,12)
+        }
+    }
+
+    private func moveFormula(_ id:UUID,by delta:Int) {
+        guard let index = draft.formulas.firstIndex(where: { $0.id == id }),
+              draft.formulas.indices.contains(index+delta) else { return }
+        draft.formulas.swapAt(index,index+delta)
     }
 
     // Resolve by stable UUID on every access; SwiftUI controls may retain

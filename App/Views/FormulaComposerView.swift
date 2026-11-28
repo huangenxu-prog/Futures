@@ -28,12 +28,14 @@ struct FormulaComposerView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                metadataSection
-                curveSections
-                addCurveSection
-                previewSection
-                sourceSection
+            ScrollView {
+                VStack(alignment:.leading,spacing:12) {
+                    metadataSection
+                    curveSections
+                    addCurveSection
+                    previewSection
+                    sourceSection
+                }.padding(16)
             }
             .scrollDismissesKeyboard(.immediately)
             .onSubmit { dismissInput() }
@@ -77,15 +79,16 @@ struct FormulaComposerView: View {
     }
 
     private var metadataSection: some View {
-        Section("指标") {
-            TextField("指标名称",text:$draft.name)
-    .focused($focusedField,equals:"indicator-name")
+        VStack(spacing:10) {
+            HStack {
+                TextField("指标名称",text:$draft.name).focused($focusedField,equals:"indicator-name")
+                Toggle("显示指标",isOn:$draft.enabled).labelsHidden().fixedSize()
+            }
             Picker("绘制位置",selection:$draft.overlay) {
                 Text("主图").tag(true)
                 Text("副图").tag(false)
-            }
-            Toggle("显示指标",isOn:$draft.enabled)
-        }
+            }.pickerStyle(.segmented)
+        }.padding(12).background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:10))
     }
 
     private var curveSections: some View {
@@ -98,11 +101,11 @@ struct FormulaComposerView: View {
         let id = binding.wrappedValue.id
         let number = index(for:id)
         let canDelete = composition.lines.count > 1
-        return Section {
+        return VStack {
             CompositionLineEditor(line:binding,number:number,canDelete:canDelete,focusedField:$focusedField,onDelete: {
                 removeCurve(id)
             })
-        }
+        }.padding(12).background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:10))
     }
 
     private func removeCurve(_ id:UUID) {
@@ -111,28 +114,20 @@ struct FormulaComposerView: View {
     }
 
     private var addCurveSection: some View {
-        Section {
-            Button { dismissInput(); composition.lines.append(CompositionLine()) } label: {
-                Label("新增曲线",systemImage:"plus.circle")
-            }
-            .disabled(composition.lines.count >= 8)
-        } footer: {
-            Text("点击曲线名称即可改名，支持中文。继续计算使用上一道计算结果；新增曲线则独立计算。")
-        }
+        Button { dismissInput(); composition.lines.append(CompositionLine()) } label: {
+            Label("新增曲线",systemImage:"plus.circle").font(.subheadline.weight(.semibold)).frame(maxWidth:.infinity).padding(.vertical,10)
+        }.buttonStyle(.plain).foregroundStyle(MarketPalette.accent).disabled(composition.lines.count >= 8)
     }
 
     private var previewSection: some View {
-        Section {
+        VStack(alignment:.leading,spacing:8) {
+            Text("效果预览").font(.subheadline.weight(.semibold))
             previewContent
-        } header: {
-            Text("效果预览")
-        } footer: {
-            Text("使用打开编辑器时的真实K线快照，参数变化自动重算。自动配色仅作预览，主图最终配色由图表主题决定。")
-        }
+        }.padding(12).background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:10))
     }
 
     private var sourceSection: some View {
-        Section {
+        VStack(alignment:.leading,spacing:8) {
             DisclosureGroup("查看生成公式",isExpanded:$showingSource) {
                 if let source = try? composition.source() {
                     Text(source).font(.system(size:12,design:.monospaced)).textSelection(.enabled)
@@ -232,10 +227,10 @@ private struct CompositionLineEditor: View {
     let canDelete: Bool
     var focusedField: FocusState<String?>.Binding
     let onDelete: () -> Void
-    @State private var showingStyle = false
+    @State private var expanded = false
 
     var body: some View {
-        VStack(alignment:.leading,spacing:12) {
+        VStack(alignment:.leading,spacing:8) {
             HStack {
                 Circle().fill(previewColor(line.color,index:number-1))
                     .frame(width:9,height:9)
@@ -249,18 +244,24 @@ private struct CompositionLineEditor: View {
                 .autocorrectionDisabled()
                 .accessibilityLabel("曲线 \(number) 名称")
                 Spacer()
-                Button {
-                    dismissInput()
-                    withAnimation(.easeInOut(duration:0.18)) { showingStyle.toggle() }
+                Menu {
+                    ForEach(CompositionColor.allCases) { color in
+                        Button(color.title) { line.color = color }
+                    }
                 } label: {
-                    Image(systemName:"slider.horizontal.3")
-                        .foregroundStyle(showingStyle ? MarketPalette.accent : MarketPalette.muted)
-                        .frame(width:32,height:32)
-                        .contentShape(Rectangle())
+                    Circle().fill(previewColor(line.color,index:number-1)).frame(width:18,height:18)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(showingStyle ? "收起曲线设置" : "展开曲线设置")
+                Menu {
+                    ForEach(1...5,id:\.self) { width in Button("\(width)") { line.width = width } }
+                } label: { Text("\(line.width)").font(.caption).foregroundStyle(MarketPalette.accent) }
+                Button { withAnimation(.easeInOut(duration:0.18)) { expanded.toggle() } } label: {
+                    Image(systemName:expanded ? "chevron.up" : "chevron.down").foregroundStyle(MarketPalette.muted)
+                }.buttonStyle(.plain)
             }
+            Text((try? line.calculationExpression()) ?? "请检查计算参数")
+                .font(.system(size:12,design:.monospaced)).foregroundStyle(previewColor(line.color,index:number-1))
+                .lineLimit(expanded ? nil : 2).frame(maxWidth:.infinity,alignment:.leading)
+            if expanded {
             Divider()
             Picker("数据来源",selection:$line.source) {
                 ForEach(CompositionSource.allCases) { source in
@@ -352,7 +353,7 @@ private struct CompositionLineEditor: View {
                 .foregroundStyle(previewColor(line.color,index:number-1))
                 .textSelection(.enabled)
                 .frame(maxWidth:.infinity,alignment:.leading)
-            if showingStyle {
+            if expanded {
                 Divider()
                 Picker("颜色",selection:$line.color) {
                     ForEach(CompositionColor.allCases) { color in
@@ -368,8 +369,9 @@ private struct CompositionLineEditor: View {
                         .buttonStyle(.plain)
                 }
             }
+            }
         }
-        .padding(.vertical,5)
+        .padding(.vertical,2)
     }
 
     private func dismissInput() {

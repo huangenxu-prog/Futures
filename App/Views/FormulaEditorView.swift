@@ -12,44 +12,71 @@ struct FormulaEditorView: View {
     @State private var showColors = false
     @State private var errorRange: NSRange?
     @State private var jump = 0
+    @State private var selection = NSRange(location:0,length:0)
+    @State private var insertion = 0
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("名称与位置") {
-                    TextField("指标名称",text:$draft.name)
-    .focused($focusedField,equals:"name")
-                    Picker("绘制位置",selection:$draft.overlay) {
-                        Text("主图").tag(true)
-                        Text("副图").tag(false)
-                    }
-                    Toggle("显示指标",isOn:$draft.enabled)
-                }
-                Section("公式源码") {
-                    ZStack(alignment:.topLeading) {
-                        NativeFormulaTextView(text:$draft.source,errorRange:errorRange,jump:jump)
-                            .frame(minHeight:340)
-                        if draft.source.isEmpty {
-                            Text("在此输入或粘贴期汇公式")
-                                .font(.system(size:13)).foregroundStyle(.secondary)
-                                .padding(.top,8).padding(.leading,5)
-                                .allowsHitTesting(false)
-                        }
-                    }
+            VStack(alignment:.leading,spacing:12) {
+                VStack(spacing:10) {
                     HStack {
-                        Button("检查公式") { dismissInput(); check() }.buttonStyle(.borderless)
-                        Spacer()
-                        Button { dismissInput(); showHelp = true } label: { Label("函数",systemImage:"function") }.buttonStyle(.borderless)
-                        Button { dismissInput(); showColors = true } label: { Image(systemName:"paintpalette") }.buttonStyle(.borderless).accessibilityLabel("颜色代码")
+                        Text("名称").foregroundStyle(MarketPalette.muted).frame(width:48,alignment:.leading)
+                        TextField("指标名称",text:$draft.name).focused($focusedField,equals:"name")
+                        Toggle("显示指标",isOn:$draft.enabled).labelsHidden().fixedSize()
                     }
-                    if let result {
-                        Button { if errorRange != nil { jump += 1 } } label: {
-                            Text(result).font(.caption).foregroundStyle(passed ? Color.green : Color.red)
-                        }.buttonStyle(.plain)
+                    Divider()
+                    HStack {
+                        Text("类型").foregroundStyle(MarketPalette.muted).frame(width:48,alignment:.leading)
+                        Picker("绘制位置",selection:$draft.overlay) {
+                            Text("主图").tag(true)
+                            Text("副图").tag(false)
+                        }.pickerStyle(.segmented)
                     }
+                }.font(.subheadline).padding(12).background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:10))
+                HStack {
+                    Text("公式编辑").font(.subheadline.weight(.semibold)).foregroundStyle(MarketPalette.accent)
+                    Spacer()
+                    Text("期汇原生").font(.caption).foregroundStyle(MarketPalette.muted)
                 }
-                Section("原生语法") {
-                    DisclosureGroup("语法说明",isExpanded:$showHelp) {
+                ZStack(alignment:.topLeading) {
+                    NativeFormulaTextView(text:$draft.source,errorRange:errorRange,jump:jump,selection:$selection,insertion:insertion)
+                    if draft.source.isEmpty {
+                        Text("在此输入或粘贴期汇公式").font(.system(size:13)).foregroundStyle(.secondary)
+                            .padding(.top,8).padding(.leading,6).allowsHitTesting(false)
+                    }
+                }.frame(minHeight:120).frame(maxHeight:.infinity)
+                    .background(Color.black.opacity(0.18),in:RoundedRectangle(cornerRadius:8))
+                    .overlay(RoundedRectangle(cornerRadius:8).stroke(Color.primary.opacity(0.12),lineWidth:1))
+                if let result {
+                    Button { if errorRange != nil { jump += 1 } } label: {
+                        Text(result).font(.caption).foregroundStyle(passed ? Color.green : Color.red)
+                    }.buttonStyle(.plain)
+                }
+                HStack(spacing:8) {
+                    Button("检查公式") { dismissInput(); check() }.font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Button { dismissInput(); showHelp.toggle(); if showHelp { showColors = false } } label: {
+                        Label("函数",systemImage:"function").foregroundStyle(showHelp ? Color.white : MarketPalette.accent)
+                    }
+                    Button { dismissInput(); showColors.toggle(); if showColors { showHelp = false } } label: {
+                        Label("颜色",systemImage:"paintpalette").foregroundStyle(showColors ? Color.white : MarketPalette.accent)
+                    }
+                }.buttonStyle(.plain).foregroundStyle(MarketPalette.accent).padding(.vertical,8)
+                if showColors {
+                    HStack(spacing:12) {
+                        ForEach(["FF4545","20C6C8","D77DFF","FFFF00","4C8DFF","FFFFFF","FF00FF"],id:\.self) { hex in
+                            Button {
+                                insert("COLOR"+hex)
+                            } label: {
+                                Circle().fill(swatch(hex)).frame(width:30,height:30)
+                                    .overlay(Circle().stroke(Color.white.opacity(0.25),lineWidth:1))
+                            }.buttonStyle(.plain).accessibilityLabel("插入 COLOR"+hex)
+                        }
+                    }.frame(maxWidth:.infinity).padding(.vertical,8)
+                }
+                if showHelp {
+                    ScrollView {
+                        VStack(alignment:.leading,spacing:8) {
                     Text(":= 定义中间变量，: 绘制输出，每行以 ; 分隔。变量名支持中文、英文字母、数字和下划线，不能以数字开头。")
                     Text("行情：OPEN HIGH LOW CLOSE VOL（O H L C V），HL2 HLC3 OHLC4；支持自定义价格表达式。")
                     Text("持仓：OPI（期末持仓），OPEN_OI（期初持仓），OI_CHANGE（本根K线持仓变化）。旧历史可能缺少持仓数据。")
@@ -70,26 +97,12 @@ struct FormulaEditorView: View {
                     Text("DRAWNULL 表示缺失值，适用于条件输出。当前未收盘K线的信号可能变化。")
                     Text("仅支持期汇原生公式；EMA/SMA 从首个有效值递推，MA 等窗口函数需足够历史。缺失值不补零，不支持未来引用或任意代码。")
                     Text("DOT 点线；DASHLINE 虚线；NODRAW 仅显示数值；ISUP、ISDOWN、ISEQUAL 判断K线方向。")
-                    }
+                        }.font(.caption).foregroundStyle(MarketPalette.muted).frame(maxWidth:.infinity,alignment:.leading)
+                    }.frame(maxHeight:150)
                 }
-                .font(.caption)
             }
-            .scrollContentBackground(.hidden)
+            .padding(16)
             .background(MarketPalette.background.ignoresSafeArea())
-            .sheet(isPresented:$showColors) {
-                NavigationStack {
-                    List([ "FF4545","20C6C8","D77DFF","FFFF00","4C8DFF","FFFFFF" ],id:\.self) { hex in
-                        HStack {
-                            Text("COLOR"+hex).font(.system(.body,design:.monospaced)).textSelection(.enabled)
-                            Spacer()
-                            Button("复制") { UIPasteboard.general.string = "COLOR"+hex }.buttonStyle(.borderless)
-                        }
-                    }
-                    .navigationTitle("颜色代码")
-                    .toolbar { ToolbarItem(placement:.confirmationAction) { Button("完成") { showColors = false } } }
-                }
-                .presentationDetents([.medium,.large])
-            }
             .scrollDismissesKeyboard(.immediately)
             .onSubmit { dismissInput() }
             .navigationTitle("编辑公式")
@@ -118,6 +131,21 @@ struct FormulaEditorView: View {
             .onChange(of:draft.source) { _,_ in result = nil; errorRange = nil }
             .onChange(of:draft.name) { _,_ in result = nil }
         }
+    }
+
+    private func swatch(_ hex:String) -> Color {
+        let n = UInt32(hex,radix:16) ?? 0
+        return Color(red:Double((n >> 16)&255)/255,green:Double((n >> 8)&255)/255,blue:Double(n&255)/255)
+    }
+
+    private func insert(_ value:String) {
+        let source = draft.source as NSString
+        let start = min(selection.location,source.length)
+        let length = min(selection.length,source.length-start)
+        draft.source = source.replacingCharacters(in:NSRange(location:start,length:length),with:value)
+        selection = NSRange(location:start+value.utf16.count,length:0)
+        insertion += 1
+        showColors = false
     }
 
     private func dismissInput() {
@@ -151,6 +179,8 @@ private struct NativeFormulaTextView: UIViewRepresentable {
     @Binding var text: String
     let errorRange: NSRange?
     let jump: Int
+    @Binding var selection: NSRange
+    let insertion: Int
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> UITextView {
         let view = UITextView()
@@ -170,6 +200,10 @@ private struct NativeFormulaTextView: UIViewRepresentable {
         context.coordinator.parent = self
         if view.markedTextRange != nil { return }
         if view.text != text { view.text = text }
+        if context.coordinator.lastInsertion != insertion {
+            context.coordinator.lastInsertion = insertion
+            if NSMaxRange(selection) <= view.textStorage.length { view.selectedRange = selection; view.scrollRangeToVisible(selection) }
+        }
         context.coordinator.paint(view)
         if context.coordinator.lastJump != jump {
             context.coordinator.lastJump = jump
@@ -181,9 +215,15 @@ private struct NativeFormulaTextView: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: NativeFormulaTextView
         var lastJump = 0
+        var lastInsertion = 0
         var paintedText: String?
         var paintedRange: NSRange?
         init(_ parent: NativeFormulaTextView) { self.parent = parent }
+        func textViewDidChangeSelection(_ view:UITextView) {
+            guard view.markedTextRange == nil else { return }
+            let range = view.selectedRange
+            if parent.selection != range { parent.selection = range }
+        }
         func textViewDidChange(_ view: UITextView) {
             guard view.markedTextRange == nil else { return }
             parent.text = view.text ?? ""
