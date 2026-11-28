@@ -27,7 +27,8 @@ struct FormulaEditorView: View {
 
     var body: some View {
         QihuiPageStack {
-            ScrollView {
+            GeometryReader { viewport in
+            ScrollView(.vertical) {
             VStack(alignment:.leading,spacing:12) {
                 VStack(spacing:10) {
                     HStack {
@@ -67,7 +68,7 @@ struct FormulaEditorView: View {
                         Text("在此输入或粘贴期汇公式").font(.system(size:13)).foregroundStyle(.secondary)
                             .padding(.top,8).padding(.leading,38).allowsHitTesting(false)
                     }
-                }.frame(height:max(320,editorHeight))
+                }.frame(maxWidth:.infinity).frame(height:max(320,editorHeight)).clipped()
                 Divider()
                 HStack {
                     if let result {
@@ -127,7 +128,9 @@ struct FormulaEditorView: View {
                     else { IndicatorWorkspacePreview(bars:previewBars,settings:previewSettings).frame(height:draft.overlay ? 145 : 230) }
                 }
             }
+            .frame(width:max(0,viewport.size.width-32),alignment:.leading)
             .padding(16)
+            }
             }
             .background(MarketPalette.background.ignoresSafeArea())
             .scrollDismissesKeyboard(.immediately)
@@ -232,6 +235,13 @@ private struct NativeFormulaTextView: UIViewRepresentable {
     func makeUIView(context: Context) -> UITextView {
         let view = FormulaGutterTextView()
         view.isScrollEnabled = false
+        view.textContainer.widthTracksTextView = true
+        view.textContainer.heightTracksTextView = false
+        view.textContainer.lineBreakMode = .byCharWrapping
+        view.setContentHuggingPriority(.defaultLow,for:.horizontal)
+        view.setContentCompressionResistancePriority(.defaultLow,for:.horizontal)
+        view.alwaysBounceHorizontal = false
+        view.showsHorizontalScrollIndicator = false
         view.textContainerInset.left=35
         view.backgroundColor = .clear
         view.font = .monospacedSystemFont(ofSize:13,weight:.regular)
@@ -245,6 +255,11 @@ private struct NativeFormulaTextView: UIViewRepresentable {
         view.text = text
         view.onHeightChanged = { height in context.coordinator.reportHeight(height) }
         return view
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
+        let height = uiView.sizeThatFits(CGSize(width:width,height:CGFloat.greatestFiniteMagnitude)).height
+        return CGSize(width:width,height:max(320,ceil(height)))
     }
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.parent = self
