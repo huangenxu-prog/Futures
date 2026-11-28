@@ -36,6 +36,7 @@ struct ChartDisplaySettings: Codable, Equatable {
     var wma = 20
     var averageColors: [String: String] = [:]
     var averageWidths: [String: Double] = [:]
+    var averageLineTypes: [String: String] = [:]
     var additionalAverages: [AdditionalMovingAverage] = []
     var formulas: [FormulaDefinition] = []
     var bollPeriod = 20
@@ -69,6 +70,7 @@ struct ChartDisplaySettings: Codable, Equatable {
         wma = try c.decodeIfPresent(Int.self, forKey: .wma) ?? wma
         averageColors = try c.decodeIfPresent([String: String].self, forKey: .averageColors) ?? [:]
         averageWidths = try c.decodeIfPresent([String: Double].self, forKey: .averageWidths) ?? [:]
+        averageLineTypes = try c.decodeIfPresent([String: String].self, forKey: .averageLineTypes) ?? [:]
         additionalAverages = try c.decodeIfPresent([AdditionalMovingAverage].self, forKey: .additionalAverages) ?? []
         formulas = try c.decodeIfPresent([FormulaDefinition].self, forKey: .formulas) ?? []
         bollPeriod = try c.decodeIfPresent(Int.self, forKey: .bollPeriod) ?? bollPeriod
@@ -198,7 +200,8 @@ struct ChartDisplaySettings: Codable, Equatable {
     func averageStyle(key: String, type: MovingAverageType, period: Int) -> IndicatorLineStyle {
         let color = averageColors[key].flatMap { ChartColor(hex: $0) } ?? Self.averageColor(type: type, period: period)
         let width = averageWidths[key].flatMap { $0.isFinite && (0.5...4).contains($0) ? $0 : nil } ?? 1.7
-        return IndicatorLineStyle(color: color, width: width)
+        let dash: [Double] = averageLineTypes[key] == "dash" ? [5,3] : averageLineTypes[key] == "dot" ? [1,3] : []
+        return IndicatorLineStyle(color: color, width: width, dash: dash)
     }
     private static func movingAverage(type: MovingAverageType, period: Int, style: IndicatorLineStyle) -> any ChartIndicator {
         switch type {

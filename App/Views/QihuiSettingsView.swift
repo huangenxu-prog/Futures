@@ -84,13 +84,21 @@ struct QihuiSettingsView: View {
                 if expandedGroup == .quote { QuoteAppearanceFields() }
                 groupHeader(.candle, "K线样式", icon: "chart.bar.xaxis")
                 if expandedGroup == .candle { CandleAppearanceFields() }
+                Section {
+                    Button { indicators = true } label: {
+                        HStack(spacing:12) {
+                            Image(systemName:"chart.xyaxis.line").frame(width:24).foregroundStyle(MarketPalette.accent)
+                            Text("指标管理").foregroundStyle(MarketPalette.ink)
+                            Spacer(); Image(systemName:"chevron.right").foregroundStyle(MarketPalette.muted)
+                        }.frame(minHeight:35).contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                }
                 groupHeader(.chart, "图表与策略", icon: "chart.xyaxis.line")
                 if expandedGroup == .chart {
                 Section {
                     Button { strategy = true } label: {
                         HStack { Text("策略回测"); Spacer(); Image(systemName: "chevron.right") }
                     }
-                    Button("指标管理") { indicators = true }
                     Button("周期排序") { period = true }
                 }
                 }

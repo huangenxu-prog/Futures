@@ -7,6 +7,7 @@ struct FormulaEditorView: View {
     @FocusState private var focusedField: String?
     @State var draft: FormulaDefinition
     let onSave: (FormulaDefinition) -> Void
+    var previewBars: [FormulaBar] = []
     @State private var result: String?
     @State private var passed = false
     @State private var showHelp = false
@@ -15,15 +16,22 @@ struct FormulaEditorView: View {
     @State private var jump = 0
     @State private var selection = NSRange(location:0,length:0)
     @State private var insertion = 0
+    @State private var command = ""
+    @State private var commandID = 0
+    @State private var showFind = false
+    @State private var query = ""
+    @State private var showPreview = false
+    @State private var previewSource: String?
 
     var body: some View {
         QihuiPageStack {
+            ScrollView {
             VStack(alignment:.leading,spacing:12) {
                 VStack(spacing:10) {
                     HStack {
                         Text("名称").foregroundStyle(MarketPalette.muted).frame(width:48,alignment:.leading)
                         TextField("指标名称",text:$draft.name).focused($focusedField,equals:"name")
-                        Toggle("显示指标",isOn:$draft.enabled).labelsHidden().fixedSize()
+
                     }
                     Divider()
                     HStack {
@@ -33,36 +41,42 @@ struct FormulaEditorView: View {
                             Text("副图").tag(false)
                         }.pickerStyle(.segmented)
                     }
+                    Divider()
+                    Toggle("显示指标",isOn:$draft.enabled)
                 }.font(.subheadline).padding(12).background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:10))
                 HStack {
                     Text("公式编辑").font(.subheadline.weight(.semibold)).foregroundStyle(MarketPalette.accent)
                     Spacer()
                     Text("期汇原生").font(.caption).foregroundStyle(MarketPalette.muted)
                 }
+                VStack(spacing:0) {
+                HStack(spacing:14) {
+                    Button { runCommand("undo") } label: { Image(systemName:"arrow.uturn.backward") }.accessibilityLabel("撤销")
+                    Button { runCommand("redo") } label: { Image(systemName:"arrow.uturn.forward") }.accessibilityLabel("重做")
+                    Button { showFind.toggle() } label: { Image(systemName:"magnifyingglass") }.accessibilityLabel("查找")
+                    Spacer()
+                    Button { dismissInput(); showHelp.toggle(); if showHelp { showColors=false } } label: { Label("函数",systemImage:"function") }
+                    Button { dismissInput(); showColors.toggle(); if showColors { showHelp=false } } label: { Label("颜色",systemImage:"paintpalette") }
+                }.font(.caption).buttonStyle(.plain).padding(10)
+                Divider()
+                if showFind { HStack { TextField("查找代码",text:$query).textFieldStyle(.roundedBorder); Button("下一个") { findNext() } }.padding(8) }
                 ZStack(alignment:.topLeading) {
-                    NativeFormulaTextView(text:$draft.source,errorRange:errorRange,jump:jump,selection:$selection,insertion:insertion)
+                    NativeFormulaTextView(text:$draft.source,errorRange:errorRange,jump:jump,selection:$selection,insertion:insertion,command:command,commandID:commandID)
                     if draft.source.isEmpty {
                         Text("在此输入或粘贴期汇公式").font(.system(size:13)).foregroundStyle(.secondary)
-                            .padding(.top,8).padding(.leading,6).allowsHitTesting(false)
+                            .padding(.top,8).padding(.leading,38).allowsHitTesting(false)
                     }
-                }.frame(minHeight:120).frame(maxHeight:.infinity)
-                    .background(Color.black.opacity(0.18),in:RoundedRectangle(cornerRadius:8))
-                    .overlay(RoundedRectangle(cornerRadius:8).stroke(Color.primary.opacity(0.12),lineWidth:1))
-                if let result {
-                    Button { if errorRange != nil { jump += 1 } } label: {
-                        Text(result).font(.caption).foregroundStyle(passed ? Color.green : Color.red)
-                    }.buttonStyle(.plain)
-                }
-                HStack(spacing:8) {
-                    Button("检查公式") { dismissInput(); check() }.font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Button { dismissInput(); showHelp.toggle(); if showHelp { showColors = false } } label: {
-                        Label("函数",systemImage:"function").foregroundStyle(showHelp ? Color.white : MarketPalette.accent)
-                    }
-                    Button { dismissInput(); showColors.toggle(); if showColors { showHelp = false } } label: {
-                        Label("颜色",systemImage:"paintpalette").foregroundStyle(showColors ? Color.white : MarketPalette.accent)
-                    }
-                }.buttonStyle(.plain).foregroundStyle(MarketPalette.accent).padding(.vertical,8)
+                }.frame(height:320)
+                Divider()
+                HStack {
+                    if let result {
+                        Button { if errorRange != nil { jump += 1 } } label: { Text(result).font(.caption).foregroundStyle(passed ? Color.green : Color.red) }.buttonStyle(.plain)
+                    } else { Text("尚未检查").font(.caption).foregroundStyle(MarketPalette.muted) }
+                    Spacer(); Text("\(draft.source.components(separatedBy:.newlines).count) 行").font(.caption.monospacedDigit()).foregroundStyle(MarketPalette.muted)
+                }.padding(10)
+                }.background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:10))
+                    .overlay(RoundedRectangle(cornerRadius:10).stroke(Color.primary.opacity(0.12),lineWidth:1))
+                Button("检查公式") { dismissInput(); check() }.font(.subheadline.weight(.semibold)).foregroundStyle(MarketPalette.accent)
                 if showColors {
                     HStack(spacing:12) {
                         ForEach(["FF4545","20C6C8","D77DFF","FFFF00","4C8DFF","FFFFFF","FF00FF"],id:\.self) { hex in
@@ -75,6 +89,9 @@ struct FormulaEditorView: View {
                         }
                     }.frame(maxWidth:.infinity).padding(.vertical,8)
                 }
+                Button { showHelp.toggle(); if showHelp { showColors=false } } label: {
+                    HStack { Text("语法说明"); Spacer(); Image(systemName:showHelp ? "chevron.up" : "chevron.down") }.padding(12).background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:10))
+                }.buttonStyle(.plain)
                 if showHelp {
                     ScrollView {
                         VStack(alignment:.leading,spacing:8) {
@@ -101,8 +118,16 @@ struct FormulaEditorView: View {
                         }.font(.caption).foregroundStyle(MarketPalette.muted).frame(maxWidth:.infinity,alignment:.leading)
                     }.frame(maxHeight:150)
                 }
+                Button { dismissInput(); if showPreview { showPreview=false } else if check() { previewSource=draft.source; showPreview=true } } label: {
+                    HStack { Text("效果预览"); Spacer(); Image(systemName:showPreview ? "chevron.up" : "chevron.down") }.padding(12).background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:10))
+                }.buttonStyle(.plain)
+                if showPreview,previewSource == draft.source {
+                    if previewBars.isEmpty { Text("暂无真实K线快照，请从K线页进入预览。").font(.caption).foregroundStyle(.secondary) }
+                    else { IndicatorWorkspacePreview(bars:previewBars,settings:previewSettings).frame(height:draft.overlay ? 145 : 230) }
+                }
             }
             .padding(16)
+            }
             .background(MarketPalette.background.ignoresSafeArea())
             .scrollDismissesKeyboard(.immediately)
             .onSubmit { dismissInput() }
@@ -134,6 +159,20 @@ struct FormulaEditorView: View {
             .onChange(of:draft.source) { _,_ in result = nil; errorRange = nil }
             .onChange(of:draft.name) { _,_ in result = nil }
         }
+    }
+
+    private var previewSettings: ChartDisplaySettings {
+        var settings=ChartDisplaySettings(); settings.enabled=[]
+        var formula=draft; formula.enabled=true; settings.formulas=[formula]; return settings
+    }
+    private func runCommand(_ value:String) { command=value;commandID += 1 }
+    private func findNext() {
+        guard !query.isEmpty else { return }
+        let source=draft.source as NSString
+        let start=min(NSMaxRange(selection),source.length)
+        var found=source.range(of:query,options:.caseInsensitive,range:NSRange(location:start,length:source.length-start))
+        if found.location == NSNotFound { found=source.range(of:query,options:.caseInsensitive) }
+        if found.location != NSNotFound { selection=found;insertion += 1 }
     }
 
     private func swatch(_ hex:String) -> Color {
@@ -184,9 +223,12 @@ private struct NativeFormulaTextView: UIViewRepresentable {
     let jump: Int
     @Binding var selection: NSRange
     let insertion: Int
+    let command:String
+    let commandID:Int
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = FormulaGutterTextView()
+        view.textContainerInset.left=35
         view.backgroundColor = .clear
         view.font = .monospacedSystemFont(ofSize:13,weight:.regular)
         view.textColor = .label
@@ -208,6 +250,11 @@ private struct NativeFormulaTextView: UIViewRepresentable {
             if NSMaxRange(selection) <= view.textStorage.length { view.selectedRange = selection; view.scrollRangeToVisible(selection) }
         }
         context.coordinator.paint(view)
+        if let gutter=view as? FormulaGutterTextView { gutter.errorRange=errorRange; gutter.setNeedsDisplay() }
+        if context.coordinator.lastCommand != commandID {
+            context.coordinator.lastCommand=commandID
+            if command=="undo" { view.undoManager?.undo() } else if command=="redo" { view.undoManager?.redo() }
+        }
         if context.coordinator.lastJump != jump {
             context.coordinator.lastJump = jump
             if let range = errorRange, NSMaxRange(range) <= view.textStorage.length {
@@ -219,6 +266,7 @@ private struct NativeFormulaTextView: UIViewRepresentable {
         var parent: NativeFormulaTextView
         var lastJump = 0
         var lastInsertion = 0
+        var lastCommand = 0
         var paintedText: String?
         var paintedRange: NSRange?
         init(_ parent: NativeFormulaTextView) { self.parent = parent }
@@ -231,6 +279,7 @@ private struct NativeFormulaTextView: UIViewRepresentable {
             guard view.markedTextRange == nil else { return }
             parent.text = view.text ?? ""
             paint(view,editing:true)
+            view.setNeedsDisplay()
         }
         func paint(_ view: UITextView,editing:Bool = false) {
             let source = view.text ?? ""
@@ -258,11 +307,37 @@ private struct NativeFormulaTextView: UIViewRepresentable {
             if let range, range.location <= full.length, NSMaxRange(range) <= full.length {
                 let visible = range.length == 0 && range.location > 0 ? NSRange(location:range.location-1,length:1) : range
                 if visible.length > 0 {
-                    storage.addAttributes([.foregroundColor:UIColor.systemRed,.underlineColor:UIColor.systemRed,.underlineStyle:NSUnderlineStyle.single.rawValue],range:visible)
+                    storage.addAttributes([.foregroundColor:UIColor.systemRed,.underlineColor:UIColor.systemRed,.underlineStyle:NSUnderlineStyle.single.rawValue,.backgroundColor:UIColor.systemRed.withAlphaComponent(0.12)],range:visible)
                 }
             }
             storage.endEditing()
             view.typingAttributes = [.font:UIFont.monospacedSystemFont(ofSize:13,weight:.regular),.foregroundColor:UIColor.label]
         }
+    }
+}
+
+private final class FormulaGutterTextView: UITextView {
+    var errorRange:NSRange?
+    override func draw(_ rect:CGRect) {
+        super.draw(rect)
+        let source=(text ?? "") as NSString
+        let font=UIFont.monospacedSystemFont(ofSize:11,weight:.regular)
+        let manager=layoutManager
+        manager.ensureLayout(for:textContainer)
+        var line=1, offset=0
+        repeat {
+            let range=source.lineRange(for:NSRange(location:offset,length:0))
+            let glyph=manager.glyphIndexForCharacter(at:min(offset,max(0,source.length-1)))
+            let y:CGFloat
+            if manager.numberOfGlyphs>0, glyph<manager.numberOfGlyphs {
+                y=manager.lineFragmentRect(forGlyphAt:glyph,effectiveRange:nil).minY+textContainerInset.top
+            } else { y=textContainerInset.top }
+            let bad=errorRange.map { NSIntersectionRange($0,range).length>0 || ($0.length==0 && NSLocationInRange($0.location,range)) } ?? false
+            let attributes:[NSAttributedString.Key:Any]=[.font:font,.foregroundColor:bad ? UIColor.systemRed : UIColor.secondaryLabel]
+            let label="\(line)" as NSString
+            label.draw(at:CGPoint(x: max(2,29-label.size(withAttributes:attributes).width),y:y+2),withAttributes:attributes)
+            if NSMaxRange(range)<=offset || NSMaxRange(range)>=source.length { break }
+            offset=NSMaxRange(range);line += 1
+        } while offset<source.length
     }
 }

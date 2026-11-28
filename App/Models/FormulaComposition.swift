@@ -97,6 +97,7 @@ struct CompositionLine: Codable, Equatable, Identifiable, Sendable {
     var color: CompositionColor = .automatic
     var width = 2
     var histogram = false
+    var lineType: String? = nil
 
     func calculationExpression() throws -> String {
         guard layers.count <= 6, (1...5).contains(width) else {
@@ -121,7 +122,11 @@ struct CompositionLine: Codable, Equatable, Identifiable, Sendable {
         var styles: [String] = []
         if color != .automatic { styles.append(color.rawValue) }
         if histogram { styles.append("COLORSTICK") }
-        else { styles.append("LINETHICK\(width)") }
+        else {
+            styles.append("LINETHICK\(width)")
+            if lineType == "dash" { styles.append("DASHLINE") }
+            if lineType == "dot" { styles.append("DOT") }
+        }
         return "\(name):\(value),\(styles.joined(separator: ","));"
     }
 }

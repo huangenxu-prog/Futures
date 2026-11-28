@@ -9,6 +9,7 @@ struct FormulaComposerView: View {
     @State private var error: String?
     @State private var checked = false
     @State private var showingSource = false
+    @State private var selectedLine: UUID?
     @State private var preview: PreviewSnapshot?
     let previewBars: [FormulaBar]
     let onSave: (FormulaDefinition) -> Void
@@ -32,8 +33,9 @@ struct FormulaComposerView: View {
             ScrollView {
                 VStack(alignment:.leading,spacing:12) {
                     metadataSection
-                    curveSections
-                    addCurveSection
+                    Text("指标组成").font(.subheadline.weight(.semibold)).foregroundStyle(MarketPalette.muted)
+                    VStack(spacing:0) { curveSections; addCurveSection.padding(12) }
+                        .background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:12))
                     previewSection
                     sourceSection
                 }.padding(16)
@@ -70,6 +72,11 @@ struct FormulaComposerView: View {
             .onChange(of:composition) { _,_ in error = nil; checked = false }
             .onChange(of:draft.name) { _,_ in error = nil; checked = false }
             .task(id:composition) { await updatePreview() }
+            .navigationDestination(isPresented:Binding(get:{selectedLine != nil},set:{if !$0 { selectedLine=nil }})) {
+                if let id=selectedLine,let i=composition.lines.firstIndex(where:{$0.id==id}) {
+                    CompositionCurvePage(line:$composition.lines[i],number:i+1)
+                }
+            }
         }
         .tint(MarketPalette.accent)
     }
@@ -101,12 +108,27 @@ struct FormulaComposerView: View {
     private func curveSection(_ binding: Binding<CompositionLine>) -> some View {
         let id = binding.wrappedValue.id
         let number = index(for:id)
-        let canDelete = composition.lines.count > 1
-        return VStack {
-            CompositionLineEditor(line:binding,number:number,canDelete:canDelete,focusedField:$focusedField,onDelete: {
-                removeCurve(id)
-            })
-        }.padding(12).background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:10))
+        return VStack(spacing:0) {
+            HStack(spacing:10) {
+                Menu {
+                    Button("上移",systemImage:"arrow.up") { if number>1 { composition.lines.swapAt(number-1,number-2) } }
+                    Button("下移",systemImage:"arrow.down") { if number<composition.lines.count { composition.lines.swapAt(number-1,number) } }
+                    Button("复制曲线") { if composition.lines.count<8 { var copy=binding.wrappedValue; copy.id=UUID(); copy.name=nil; composition.lines.append(copy) } }
+                    Button("删除曲线",role:.destructive) { if composition.lines.count>1 { removeCurve(id) } }
+                } label: { Image(systemName:"line.3.horizontal").foregroundStyle(MarketPalette.muted) }
+                Button { selectedLine=id } label: {
+                    VStack(alignment:.leading,spacing:4) {
+                        Text(binding.wrappedValue.outputName(index:number)).font(.subheadline.weight(.semibold))
+                        Text((try? binding.wrappedValue.calculationExpression()) ?? "请检查参数").font(.caption.monospaced()).foregroundStyle(MarketPalette.muted).lineLimit(2)
+                    }.frame(maxWidth:.infinity,alignment:.leading).foregroundStyle(.primary)
+                }.buttonStyle(.plain)
+                Menu {
+                    ForEach(CompositionColor.allCases) { color in Button(color.title) { binding.wrappedValue.color=color } }
+                } label:{ RoundedRectangle(cornerRadius:4).fill(previewColor(binding.wrappedValue.color,index:number-1)).frame(width:22,height:18) }
+                Button { selectedLine=id } label: { Image(systemName:"chevron.right").foregroundStyle(MarketPalette.muted) }.buttonStyle(.plain)
+            }.padding(12)
+            Divider().padding(.leading,32)
+        }
     }
 
     private func removeCurve(_ id:UUID) {
@@ -154,8 +176,8 @@ struct FormulaComposerView: View {
             if let message = preview.error {
                 Text(message).font(.caption).foregroundStyle(.red)
             } else if preview.outputs.contains(where: { $0.values.suffix(80).contains { $0?.isFinite == true } }) {
-                CompositionPreviewChart(outputs:preview.outputs)
-                    .frame(height:145)
+                IndicatorWorkspacePreview(bars:previewBars,settings:previewSettings)
+                    .frame(height:draft.overlay ? 145 : 230)
                     .accessibilityLabel("组合指标曲线预览")
                 ForEach(Array(preview.outputs.enumerated()),id:\.offset) { item in
                     HStack(spacing:6) {
@@ -178,6 +200,12 @@ struct FormulaComposerView: View {
         } else {
             HStack { ProgressView(); Text("计算预览…").font(.caption) }
         }
+    }
+
+    private var previewSettings:ChartDisplaySettings {
+        var settings=ChartDisplaySettings(); settings.enabled=[]
+        var formula=draft; formula.enabled=true; formula.source=(try? composition.validatedSource()) ?? ""
+        settings.formulas=[formula]; return settings
     }
 
     @MainActor
@@ -228,7 +256,7 @@ private struct CompositionLineEditor: View {
     let canDelete: Bool
     var focusedField: FocusState<String?>.Binding
     let onDelete: () -> Void
-    @State private var expanded = false
+    @State private var expanded = true
 
     var body: some View {
         VStack(alignment:.leading,spacing:8) {
@@ -460,5 +488,28 @@ private struct CompositionPreviewChart: View {
             }
         }
         .clipped()
+    }
+}
+
+private struct CompositionCurvePage: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var line: CompositionLine
+    let number:Int
+    @FocusState private var focused:String?
+    @State private var draft=CompositionLine()
+    @State private var initialized=false
+    var body:some View {
+        ScrollView {
+            VStack(spacing:12) {
+                CompositionLineEditor(line:$draft,number:number,canDelete:false,focusedField:$focused,onDelete:{})
+                    .padding(12).background(Color.primary.opacity(0.055),in:RoundedRectangle(cornerRadius:12))
+                Picker("线型",selection:Binding(get:{draft.lineType ?? "solid"},set:{draft.lineType=$0})) {
+                    Text("实线").tag("solid");Text("虚线").tag("dash");Text("点线").tag("dot")
+                }.pickerStyle(.segmented)
+            }.padding(16)
+        }.background(MarketPalette.background.ignoresSafeArea())
+        .navigationTitle(draft.outputName(index:number)).navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement:.confirmationAction) { Button("完成") { line=draft; dismiss() }.disabled((try? draft.statement(index:number)) == nil) } }
+        .task { if !initialized { draft=line;initialized=true } }
     }
 }
