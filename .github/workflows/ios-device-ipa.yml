@@ -34,6 +34,11 @@ jobs:
           swiftc App/Models/PaperTrading.swift scripts/PaperTradingSelfTest.swift -o /tmp/paper-trading-test
           /tmp/paper-trading-test
 
+      - name: Verify cloud trade order states
+        run: |
+          swiftc App/Models/CloudOrderState.swift scripts/CloudOrderStateSelfTest.swift -o /tmp/cloud-order-state-test
+          /tmp/cloud-order-state-test
+
       - name: Verify sandboxed formula engine
         run: |
           swiftc -O App/Models/FormulaEngine.swift App/Models/FormulaComposition.swift App/Models/MovingAverageConfiguration.swift scripts/FormulaEngineSelfTest.swift -o /tmp/formula-engine

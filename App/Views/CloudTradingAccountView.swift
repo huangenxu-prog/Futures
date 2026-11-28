@@ -75,19 +75,18 @@ private struct CloudSnapshot: Decodable {
         let time_ns: Int64?
         let display_state: String?
         let trade_price: Double?
-        var stateText: String {
-            switch display_state {
-            case "ALIVE": return "挂单"
-            case "PARTIAL": return "部分成交"
-            case "FILLED": return "已成"
-            case "CANCELED": return "已撤"
-            case "PARTIAL_CANCELED": return "部成部撤"
-            case "REJECTED": return "废单"
-            default:
-                if status == "ALIVE" { return remaining < quantity ? "部分成交" : "挂单" }
-                if status == "FINISHED" && remaining == 0 { return "已成" }
-                return "已结束"
-            }
+        let is_dead: Bool?
+        let is_online: Bool?
+        let exchange_order_id: String?
+        var normalizedState: CloudOrderState {
+            CloudOrderState.resolve(display: display_state, status: status, quantity: quantity,
+                                    remaining: remaining, isDead: is_dead)
+        }
+        var stateText: String { normalizedState.label }
+        var isWorking: Bool { status == "ALIVE" && normalizedState.isWorking }
+        var isTerminal: Bool { normalizedState.isTerminal || is_dead == true || status == "FINISHED" }
+        var hasAcknowledgement: Bool {
+            isTerminal || is_online == true || !(exchange_order_id ?? "").isEmpty
         }
     }
     struct Fill: Decodable, Identifiable {
@@ -170,32 +169,35 @@ private final class CloudTradeSession: ObservableObject {
         }
     }
     private func reconcile(_ data: CloudSnapshot) {
-        if let id = awaitingCancelID, let order = data.orders?.first(where: { $0.id == id }), order.status == "FINISHED" {
+        if let id = awaitingCancelID, let order = data.orders?.first(where: { $0.id == id }), order.isTerminal {
             awaitingCancelID = nil
-            showFeedback("委托状态：" + order.stateText, transient: order.display_state == "CANCELED" || order.display_state == "PARTIAL_CANCELED" || order.display_state == "FILLED")
+            showFeedback("委托状态：" + order.stateText, transient: [.canceled, .partialCanceled, .filled].contains(order.normalizedState))
         }
         guard let id = pendingOrder ?? trackedOrderID,
               let order = data.orders?.first(where: { $0.id == id }) else { return }
-        if pendingOrder == id { clearPending() }
+        if pendingOrder == id {
+            guard order.hasAcknowledgement else { return }
+            clearPending()
+        }
         trackedOrderID = id
         let filled = max(0, order.quantity - order.remaining)
         let key = "\(id)|\(order.display_state ?? order.status)|\(filled)|\(order.message)"
         guard trackedFeedbackKey != key else { return }
         trackedFeedbackKey = key
         let prefix = "委托：" + order.symbol + " "
-        switch order.display_state {
-        case "FILLED" where order.quantity > 0 && order.remaining == 0:
+        switch order.normalizedState {
+        case .filled where order.quantity > 0 && order.remaining == 0:
             lastFilledOrderID = id
             trackedOrderID = nil
             showFeedback(prefix + "全部成交 \(filled)手", transient: true)
-        case "PARTIAL":
+        case .partial:
             showFeedback(prefix + "部分成交 \(filled)/\(order.quantity)手", transient: true)
-        case "ALIVE":
+        case .alive:
             showFeedback(prefix + "已挂单", transient: true)
-        case "REJECTED":
+        case .rejected:
             trackedOrderID = nil
             showFeedback(prefix + "拒单" + (order.message.isEmpty ? "" : " · " + order.message))
-        case "CANCELED", "PARTIAL_CANCELED":
+        case .canceled, .partialCanceled:
             trackedOrderID = nil
             showFeedback(prefix + order.stateText, transient: true)
         default:
@@ -1300,7 +1302,7 @@ struct TradingCenterView: View {
                             } else if tab == "成交" {
                                 compactFills((snapshot.fills ?? []).sorted { $0.time_ns > $1.time_ns }, width: geometry.size.width)
                             } else {
-                                compactOrders((snapshot.orders ?? []).filter { tab != "挂单" || $0.status == "ALIVE" }.sorted {
+                                compactOrders((snapshot.orders ?? []).filter { tab != "挂单" || $0.isWorking }.sorted {
                                     ($0.time_ns ?? 0) == ($1.time_ns ?? 0) ? $0.id > $1.id : ($0.time_ns ?? 0) > ($1.time_ns ?? 0)
                                 }, width: geometry.size.width)
                             }
@@ -1408,7 +1410,7 @@ struct TradingCenterView: View {
     }
 
     private func rejectionReason(_ order: CloudSnapshot.Order) -> String? {
-        guard order.display_state == "REJECTED" else { return nil }
+        guard order.normalizedState == .rejected else { return nil }
         let message = order.message.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         return message.isEmpty ? nil : message
     }
@@ -1446,7 +1448,7 @@ struct TradingCenterView: View {
                         .foregroundStyle(MarketPalette.up)
                         .frame(width: layout.widths[i], height: recordRowHeight)
                         .contentShape(Rectangle())
-                        .disabled(session.busy || session.isLive || o.status != "ALIVE")
+                        .disabled(session.busy || session.isLive || !o.isWorking)
                         .accessibilityLabel("撤单 " + contractName(o.symbol))
                 } else {
                     recordCell(values[i], width: layout.widths[i], alignment: i == 0 ? .leading : .center)
@@ -1457,9 +1459,9 @@ struct TradingCenterView: View {
     }
 
     private func canceledQuantity(_ order: CloudSnapshot.Order) -> String {
-        switch order.display_state {
-        case "CANCELED", "PARTIAL_CANCELED": return String(max(0, order.remaining))
-        case "FILLED", "ALIVE", "PARTIAL": return "0"
+        switch order.normalizedState {
+        case .canceled, .partialCanceled: return String(max(0, order.remaining))
+        case .filled, .alive, .partial: return "0"
         default: return "--"
         }
     }
@@ -1613,7 +1615,7 @@ struct TradingCenterView: View {
                 }
             }
             confirmationButtons("确认撤单", tint: MarketPalette.up,
-                                enabled: order?.status == "ALIVE" && !session.busy && !session.isLive,
+                                enabled: order?.isWorking == true && !session.busy && !session.isLive,
                                 cancel: { cancelID = nil }) {
                 cancelID = nil
                 Task { await session.cancel(id) }
