@@ -470,6 +470,32 @@ struct FormulaProgram: Sendable {
                 // Sparse table: O(n log n) construction, O(1) per variable window.
                 return Self.dynamicExtreme(x,periods:periods,highest:fn == "HHV")
             }
+            // Variable boolean windows use prefix counts, preserving the same
+            // missing-value and full-window semantics as constant COUNT.
+            if ["COUNT","EXIST","EVERY"].contains(fn) {
+                if case .constant = args[1] {
+                    // Keep the original constant-window validation and path.
+                } else {
+                    let periods = try eval(args[1],env,n)
+                    var counts = [Int](repeating:0,count:n+1)
+                    var missing = [Int](repeating:0,count:n+1)
+                    for i in x.indices {
+                        counts[i+1] = counts[i] + (x[i].map { $0 != 0 ? 1 : 0 } ?? 0)
+                        missing[i+1] = missing[i] + (x[i] == nil ? 1 : 0)
+                    }
+                    return x.indices.map { i in
+                        guard let length = periods[i], length.isFinite,
+                              length.rounded() == length, length >= 1,
+                              length <= Double(i+1) else { return nil }
+                        let p = Int(length), start = i+1-p
+                        guard missing[i+1] == missing[start] else { return nil }
+                        let count = counts[i+1]-counts[start]
+                        if fn == "EXIST" { return count > 0 ? 1 : 0 }
+                        if fn == "EVERY" { return count == p ? 1 : 0 }
+                        return Double(count)
+                    }
+                }
+            }
             let p = try period(args[1],zero: fn == "REF")
             if fn == "HMA" {
                 let half = max(1,p/2)

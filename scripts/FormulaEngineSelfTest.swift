@@ -247,6 +247,47 @@ struct FormulaEngineSelfTest {
         let layers = (0..<20).map { _ in "STICKLINE(C>0,0,C,1,0),COLORFF0000;" }.joined()
         let layered = try FormulaProgram(layers).evaluate(bars)
         precondition(layered.count == 20)
+        let dynamic = try FormulaProgram("N:=BARSLAST(C=2)+1; A:COUNT(C>3,N); B:EXIST(C>3,N); D:EVERY(C>3,N); E:COUNT(C>3,C);").evaluate(bars)
+        precondition(dynamic[0].values == [nil,0,0,1,2,3])
+        precondition(dynamic[1].values == [nil,0,0,1,1,1])
+        precondition(dynamic[2].values == [nil,0,0,0,0,0])
+        precondition(dynamic[3].values == [0,0,0,1,2,3])
+        let invalidWindows = try FormulaProgram("A:COUNT(C>0,C-2); B:COUNT(C>0,C+1); D:COUNT(C>0,C/2); E:COUNT(IF(C=3,DRAWNULL,1),C);").evaluate(bars)
+        precondition(invalidWindows[0].values[0] == nil && invalidWindows[0].values[1] == nil)
+        near(invalidWindows[0].values[2],1)
+        precondition(invalidWindows[1].values.allSatisfy{$0 == nil})
+        precondition(invalidWindows[2].values[0] == nil && invalidWindows[2].values[2] == nil)
+        near(invalidWindows[2].values[3],2)
+        precondition(invalidWindows[3].values[2] == nil && invalidWindows[3].values[5] == nil)
+        let trend = try FormulaProgram("""
+        N:=10;
+        M:=3.5;
+        TR1:=MAX(MAX(H-L,ABS(REF(C,1)-H)),ABS(REF(C,1)-L));
+        UP:=(H+L)/2+MA(TR1,N)*M;
+        DN:=(H+L)/2-MA(TR1,N)*M;
+        DR:=REF(UP,BARSLAST(UP<=REF(UP,1)));
+        VF:=LLV(UP,N*1.5);
+        AR:=IF(VF<>REF(VF,1) AND DR<REF(DR,1),DR,IF(DR=VF,DR,VF));
+        Z1:=BARSLAST(CROSS(0.5,UP=AR))+1;
+        Z2:=CROSS(COUNT((CROSS(C,AR) OR CROSS(C,REF(AR,2))) AND UP>AR,Z1),0.5);
+        YX6:=BARSLAST(Z2);
+        D6:=BARSLAST(CROSS(HHV(DN,YX6+1),C));
+        BY:=CROSS(D6,YX6);
+        SL:=CROSS(YX6,D6);
+        ST:=IF(D6>YX6,HHV(DN,BARSLAST(BY)+1),LLV(UP,BARSLAST(SL)+1));
+        支撑线:IF(D6<=YX6,ST,DRAWNULL),COLOR23C6C8,LINETHICK2;
+        阻力线:IF(D6>YX6,ST,DRAWNULL),COLORFF4545,LINETHICK2;
+        """)
+        let oscillating = (0..<500).map { i -> FormulaBar in
+            let c=100+sin(Double(i)/9)*20+Double(i)/20
+            return FormulaBar(open:c,high:c+2,low:c-2,close:c,volume:100)
+        }
+        let fullTrend = try trend.evaluate(oscillating)
+        let prefixTrend = try trend.evaluate(Array(oscillating.prefix(350)))
+        precondition(fullTrend.count == 2 && prefixTrend.count == 2)
+        for i in fullTrend.indices {
+            precondition(Array(fullTrend[i].values.prefix(350)) == prefixTrend[i].values)
+        }
         print("Formula engine: causal state, dynamic references, confirmed segments and previous fixtures passed")
     }
 }
