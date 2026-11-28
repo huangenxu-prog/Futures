@@ -49,6 +49,10 @@ struct StrategyBacktestView: View {
     @State private var coverage = ""
     @State private var task: Task<Void,Never>?
 
+    init(instruments: [FuturesInstrument], favoriteIDs: [String], mainCodes: [String:String], formulas: [FormulaDefinition]) {
+        self.instruments=instruments; self.favoriteIDs=favoriteIDs; self.mainCodes=mainCodes; self.formulas=formulas
+    }
+
     var body: some View {
         QihuiPageStack {
             Form {

@@ -857,6 +857,12 @@ struct PeriodOrderView: View {
     let label: (String) -> String
     let onSave: ([String]) -> Void
 
+    init(order: [String], label: @escaping (String) -> String, onSave: @escaping ([String]) -> Void) {
+        _order = State(initialValue: order)
+        self.label = label
+        self.onSave = onSave
+    }
+
     var body: some View {
         QihuiPageStack {
             List {
