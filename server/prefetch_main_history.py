@@ -34,7 +34,7 @@ PERIOD_ORDER = {value: i for i, value in enumerate(KLINE_PERIOD_ORDER)}
 # products. Live charts have their own real-time K-line stream.
 FRESH_SECONDS = {
     900: 6 * 3600, 300: 6 * 3600,
-    1800: 12 * 3600, 3600: 12 * 3600,
+    1800: 12 * 3600, 3600: 12 * 3600, 7200: 12 * 3600,
     60: 12 * 3600, 86400: 24 * 3600,
 }
 MAX_SERIES_PER_RUN = 24
@@ -177,7 +177,7 @@ def run(limit):
             write_status(dict(coverage, products=len(codes),
                               attempted=0, succeeded=0, failed=0,
                               pending=0, state="idle", elapsed_seconds=0))
-            print("所有主力合约的六个周期缓存均处于本轮有效期内。", flush=True)
+            print("所有主力合约的各周期缓存均处于本轮有效期内。", flush=True)
             return
         for i, key in enumerate(jobs):
             if not memory_allows_prefetch():
