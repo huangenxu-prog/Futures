@@ -22,7 +22,7 @@ struct FormulaBar: Sendable {
 struct FormulaDefinition: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var name = "自定义指标"
-    var source = "EMA20:EMA(CLOSE,20),COLORBLUE;\nEMA50:EMA(CLOSE,50),COLORYELLOW;"
+    var source = ""
     var overlay = true
     var enabled = false
     var composition: FormulaComposition? = nil
@@ -658,7 +658,7 @@ private struct FormulaParser {
             if token != .end { try expect(";") }
             if drawing && histogram { throw FormulaFailure("绘图函数不能再加柱状图属性") }
             statements.append(.init(name:name,expr:expr,visible:visible,color:color,width:width,histogram:histogram,drawing:drawing,fontSize:fontSize,dash:dash,legendOnly:legendOnly))
-            guard statements.count <= 96, statements.filter { $0.visible || $0.legendOnly }.count <= 48 else {
+            guard statements.count <= 96, statements.filter({ $0.visible || $0.legendOnly }).count <= 48 else {
                 throw FormulaFailure("最多96条语句、48条绘图输出")
             }
         }

@@ -30,7 +30,7 @@ struct IndicatorSignalLayer: View {
                         var path = Path()
                         path.move(to:CGPoint(x:x1,y:y1))
                         path.addLine(to:CGPoint(x:x2,y:y2))
-                        context.stroke(path,with:.color(color),lineWidth:CGFloat(series.style.width))
+                        context.stroke(path,with:.color(color),style:StrokeStyle(lineWidth:CGFloat(series.style.width),lineCap:.round,dash:series.style.dash.map { CGFloat($0) }))
                     }
                 }
                 let margin = Double(candleWidth)/Double(size.width)*span

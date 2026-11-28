@@ -137,7 +137,12 @@ struct IndicatorSettingsView: View {
                 Section("自定义指标") {
                     ForEach(draft.formulas) { formula in
                         HStack {
-                            Toggle(formula.name, isOn: formulaEnabledBinding(formula))
+                            Toggle(isOn: formulaEnabledBinding(formula)) {
+                                VStack(alignment:.leading,spacing:4) {
+                                    Text(formula.name).font(.headline)
+                                    Text(formula.overlay ? "主图 · 自定义" : "副图 · 自定义").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                             Menu {
                                 if formula.composition != nil {
                                     Button("编辑组合",systemImage:"slider.horizontal.3") { dismissInput(); composingFormula = formula }
@@ -150,6 +155,7 @@ struct IndicatorSettingsView: View {
                         }
                     }
                     .onDelete { dismissInput(); draft.formulas.remove(atOffsets: $0) }
+                    .onMove { from,to in draft.formulas.move(fromOffsets:from,toOffset:to) }
                     Button {
                         dismissInput()
                         var formula = FormulaDefinition()
@@ -201,7 +207,10 @@ struct IndicatorSettingsView: View {
                     Button("完成") { dismissInput() }.fontWeight(.semibold)
                 }
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("取消") { dismissInput(); dismiss() }
+                    HStack(spacing:12) {
+                        Button("取消") { dismissInput(); dismiss() }
+                        EditButton()
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("保存") {

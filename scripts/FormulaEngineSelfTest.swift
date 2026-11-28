@@ -231,11 +231,12 @@ struct FormulaEngineSelfTest {
         let styles = try FormulaProgram("X:IFELSE(ISUP,C,O),COLORFF00FF,LINETHICK1,DOT; Y:IF(ISDOWN,1,ISEQUAL),DASHLINE; Z:C,NODRAW;").evaluate(bars)
         precondition(styles[0].dash == [1,3] && styles[0].width == 1 && styles[0].color == "FF00FF")
         precondition(styles[1].dash == [5,3] && styles[2].legendOnly)
-        let states = try FormulaProgram("U:ISUP;D:ISDOWN;E:ISEQUAL;").evaluate([
+        let candleStates = try FormulaProgram("U:ISUP;D:ISDOWN;E:ISEQUAL;").evaluate([
             FormulaBar(open:1,high:2,low:1,close:2,volume:nil),
             FormulaBar(open:2,high:2,low:1,close:1,volume:nil),
             FormulaBar(open:1,high:1,low:1,close:1,volume:nil)])
-        precondition(states[0].values == [1,0,0] && states[1].values == [0,1,0] && states[2].values == [0,0,1])
+        precondition(candleStates[0].values == [1,0,0] && candleStates[1].values == [0,1,0] && candleStates[2].values == [0,0,1])
+        precondition(FormulaDefinition().source.isEmpty)
         let layers = (0..<20).map { _ in "STICKLINE(C>0,0,C,1,0),COLORFF0000;" }.joined()
         let layered = try FormulaProgram(layers).evaluate(bars)
         precondition(layered.count == 20)
