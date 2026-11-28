@@ -542,8 +542,7 @@ struct TradingCenterView: View {
                         }.disabled(session.busy)
                     }
                     .navigationTitle(session.isLive ? "实盘只读账户" : "模拟账户")
-
-                }
+                }.environment(\.qihuiInPageStack,true)
             }
             .task(id: quickFilledID) {
                 guard let id = quickFilledID else { return }
@@ -586,7 +585,6 @@ struct TradingCenterView: View {
                     pendingAction = nil; openingDraft = nil; quickSubmittedID = nil; cancelID = nil; closingSide = nil; closeConfirm = false
                     recentTradeQuotes.removeAll(); expandedHolding = nil
                 }
-                    .environment(\.qihuiInPageStack,true)
             }
             .navigationDestination(isPresented: $showConnectionSettings) { TradeConnectionSettingsView().environment(\.qihuiInPageStack,true) }
             .task(id: "\(address)-\(scenePhase)") {
